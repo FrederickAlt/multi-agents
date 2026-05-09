@@ -1,10 +1,18 @@
 {
   "name": "persistent-task-subagents",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Pi extension for persistent configured sub-agents via the Task tool",
   "type": "module",
   "scripts": {
     "test": "vitest --run",
     "test:watch": "vitest"
+  },
+  "files": [
+    "subagent/**/*",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": ["./subagent/index.ts"]
   },
   "devDependencies": {
     "typebox": "^1.1.38",

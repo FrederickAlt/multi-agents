@@ -16,6 +16,8 @@ import {
 	metadataPath,
 	renderPromptTemplate,
 	getFinalTextFromMessages,
+	checkSpawnAllowed,
+	resolveTaskAgent,
 } from "../subagent/index.js";
 import type { SubagentRecord, RenderContext, PromptParts } from "../subagent/index.js";
 import type { AgentConfig } from "../subagent/agents.js";
@@ -362,6 +364,114 @@ describe("renderPromptTemplate", () => {
 // ---------------------------------------------------------------------------
 // getFinalTextFromMessages
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// checkSpawnAllowed
+// ---------------------------------------------------------------------------
+
+describe("checkSpawnAllowed", () => {
+	it("rejects spawn when depth limit has been reached", () => {
+		const result = checkSpawnAllowed({ depth: 2, rootMaxDepth: 2, canSpawn: undefined }, "Explore");
+		expect(result.allowed).toBe(false);
+		expect(result.code).toBe("depth_limit");
+		expect(result.error).toContain("depth limit 2 has been reached");
+	});
+
+	it("allows spawn when below depth limit", () => {
+		const result = checkSpawnAllowed({ depth: 1, rootMaxDepth: 2, canSpawn: undefined }, "Explore");
+		expect(result.allowed).toBe(true);
+		expect(result.error).toBeUndefined();
+		expect(result.code).toBeUndefined();
+	});
+
+	it("rejects spawn when agent type is not in canSpawn allowlist", () => {
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, canSpawn: ["Planner", "Reviewer"] }, "Explore");
+		expect(result.allowed).toBe(false);
+		expect(result.code).toBe("spawn_not_allowed");
+		expect(result.error).toContain("only allowed to spawn Planner, Reviewer");
+	});
+
+	it("allows spawn when agent type is in canSpawn allowlist", () => {
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, canSpawn: ["Planner", "Explore"] }, "Explore");
+		expect(result.allowed).toBe(true);
+	});
+
+	it("allows spawn when canSpawn is undefined (no restriction)", () => {
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, canSpawn: undefined }, "Explore");
+		expect(result.allowed).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// resolveTaskAgent
+// ---------------------------------------------------------------------------
+
+describe("resolveTaskAgent", () => {
+	const makeAgent = (name: string): AgentConfig => ({
+		name,
+		description: `${name} description`,
+		systemPrompt: "prompt",
+		source: "builtin",
+		filePath: `/tmp/${name}.md`,
+	});
+
+	const makeRecord = (id: string, agentType: string, displayName: string): SubagentRecord => ({
+		id,
+		humanName: id,
+		displayName,
+		agentType,
+		sessionFile: "/tmp/test.jsonl",
+		depth: 1,
+		createdAt: "2024-01-01T00:00:00.000Z",
+		updatedAt: "2024-01-01T00:00:00.000Z",
+	});
+
+	it("returns unknown_resume_id error when resume ID does not exist", () => {
+		const store = { version: 1 as const, mainSessionId: "main", records: [makeRecord("abc12345", "Explore", "Explore Tom")] };
+		const result = resolveTaskAgent({ subagent_type: "Explore", resume: "deadbeef" }, store, [makeAgent("Explore")]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.errorCode).toBe("unknown_resume_id");
+			expect(result.errorText).toContain("Unknown sub-agent ID");
+			expect(result.errorText).toContain("abc12345");
+			expect(result.errorText).toContain("Explore Tom");
+		}
+	});
+
+	it("returns unknown_agent_type error when agent type is not available", () => {
+		const store = { version: 1 as const, mainSessionId: "main", records: [] };
+		const result = resolveTaskAgent({ subagent_type: "Missing" }, store, [makeAgent("Explore")]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.errorCode).toBe("unknown_agent_type");
+			expect(result.errorText).toContain("Unknown sub-agent type");
+			expect(result.errorText).toContain("Explore");
+		}
+	});
+
+	it("resolves agent by subagent_type when no resume", () => {
+		const store = { version: 1 as const, mainSessionId: "main", records: [] };
+		const agent = makeAgent("Explore");
+		const result = resolveTaskAgent({ subagent_type: "Explore" }, store, [agent]);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.agent.name).toBe("Explore");
+			expect(result.record).toBeUndefined();
+		}
+	});
+
+	it("resolves agent by record when resume is provided", () => {
+		const record = makeRecord("abc12345", "Explore", "Explore Tom");
+		const store = { version: 1 as const, mainSessionId: "main", records: [record] };
+		const agent = makeAgent("Explore");
+		const result = resolveTaskAgent({ subagent_type: "Explore", resume: "abc12345" }, store, [agent]);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.agent.name).toBe("Explore");
+			expect(result.record).toEqual(record);
+		}
+	});
+});
 
 describe("getFinalTextFromMessages", () => {
 	it("returns the last assistant text content", () => {

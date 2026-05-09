@@ -237,6 +237,62 @@ export function pickHumanName(agentName: string, records: SubagentRecord[]): { h
 	}
 }
 
+export function checkSpawnAllowed(
+	runtime: { depth: number; rootMaxDepth: number; canSpawn: string[] | undefined },
+	agentName: string,
+): { allowed: boolean; error?: string; code?: string } {
+	if (runtime.depth >= runtime.rootMaxDepth) {
+		return {
+			allowed: false,
+			error: `Cannot spawn ${agentName}: depth limit ${runtime.rootMaxDepth} has been reached.`,
+			code: "depth_limit",
+		};
+	}
+	if (runtime.canSpawn && !runtime.canSpawn.includes(agentName)) {
+		return {
+			allowed: false,
+			error: `Cannot spawn ${agentName}: parent agent is only allowed to spawn ${runtime.canSpawn.join(", ")}.`,
+			code: "spawn_not_allowed",
+		};
+	}
+	return { allowed: true };
+}
+
+export function resolveTaskAgent(
+	params: { subagent_type: string; resume?: string },
+	store: MetadataFile,
+	agents: AgentConfig[],
+):
+	| { ok: true; record?: SubagentRecord; agent: AgentConfig }
+	| { ok: false; errorText: string; errorCode: string } {
+	let record: SubagentRecord | undefined;
+	let agent = findAgent(agents, params.subagent_type);
+
+	if (params.resume) {
+		record = store.records.find((item) => item.id === params.resume);
+		if (!record) {
+			const known = store.records.map((item) => `${item.id} (${item.displayName})`).join(", ") || "none";
+			return {
+				ok: false,
+				errorText: `Unknown sub-agent ID "${params.resume}". Known agents: ${known}`,
+				errorCode: "unknown_resume_id",
+			};
+		}
+		agent = findAgent(agents, record.agentType);
+	}
+
+	if (!agent) {
+		const available = formatAgentList(agents, 30).text;
+		return {
+			ok: false,
+			errorText: `Unknown sub-agent type "${params.subagent_type}". Available: ${available}`,
+			errorCode: "unknown_agent_type",
+		};
+	}
+
+	return { ok: true, record, agent };
+}
+
 export function getFinalTextFromMessages(messages: any[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
@@ -559,50 +615,21 @@ export default function (pi: ExtensionAPI) {
 		const storeCtx = runtime.store ?? toMetadataContext(ctx);
 		const store = getMetadata(storeCtx);
 
-		let record: SubagentRecord | undefined;
-		let agent = findAgent(agents, params.subagent_type);
-
-		if (params.resume) {
-			record = store.records.find((item) => item.id === params.resume);
-			if (!record) {
-				const known = store.records.map((item) => `${item.id} (${item.displayName})`).join(", ") || "none";
-				return {
-					content: [{ type: "text", text: `Unknown sub-agent ID "${params.resume}". Known agents: ${known}` }],
-					details: { warnings, error: "unknown_resume_id" },
-				};
-			}
-			agent = findAgent(agents, record.agentType);
-		}
-
-		if (!agent) {
-			const available = formatAgentList(agents, 30).text;
+		const resolved = resolveTaskAgent(params, store, agents);
+		if (!resolved.ok) {
 			return {
-				content: [{ type: "text", text: `Unknown sub-agent type "${params.subagent_type}". Available: ${available}` }],
-				details: { warnings, error: "unknown_agent_type" },
+				content: [{ type: "text", text: resolved.errorText }],
+				details: { warnings, error: resolved.errorCode },
 			};
 		}
+		const { agent } = resolved;
+		let record = resolved.record;
 
-		if (runtime.depth >= runtime.rootMaxDepth) {
+		const spawnCheck = checkSpawnAllowed(runtime, agent.name);
+		if (!spawnCheck.allowed) {
 			return {
-				content: [
-					{
-						type: "text",
-						text: `Cannot spawn ${agent.name}: depth limit ${runtime.rootMaxDepth} has been reached.`,
-					},
-				],
-				details: { warnings, agentType: agent.name, error: "depth_limit" },
-			};
-		}
-
-		if (runtime.canSpawn && !runtime.canSpawn.includes(agent.name)) {
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Cannot spawn ${agent.name}: parent agent is only allowed to spawn ${runtime.canSpawn.join(", ")}.`,
-					},
-				],
-				details: { warnings, agentType: agent.name, error: "spawn_not_allowed" },
+				content: [{ type: "text", text: spawnCheck.error! }],
+				details: { warnings, agentType: agent.name, error: spawnCheck.code },
 			};
 		}
 
@@ -843,7 +870,7 @@ export default function (pi: ExtensionAPI) {
 			mainRuntime.rootMaxDepth = agent.depth ?? 0;
 			mainRuntime.canSpawn = agent.canSpawn ?? [];
 			persistMetadata(storeCtx);
-			showMessage(`Main agent set to ${agent.name}.`);
+			await ctx.newSession({ parentSession: ctx.sessionManager.getSessionFile() });
 		},
 	});
 
