@@ -18,6 +18,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionFactory,
 	getAgentDir,
+	getDefaultSessionDir,
 	getMarkdownTheme,
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
@@ -564,7 +565,7 @@ export default function (pi: ExtensionAPI) {
 		});
 		await loader.reload();
 
-		const sessionDir = (runtime.store ?? ctx).sessionManager.getSessionDir();
+		const sessionDir = (runtime.store ?? ctx).sessionManager.getSessionDir() || getDefaultSessionDir(ctx.cwd);
 		const sessionManager = fs.existsSync(record.sessionFile)
 			? SessionManager.open(record.sessionFile, sessionDir, ctx.cwd)
 			: SessionManager.create(ctx.cwd, sessionDir);
