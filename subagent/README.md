@@ -74,9 +74,9 @@ Unknown variables are errors.
 ## Commands
 
 ```text
-/agent Explore
+/agent scout
 /dump-prompt
-/dump-prompt Explore
+/dump-prompt scout
 ```
 
 `/agent` selects the main user-facing persona. `/dump-prompt` prints either the current main prompt or a configured agent prompt with variables resolved.
@@ -85,10 +85,10 @@ Unknown variables are errors.
 
 | Agent | Purpose | Tools |
 | --- | --- | --- |
-| `general-purpose` | Full-capability worker | Pi defaults |
-| `Explore` | Fast codebase exploration | `read`, `grep`, `find`, `ls`, `bash` |
-| `Planner` | Implementation planning | `read`, `grep`, `find`, `ls` |
-| `Reviewer` | Code review | `read`, `grep`, `find`, `ls`, `bash` |
+| `worker` | General-purpose subagent with full capabilities, isolated context | Pi defaults |
+| `scout` | Fast codebase recon for handoff to other agents | `read`, `grep`, `find`, `ls`, `bash` |
+| `planner` | Implementation planning | `read`, `grep`, `find`, `ls` |
+| `reviewer` | Code review | `read`, `grep`, `find`, `ls`, `bash` |
 
 ## Persistence
 

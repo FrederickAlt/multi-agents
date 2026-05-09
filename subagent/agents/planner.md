@@ -1,8 +1,8 @@
 ---
-name: Planner
 description: Creates implementation plans from context and requirements
 tools: read, grep, find, ls
-model: deepseek-v4-pro 
+model: deepseek-v4-pro
+reasoning_effort: high
 depth: 0
 ---
 

@@ -16,6 +16,8 @@ export interface AgentConfig {
 	tools?: string[];
 	extensions?: string[];
 	model?: string;
+	/** Thinking/reasoning effort level for the model. Maps to ThinkingLevel from pi-ai. */
+	reasoningEffort?: string;
 	depth?: number;
 	canSpawn?: string[];
 	systemPrompt: string;
@@ -56,9 +58,14 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 
 		const { frontmatter, body } = parseFrontmatter<Record<string, string | number>>(content);
 
-		if (!frontmatter.name || !frontmatter.description) {
+		if (!frontmatter.description) {
 			continue;
 		}
+
+		// Agent name is derived from the filename stem, not from a frontmatter field.
+		// This makes agent discovery predictable: the file you drop in is the agent you get.
+		const name = path.basename(entry.name, ".md");
+		if (name.startsWith(".")) continue; // skip hidden files
 
 		const tools = String(frontmatter.tools ?? "")
 			?.split(",")
@@ -72,6 +79,8 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			?.split(",")
 			.map((t: string) => t.trim())
 			.filter(Boolean);
+
+		const reasoningEffort = frontmatter.reasoning_effort ? String(frontmatter.reasoning_effort) : undefined;
 		const rawDepth = frontmatter.depth;
 		const depth =
 			rawDepth === undefined || rawDepth === ""
@@ -81,8 +90,9 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 					: Number.parseInt(String(rawDepth), 10);
 
 		agents.push({
-			name: String(frontmatter.name),
+			name,
 			description: String(frontmatter.description),
+			reasoningEffort,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			extensions: extensions && extensions.length > 0 ? extensions : undefined,
 			model: frontmatter.model ? String(frontmatter.model) : undefined,

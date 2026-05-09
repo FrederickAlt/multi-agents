@@ -46,8 +46,8 @@ describe.skipIf(!API_KEY)("Task with real LLM (deepseek-v4-flash)", () => {
 		writeFileSync(join(projectDir, "README.md"), "# Test Project\n\nThis is a test project for persistent subagents.", "utf-8");
 
 		// Write a custom agent config: deepseek-v4-flash, read-only, depth 1
+		// Agent name is derived from the filename stem (testreader).
 		const agentConfig = `---
-name: TestReader
 description: A read-only test agent for safe file inspection
 model: opencode-go/deepseek-v4-flash
 tools: read
@@ -106,7 +106,7 @@ Depth: {{depth}}
 			{
 				description: "Read project README",
 				prompt: "Read the README.md file in the current working directory and summarize what this project is about in one sentence.",
-				subagent_type: "TestReader",
+				subagent_type: "testreader",
 			},
 			undefined,
 			undefined,
@@ -114,7 +114,7 @@ Depth: {{depth}}
 
 		expect(taskResult.content).toBeDefined();
 		const text = taskResult.content?.[0]?.text ?? "";
-		expect(text).toContain("TestReader"); // display name should appear
+		expect(text).toContain("testreader"); // display name should appear (from filename)
 		expect(text).toContain("test project"); // README content should be summarized
 		expect(text).not.toContain("failed");
 		expect(taskResult.details?.error).toBeUndefined();
@@ -152,7 +152,7 @@ Depth: {{depth}}
 			{
 				description: "Remember a color",
 				prompt: 'My favorite color is turquoise. Respond with only the word "OK".',
-				subagent_type: "TestReader",
+				subagent_type: "testreader",
 			},
 			undefined,
 			undefined,

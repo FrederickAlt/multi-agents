@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
 import {
 	AgentSession,
 	createAgentSession,
@@ -578,6 +578,7 @@ export default function (pi: ExtensionAPI) {
 				tools: agent.tools,
 				resourceLoader: loader,
 				sessionManager,
+				thinkingLevel: agent.reasoningEffort as ThinkingLevel | undefined,
 			})
 		).session;
 

@@ -1,8 +1,8 @@
 ---
-name: Reviewer
 description: Code review specialist for quality and security analysis
 tools: read, grep, find, ls, bash
 model: deepseek-v4-pro
+reasoning_effort: high
 depth: 0
 ---
 

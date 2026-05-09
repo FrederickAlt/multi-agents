@@ -73,7 +73,8 @@ describe("discoverAgents", () => {
 	});
 
 	const writeAgent = (dir: string, name: string, description: string, extra: Record<string, string | number> = {}) => {
-		const frontmatter = [`name: ${name}`, `description: ${description}`, ...Object.entries(extra).map(([k, v]) => `${k}: ${v}`)].join("\n");
+		// Agent name comes from the filename stem, not from a frontmatter field.
+		const frontmatter = [`description: ${description}`, ...Object.entries(extra).map(([k, v]) => `${k}: ${v}`)].join("\n");
 		const content = `---\n${frontmatter}\n---\n\nYou are ${name}.\n\nTools: {{tools}}\nGuidelines: {{guidelines}}\n`;
 		writeFileSync(join(dir, `${name.toLowerCase()}.md`), content, "utf-8");
 	};
@@ -83,7 +84,7 @@ describe("discoverAgents", () => {
 
 		const result = discoverAgents(tempDir, "project");
 		const names = result.agents.map((a) => a.name);
-		expect(names).toContain("CustomExplorer");
+		expect(names).toContain("customexplorer");
 		expect(result.projectAgentsDir).toBe(agentsDir);
 	});
 
@@ -92,16 +93,18 @@ describe("discoverAgents", () => {
 			tools: "read, bash, edit",
 			extensions: "web, github",
 			model: "claude-haiku-4-5",
+			reasoning_effort: "high",
 			depth: 2,
 			canSpawn: "Explore, Planner",
 		});
 
 		const result = discoverAgents(tempDir, "project");
-		const agent = result.agents.find((a) => a.name === "FullAgent")!;
+		const agent = result.agents.find((a) => a.name === "fullagent")!;
 		expect(agent).toBeDefined();
 		expect(agent.tools).toEqual(["read", "bash", "edit"]);
 		expect(agent.extensions).toEqual(["web", "github"]);
 		expect(agent.model).toBe("claude-haiku-4-5");
+		expect(agent.reasoningEffort).toBe("high");
 		expect(agent.depth).toBe(2);
 		expect(agent.canSpawn).toEqual(["Explore", "Planner"]);
 		expect(agent.source).toBe("project");
@@ -109,11 +112,11 @@ describe("discoverAgents", () => {
 	});
 
 	it("project agents override same-named agents from other sources", () => {
-		writeAgent(agentsDir, "Explore", "Project override Explore");
+		writeAgent(agentsDir, "explore", "Project override Explore");
 
 		// With "project" scope we only get project agents
 		const result = discoverAgents(tempDir, "project");
-		const explorer = result.agents.find((a) => a.name === "Explore")!;
+		const explorer = result.agents.find((a) => a.name === "explore")!;
 		expect(explorer).toBeDefined();
 		expect(explorer.description).toBe("Project override Explore");
 		expect(explorer.source).toBe("project");
@@ -124,7 +127,7 @@ describe("discoverAgents", () => {
 		writeFileSync(join(agentsDir, "nodesc.md"), "---\nname: NoDesc\n---\n\nMissing description.", "utf-8");
 
 		const result = discoverAgents(tempDir, "project");
-		expect(result.agents.find((a) => a.name === "NoDesc")).toBeUndefined();
+		expect(result.agents.find((a) => a.name === "nodesc")).toBeUndefined();
 	});
 
 	it("returns null projectAgentsDir when no .pi/agents found in any parent", () => {
@@ -155,10 +158,12 @@ describe("discoverAgents", () => {
 		try {
 			const result = discoverAgents(cleanTemp, "project");
 			// Bundled agents are always included
-			expect(result.agents.length).toBeGreaterThanOrEqual(1);
+			expect(result.agents.length).toBeGreaterThanOrEqual(4);
 			const names = result.agents.map((a) => a.name);
-			expect(names).toContain("Explore");
-			expect(names).toContain("general-purpose");
+			expect(names).toContain("scout");
+			expect(names).toContain("planner");
+			expect(names).toContain("reviewer");
+			expect(names).toContain("worker");
 			expect(result.projectAgentsDir).toBeNull();
 		} finally {
 			try { rmSync(cleanTemp, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -171,7 +176,7 @@ describe("discoverAgents", () => {
 		mkdirSync(childDir, { recursive: true });
 
 		const result = discoverAgents(childDir, "project");
-		expect(result.agents.map((a) => a.name)).toContain("ParentAgent");
+		expect(result.agents.map((a) => a.name)).toContain("parentagent");
 		expect(result.projectAgentsDir).toBe(agentsDir);
 	});
 
@@ -180,8 +185,8 @@ describe("discoverAgents", () => {
 		writeAgent(agentsDir, "DepthStr", "Depth as string", { depth: "4" });
 
 		const result = discoverAgents(tempDir, "project");
-		const numAgent = result.agents.find((a) => a.name === "DepthNum")!;
-		const strAgent = result.agents.find((a) => a.name === "DepthStr")!;
+		const numAgent = result.agents.find((a) => a.name === "depthnum")!;
+		const strAgent = result.agents.find((a) => a.name === "depthstr")!;
 		expect(numAgent.depth).toBe(3);
 		expect(strAgent.depth).toBe(4);
 	});
@@ -190,7 +195,7 @@ describe("discoverAgents", () => {
 		writeAgent(agentsDir, "NoDepth", "No depth config", { depth: "" });
 
 		const result = discoverAgents(tempDir, "project");
-		const agent = result.agents.find((a) => a.name === "NoDepth")!;
+		const agent = result.agents.find((a) => a.name === "nodepth")!;
 		expect(agent.depth).toBeUndefined();
 	});
 });

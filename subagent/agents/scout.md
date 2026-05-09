@@ -1,8 +1,7 @@
 ---
-name: Explore
 description: Fast codebase recon that returns compressed context for handoff to other agents
-tools: read, grep, find, ls, bash
 model: deepseek-v4-flash
+reasoning_effort: high
 depth: 0
 ---
 
