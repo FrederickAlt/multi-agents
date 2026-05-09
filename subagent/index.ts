@@ -74,7 +74,7 @@ const REQUIRED_TEMPLATE_VARS = new Set([
 	"depth",
 ]);
 
-interface PromptParts {
+export interface PromptParts {
 	selectedTools?: string[];
 	toolSnippets?: Record<string, string>;
 	promptGuidelines?: string[];
@@ -83,7 +83,7 @@ interface PromptParts {
 	cwd?: string;
 }
 
-interface RenderContext {
+export interface RenderContext {
 	agent: AgentConfig;
 	parts: PromptParts;
 	parentAgentId?: string;
@@ -106,7 +106,7 @@ interface MetadataContext {
 	};
 }
 
-interface SubagentRecord {
+export interface SubagentRecord {
 	id: string;
 	humanName: string;
 	displayName: string;
@@ -118,7 +118,7 @@ interface SubagentRecord {
 	updatedAt: string;
 }
 
-interface MetadataFile {
+export interface MetadataFile {
 	version: 1;
 	mainSessionId: string;
 	mainSessionFile?: string;
@@ -237,7 +237,7 @@ export function pickHumanName(agentName: string, records: SubagentRecord[]): { h
 	}
 }
 
-function getFinalTextFromMessages(messages: any[]): string {
+export function getFinalTextFromMessages(messages: any[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg?.role !== "assistant") continue;
@@ -273,7 +273,7 @@ function formatSkills(parts: PromptParts): string {
 	return skills.map((skill) => `- ${skill.name}${skill.description ? `: ${skill.description}` : ""}`).join("\n");
 }
 
-function renderPromptTemplate(context: RenderContext): string {
+export function renderPromptTemplate(context: RenderContext): string {
 	const values: Record<string, string> = {
 		tools: formatTools(context.parts),
 		guidelines: formatGuidelines(context.parts),
@@ -427,6 +427,8 @@ export default function (pi: ExtensionAPI) {
 	let metadata: MetadataFile | undefined;
 	let selectedMainAgent: string | undefined;
 	const openSessions = new Map<string, AgentSession>();
+	// Serializes metadata read-allocate-write to prevent races between concurrent Task calls.
+	let metadataLock: Promise<void> = Promise.resolve();
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
 		depth: 0,
@@ -605,22 +607,35 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		if (!record) {
-			const id = randomHexId(new Set(store.records.map((item) => item.id)));
-			const names = pickHumanName(agent.name, store.records);
-			const now = new Date().toISOString();
-			record = {
-				id,
-				humanName: names.humanName,
-				displayName: names.displayName,
-				agentType: agent.name,
-				sessionFile: "",
-				parentAgentId: runtime.parentAgentId,
-				depth: runtime.depth + 1,
-				createdAt: now,
-				updatedAt: now,
-			};
-			store.records.push(record);
-			persistMetadata(storeCtx);
+			// Serialize metadata allocation to prevent concurrent Task calls
+			// from picking the same hex ID or human name.
+			const prevLock = metadataLock;
+			let releaseLock: () => void;
+			metadataLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+			await prevLock;
+			try {
+				// Re-read metadata after acquiring lock in case another
+				// concurrent Task already wrote new records.
+				const fresh = getMetadata(storeCtx);
+				const id = randomHexId(new Set(fresh.records.map((item) => item.id)));
+				const names = pickHumanName(agent.name, fresh.records);
+				const now = new Date().toISOString();
+				record = {
+					id,
+					humanName: names.humanName,
+					displayName: names.displayName,
+					agentType: agent.name,
+					sessionFile: "",
+					parentAgentId: runtime.parentAgentId,
+					depth: runtime.depth + 1,
+					createdAt: now,
+					updatedAt: now,
+				};
+				fresh.records.push(record);
+				saveMetadata(storeCtx, fresh);
+			} finally {
+				releaseLock();
+			}
 		}
 
 		let session = openSessions.get(record.id);
@@ -694,6 +709,10 @@ export default function (pi: ExtensionAPI) {
 			signal?.removeEventListener("abort", abort);
 			record.updatedAt = new Date().toISOString();
 			persistMetadata(storeCtx);
+			// Dispose the in-memory session to prevent unbounded accumulation.
+			// The session file remains on disk; resume reopens from the file.
+			session.dispose();
+			openSessions.delete(record.id);
 		}
 	};
 
