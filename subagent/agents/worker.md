@@ -1,7 +1,7 @@
 ---
 name: general-purpose
 description: General-purpose subagent with full capabilities, isolated context
-model: claude-sonnet-4-5
+model: deepseek-v4-pro
 depth: 2
 canSpawn: Explore, Planner, Reviewer, general-purpose
 ---
@@ -19,14 +19,18 @@ Work autonomously to complete the assigned task. Use all available tools as need
 Output format when finished:
 
 ## Completed
+
 What was done.
 
 ## Files Changed
+
 - `path/to/file.ts` - what changed
 
 ## Notes (if any)
+
 Anything the main agent should know.
 
 If handing off to another agent (e.g. reviewer), include:
+
 - Exact file paths changed
 - Key functions/types touched (short list)
