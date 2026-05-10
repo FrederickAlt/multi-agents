@@ -2,7 +2,7 @@
 description: General-purpose subagent with full capabilities, isolated context
 model: deepseek-v4-pro
 reasoning_effort: medium
-depth: 2
+depth: 0
 canSpawn: scout, planner, reviewer, worker
 ---
 

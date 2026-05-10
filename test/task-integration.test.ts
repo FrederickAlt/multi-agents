@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createAgentSession,
 	DefaultResourceLoader,
@@ -41,9 +41,20 @@ describe("extension loading", () => {
 		tempDir = join(tmpdir(), `pi-task-ext-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		makeDir(agentDir);
+
+		// Redirect in-memory session dirs to tempDir so .task-subagents-*.json
+		// metadata files don't end up in the repo root (SessionManager.inMemory
+		// uses sessionDir = "", which makes metadataPath resolve to process.cwd()).
+		const origInMemory = SessionManager.inMemory.bind(SessionManager);
+		vi.spyOn(SessionManager, "inMemory").mockImplementation((cwd?: string) => {
+			const sm = origInMemory(cwd);
+			vi.spyOn(sm, "getSessionDir").mockReturnValue(tempDir);
+			return sm;
+		});
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		if (tempDir && existsSync(tempDir)) {
 			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
 		}
