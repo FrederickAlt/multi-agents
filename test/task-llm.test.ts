@@ -80,7 +80,8 @@ Depth: {{depth}}
 		const authStorage = AuthStorage.create(authPath);
 		const modelRegistry = ModelRegistry.create(authStorage);
 
-		const sessionManager = SessionManager.inMemory(projectDir);
+		const sessionDir = join(projectDir, ".sessions");
+		const sessionManager = SessionManager.create(projectDir, sessionDir);
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: projectDir,
 			agentDir: join(homedir(), ".pi", "agent"),
@@ -125,7 +126,8 @@ Depth: {{depth}}
 		const authStorage = AuthStorage.create(authPath);
 		const modelRegistry = ModelRegistry.create(authStorage);
 
-		const sessionManager = SessionManager.inMemory(projectDir);
+		const sessionDir = join(projectDir, ".sessions");
+		const sessionManager = SessionManager.create(projectDir, sessionDir);
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: projectDir,
 			agentDir: join(homedir(), ".pi", "agent"),

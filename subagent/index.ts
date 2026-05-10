@@ -18,7 +18,6 @@ import {
 	type ExtensionAPI,
 	type ExtensionFactory,
 	getAgentDir,
-	getDefaultSessionDir,
 	getMarkdownTheme,
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
@@ -26,7 +25,6 @@ import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 
-const CUSTOM_TYPE = "persistent-task-subagents";
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 const HEX_ID_BYTES = 4;
 const HUMAN_NAMES = [
@@ -146,6 +144,7 @@ const TaskParams = Type.Object({
 	}),
 	subagent_type: Type.String({ description: "Configured sub-agent type to use." }),
 	resume: Type.Optional(Type.String({ description: "Short hex ID of a previous sub-agent to continue." })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for the sub-agent. Defaults to the parent agent's cwd." })),
 });
 
 function today(): string {
@@ -492,21 +491,9 @@ export default function (pi: ExtensionAPI) {
 		rootMaxDepth: Number.POSITIVE_INFINITY,
 	};
 
-	const showMessage = (content: string) => {
-		pi.sendMessage(
-			{
-				customType: CUSTOM_TYPE,
-				content,
-				display: true,
-			},
-			{ triggerTurn: false },
-		);
+	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
+		ctx.ui.notify(content, type);
 	};
-
-	pi.registerMessageRenderer(CUSTOM_TYPE, (message, _options, _theme) => {
-		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content, null, 2);
-		return new Markdown(content, 0, 0, getMarkdownTheme());
-	});
 
 	const getMetadata = (ctx: { sessionManager: { getSessionDir(): string; getSessionId(): string; getSessionFile(): string | undefined } }) => {
 		metadata = loadMetadata(ctx);
@@ -547,9 +534,11 @@ export default function (pi: ExtensionAPI) {
 		agent: AgentConfig,
 		runtime: RuntimeContext,
 		warnings: string[],
+		effectiveCwd?: string,
 	): Promise<AgentSession> => {
+		const cwd = effectiveCwd ?? ctx.cwd;
 		const loader = new DefaultResourceLoader({
-			cwd: ctx.cwd,
+			cwd,
 			agentDir: getAgentDir(),
 			extensionsOverride: filterExtensionsForAgent(agent, selfPath),
 			extensionFactories: [
@@ -565,16 +554,16 @@ export default function (pi: ExtensionAPI) {
 		});
 		await loader.reload();
 
-		const sessionDir = (runtime.store ?? ctx).sessionManager.getSessionDir() || getDefaultSessionDir(ctx.cwd);
+		const sessionDir = (runtime.store ?? ctx).sessionManager.getSessionDir();
 		const sessionManager = fs.existsSync(record.sessionFile)
-			? SessionManager.open(record.sessionFile, sessionDir, ctx.cwd)
-			: SessionManager.create(ctx.cwd, sessionDir);
+			? SessionManager.open(record.sessionFile, sessionDir, cwd)
+			: SessionManager.create(cwd, sessionDir);
 		record.sessionFile = sessionManager.getSessionFile() ?? record.sessionFile;
 		persistMetadata(runtime.store ?? ctx);
 
 		const session = (
 			await createAgentSession({
-				cwd: ctx.cwd,
+				cwd,
 				model: modelFromConfig(ctx.modelRegistry, agent.model, ctx.model, warnings),
 				tools: agent.tools,
 				resourceLoader: loader,
@@ -605,13 +594,14 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const runTask = async (
-		params: { description: string; prompt: string; subagent_type: string; resume?: string },
+		params: { description: string; prompt: string; subagent_type: string; resume?: string; cwd?: string },
 		signal: AbortSignal | undefined,
 		onUpdate: ((partial: AgentToolResult<TaskDetails>) => void) | undefined,
 		ctx: any,
 		runtime: RuntimeContext,
 	): Promise<AgentToolResult<TaskDetails>> => {
-		const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
+		const effectiveCwd = params.cwd || ctx.cwd;
+		const discovery = discoverAgents(effectiveCwd, DEFAULT_AGENT_SCOPE);
 		const agents = discovery.agents;
 		const warnings: string[] = [];
 		const storeCtx = runtime.store ?? toMetadataContext(ctx);
@@ -669,7 +659,7 @@ export default function (pi: ExtensionAPI) {
 
 		let session = openSessions.get(record.id);
 		if (!session) {
-			session = await createSessionForRecord(ctx, record, agent, runtime, warnings);
+			session = await createSessionForRecord(ctx, record, agent, runtime, warnings, effectiveCwd);
 			openSessions.set(record.id, session);
 		}
 
@@ -856,13 +846,13 @@ export default function (pi: ExtensionAPI) {
 			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
 			if (!name) {
 				const available = formatAgentList(discovery.agents, 30).text;
-				showMessage(`Current agent: ${selectedMainAgent ?? "(default)"}\n\nAvailable: ${available}`);
+				showMessage(ctx, `Current agent: ${selectedMainAgent ?? "(default)"}\n\nAvailable: ${available}`, "info");
 				return;
 			}
 			const agent = findAgent(discovery.agents, name);
 			if (!agent) {
 				const available = formatAgentList(discovery.agents, 30).text;
-				showMessage(`Unknown agent "${name}".\n\nAvailable: ${available}`);
+				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
 				return;
 			}
 			const storeCtx = toMetadataContext(ctx);
@@ -889,7 +879,7 @@ export default function (pi: ExtensionAPI) {
 			getMetadata(storeCtx);
 			const name = args.trim();
 			if (!name && !selectedMainAgent) {
-				showMessage(ctx.getSystemPrompt());
+				showMessage(ctx, ctx.getSystemPrompt(), "info");
 				return;
 			}
 
@@ -897,7 +887,7 @@ export default function (pi: ExtensionAPI) {
 			const agentName = name || selectedMainAgent;
 			const agent = agentName ? findAgent(discovery.agents, agentName) : undefined;
 			if (!agent) {
-				showMessage(`Unknown agent "${agentName}".`);
+				showMessage(ctx, `Unknown agent "${agentName}".`, "warning");
 				return;
 			}
 
@@ -917,7 +907,7 @@ export default function (pi: ExtensionAPI) {
 			);
 			const warnings =
 				rendered.warnings.length > 0 ? `\n\nWarnings:\n${rendered.warnings.map((w) => `- ${w}`).join("\n")}` : "";
-			showMessage(`${rendered.prompt}${warnings}`);
+			showMessage(ctx, `${rendered.prompt}${warnings}`, "info");
 		},
 	});
 }
