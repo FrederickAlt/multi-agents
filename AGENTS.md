@@ -1,5 +1,3 @@
-# AGENTS.md — Persistent Task Subagents
-
 ## What this project does
 
 This is a **Pi extension** that adds a `Task` tool to Pi. The `Task` tool lets the model delegate autonomous work to **persistent sub-agents** — real Pi `AgentSession` instances with their own transcripts, tools, and config. Each sub-agent survives across Pi restarts, is identified by a short hex ID, and can be resumed later for follow-up work.
