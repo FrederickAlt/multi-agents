@@ -1,5 +1,5 @@
 ---
-description: General-purpose subagent with full capabilities, isolated context
+description: worker subagent with full capabilities, isolated context
 model: deepseek-v4-flash
 reasoning_effort: high
 depth: 0
