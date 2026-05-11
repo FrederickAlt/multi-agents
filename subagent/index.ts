@@ -396,23 +396,6 @@ function buildPromptPartsFromOptions(options: any): PromptParts {
 	};
 }
 
-function buildPromptPartsFromSession(session: AgentSession): PromptParts {
-	const selectedTools = session.getActiveToolNames();
-	const toolSnippets: Record<string, string> = {};
-	const promptGuidelines: string[] = [];
-	for (const name of selectedTools) {
-		const definition = session.getToolDefinition(name) as any;
-		if (definition?.promptSnippet) toolSnippets[name] = definition.promptSnippet;
-		if (Array.isArray(definition?.promptGuidelines)) promptGuidelines.push(...definition.promptGuidelines);
-	}
-	return {
-		selectedTools,
-		toolSnippets,
-		promptGuidelines,
-		cwd: session.sessionManager.getCwd(),
-	};
-}
-
 function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: any) => any {
 	return (base: any) => {
 		const allowed = agent.extensions;
@@ -431,52 +414,6 @@ function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: 
 		});
 		return { ...base, extensions: filtered };
 	};
-}
-
-async function renderAgentPromptForDump(
-	agent: AgentConfig,
-	cwd: string,
-	modelRegistry: any,
-	runtime: RuntimeContext,
-	taskToolFactory: ExtensionFactory,
-	selfPath: string,
-): Promise<{ prompt: string; warnings: string[] }> {
-	const warnings: string[] = [];
-	const loader = new DefaultResourceLoader({
-		cwd,
-		agentDir: getAgentDir(),
-		extensionsOverride: filterExtensionsForAgent(agent, selfPath),
-		extensionFactories: [taskToolFactory],
-		systemPromptOverride: () => agent.systemPrompt,
-	});
-	await loader.reload();
-	const sessionManager = SessionManager.inMemory(cwd);
-	const session = (
-		await createAgentSession({
-			cwd,
-			model: modelFromConfig(modelRegistry, agent.model, undefined, warnings),
-			tools: agent.tools,
-			resourceLoader: loader,
-			sessionManager,
-		})
-	).session;
-	try {
-		if (agent.tools) {
-			const active = new Set(session.getActiveToolNames());
-			for (const tool of agent.tools) {
-				if (!active.has(tool)) warnings.push(`Configured tool "${tool}" is not available for ${agent.name}.`);
-			}
-		}
-		const prompt = renderPromptTemplate({
-			agent,
-			parts: buildPromptPartsFromSession(session),
-			parentAgentId: runtime.parentAgentId,
-			depth: runtime.depth,
-		});
-		return { prompt, warnings };
-	} finally {
-		session.dispose();
-	}
 }
 
 export default function (pi: ExtensionAPI) {
@@ -866,48 +803,4 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("dump-prompt", {
-		description: "Dump the current or configured agent system prompt",
-		getArgumentCompletions(prefix) {
-			const discovery = discoverAgents(process.cwd(), DEFAULT_AGENT_SCOPE);
-			return discovery.agents
-				.filter((agent) => agent.name.startsWith(prefix))
-				.map((agent) => ({ value: agent.name, label: agent.name, description: agent.description }));
-		},
-		handler: async (args, ctx) => {
-			const storeCtx = toMetadataContext(ctx);
-			getMetadata(storeCtx);
-			const name = args.trim();
-			if (!name && !selectedMainAgent) {
-				showMessage(ctx, ctx.getSystemPrompt(), "info");
-				return;
-			}
-
-			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
-			const agentName = name || selectedMainAgent;
-			const agent = agentName ? findAgent(discovery.agents, agentName) : undefined;
-			if (!agent) {
-				showMessage(ctx, `Unknown agent "${agentName}".`, "warning");
-				return;
-			}
-
-			const taskFactory = makeTaskToolFactory({
-				depth: 0,
-				rootMaxDepth: agent.depth ?? 0,
-				canSpawn: agent.canSpawn ?? [],
-				store: storeCtx,
-			});
-			const rendered = await renderAgentPromptForDump(
-				agent,
-				ctx.cwd,
-				ctx.modelRegistry,
-				{ depth: 0, rootMaxDepth: agent.depth ?? 0, canSpawn: agent.canSpawn ?? [], store: storeCtx },
-				taskFactory,
-				selfPath,
-			);
-			const warnings =
-				rendered.warnings.length > 0 ? `\n\nWarnings:\n${rendered.warnings.map((w) => `- ${w}`).join("\n")}` : "";
-			showMessage(ctx, `${rendered.prompt}${warnings}`, "info");
-		},
-	});
 }
