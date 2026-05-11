@@ -110,7 +110,7 @@ Sub-agent `AgentSession` objects are disposed after each `Task` call. The on-dis
 
 ## Dependencies
 
-- **Runtime**: `@mariozechner/pi-coding-agent`, `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`, `@mariozechner/pi-tui` — the Pi platform packages
+- **Runtime**: `@mariozechner/pi-coding-agent`, `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`, `@mariozechner/pi-tui` — the Pi platform packages they are found at `~/p/AI/pi_extensions/pi-mono/packages/coding-agent` etc.
 - **Schema validation**: `typebox` for the Task tool parameter schema
 - **Testing**: `vitest` with path aliases resolving to local `pi-mono` source
 - **Node builtins**: `fs`, `path`, `crypto` (for random hex IDs), `url`
