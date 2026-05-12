@@ -406,6 +406,23 @@ function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: 
 	};
 }
 
+// Persists across extension module reloads (triggered by newSession).
+// Extension-level closure variables are lost on reload because jiti uses
+// moduleCache: false. globalThis survives because it's process-global.
+const GLOBAL_SELECTED_AGENT_KEY = "__multi_agents_selected_main_agent";
+
+function getGlobalSelectedAgent(): string | undefined {
+	return (globalThis as any)[GLOBAL_SELECTED_AGENT_KEY];
+}
+
+function setGlobalSelectedAgent(name: string | undefined): void {
+	if (name === undefined) {
+		delete (globalThis as any)[GLOBAL_SELECTED_AGENT_KEY];
+	} else {
+		(globalThis as any)[GLOBAL_SELECTED_AGENT_KEY] = name;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	let metadata: MetadataFile | undefined;
 	let selectedMainAgent: string | undefined;
@@ -755,6 +772,17 @@ export default function (pi: ExtensionAPI) {
 		const storeCtx = toMetadataContext(ctx);
 		mainRuntime.store = storeCtx;
 		const store = getMetadata(storeCtx);
+		// Restore the agent set by /agent X before newSession.
+		// globalThis is used because the extension module is reloaded during
+		// newSession (jiti with moduleCache: false), and closure-level vars
+		// are lost.
+		const globalAgent = getGlobalSelectedAgent();
+		if (globalAgent) {
+			selectedMainAgent = globalAgent;
+			setGlobalSelectedAgent(undefined);
+			store.selectedMainAgent = selectedMainAgent;
+			persistMetadata(storeCtx);
+		}
 		const flagAgent = pi.getFlag("agent");
 		if (typeof flagAgent === "string" && flagAgent.trim()) {
 			selectedMainAgent = flagAgent.trim();
@@ -770,6 +798,9 @@ export default function (pi: ExtensionAPI) {
 		for (const session of openSessions.values()) session.dispose();
 		openSessions.clear();
 		if (event.reason === "new") {
+			// Persist selected main agent to globalThis so it survives
+			// extension module reload during newSession.
+			if (selectedMainAgent) setGlobalSelectedAgent(selectedMainAgent);
 			deleteMetadataAndSubsessions(ctx);
 			metadata = undefined;
 			selectedMainAgent = undefined;
