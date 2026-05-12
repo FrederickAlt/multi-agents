@@ -122,6 +122,20 @@ describe("discoverAgents", () => {
 		expect(explorer.source).toBe("project");
 	});
 
+	it("with 'both' scope, project agents override bundled agents of the same name", () => {
+		// Create a project agent that overrides a built-in (scout)
+		writeAgent(agentsDir, "scout", "Project-specific scout");
+
+		const result = discoverAgents(tempDir, "both");
+		const scout = result.agents.find((a) => a.name === "scout")!;
+		expect(scout).toBeDefined();
+		expect(scout.description).toBe("Project-specific scout");
+		expect(scout.source).toBe("project");
+		// Other bundled agents should still be present
+		expect(result.agents.map((a) => a.name)).toContain("planner");
+		expect(result.agents.map((a) => a.name)).toContain("reviewer");
+	});
+
 	it("skips markdown files without required frontmatter", () => {
 		writeFileSync(join(agentsDir, "invalid.md"), "# No frontmatter\n\nJust a markdown file.", "utf-8");
 		writeFileSync(join(agentsDir, "nodesc.md"), "---\nname: NoDesc\n---\n\nMissing description.", "utf-8");
@@ -197,5 +211,43 @@ describe("discoverAgents", () => {
 		const result = discoverAgents(tempDir, "project");
 		const agent = result.agents.find((a) => a.name === "nodepth")!;
 		expect(agent.depth).toBeUndefined();
+	});
+
+	it("skips malformed YAML files gracefully without crashing agent discovery", () => {
+		// Write a valid agent file
+		writeAgent(agentsDir, "GoodAgent", "A working agent");
+
+		// Write an agent file with broken YAML — unbalanced quotes, illegal syntax
+		const brokenYaml = `---\ndescription: "Valid agent with broken YAML syntax\ntools: read\n---\n\nSystem prompt here.\n`;
+		writeFileSync(join(agentsDir, "brokenagent.md"), brokenYaml, "utf-8");
+
+		// discovery should NOT throw — the broken file should be skipped
+		const result = discoverAgents(tempDir, "project");
+		expect(result.agents.map((a) => a.name)).toContain("goodagent");
+		// The broken agent should be silently omitted
+		expect(result.agents.find((a) => a.name === "brokenagent")).toBeUndefined();
+	});
+
+	it("skips hidden files (starting with dot) in agents directory", () => {
+		writeAgent(agentsDir, "Visible", "A visible agent");
+		// A hidden .md file — its stem starts with "."
+		const hiddenContent = `---\ndescription: Should be invisible\n---\n\nHidden agent.\n`;
+		writeFileSync(join(agentsDir, ".hidden.md"), hiddenContent, "utf-8");
+
+		const result = discoverAgents(tempDir, "project");
+		expect(result.agents.map((a) => a.name)).toContain("visible");
+		expect(result.agents.find((a) => a.name === ".hidden")).toBeUndefined();
+	});
+
+	it("skips non-markdown files in agents directory", () => {
+		writeAgent(agentsDir, "RealAgent", "A real agent");
+		writeFileSync(join(agentsDir, "notes.txt"), "Just some notes.", "utf-8");
+		writeFileSync(join(agentsDir, "readme.md"), "---\ndescription: Readme description\n---\n\nReadme body.\n", "utf-8");
+
+		const result = discoverAgents(tempDir, "project");
+		// notes.txt should be skipped (not .md)
+		expect(result.agents.find((a) => a.name === "notes")).toBeUndefined();
+		// readme.md should be discovered (has .md extension and valid frontmatter)
+		expect(result.agents.map((a) => a.name)).toContain("readme");
 	});
 });

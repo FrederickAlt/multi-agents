@@ -56,7 +56,16 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			continue;
 		}
 
-		const { frontmatter, body } = parseFrontmatter<Record<string, string | number>>(content);
+		let frontmatter: Record<string, string | number>;
+		let body: string;
+		try {
+			const parsed = parseFrontmatter<Record<string, string | number>>(content);
+			frontmatter = parsed.frontmatter;
+			body = parsed.body;
+		} catch {
+			// Skip files with malformed YAML frontmatter.
+			continue;
+		}
 
 		if (!frontmatter.description) {
 			continue;
