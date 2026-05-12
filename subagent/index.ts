@@ -137,16 +137,6 @@ interface TaskDetails {
 	output?: string;
 }
 
-const TaskParams = Type.Object({
-	description: Type.String({ description: "Short 3-5 word description of the task." }),
-	prompt: Type.String({
-		description: "Full task description for the agent to perform autonomously. The agent reports back once.",
-	}),
-	subagent_type: Type.String({ description: "Configured sub-agent type to use." }),
-	resume: Type.Optional(Type.String({ description: "Short hex ID of a previous sub-agent to continue." })),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the sub-agent. Defaults to the parent agent's cwd." })),
-});
-
 function today(): string {
 	const now = new Date();
 	const yyyy = now.getFullYear();
@@ -673,6 +663,39 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	function registerTaskTool(targetPi: ExtensionAPI, runtime: RuntimeContext): void {
+		const discovery = discoverAgents(
+			runtime.store?.sessionManager?.getSessionDir?.() ?? process.cwd(),
+			DEFAULT_AGENT_SCOPE,
+		);
+
+		// Filter to only what THIS agent is allowed to spawn.
+		// If canSpawn is undefined (root agent with no persona selected),
+		// all agents are allowed.
+		const allowed = runtime.canSpawn && runtime.canSpawn.length > 0
+			? discovery.agents.filter(a => runtime.canSpawn!.includes(a.name))
+			: discovery.agents;
+
+		const agentNames = allowed.map(a => a.name);
+		const descriptionText = allowed
+			.map(a => `${a.name}: ${a.description}`)
+			.join(". ");
+
+		const params = Type.Object({
+			description: Type.String({ description: "Short 3-5 word description of the task." }),
+			prompt: Type.String({
+				description: "Full task description for the agent to perform autonomously. The agent reports back once.",
+			}),
+			subagent_type: Type.Enum(agentNames, {
+				description: `Which sub-agent to delegate to. ${descriptionText}`,
+			}),
+			resume: Type.Optional(Type.String({
+				description: "Short hex ID of a previous sub-agent to continue.",
+			})),
+			cwd: Type.Optional(Type.String({
+				description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
+			})),
+		});
+
 		targetPi.registerTool({
 			name: "Task",
 			label: "Task",
@@ -684,7 +707,7 @@ export default function (pi: ExtensionAPI) {
 				"Call Task multiple times in the same turn when independent sub-agent tasks can run in parallel.",
 				"Use Task resume with a returned sub-agent ID when follow-up work needs the same transcript.",
 			],
-			parameters: TaskParams,
+			parameters: params,
 			async execute(_toolCallId, params, signal, onUpdate, ctx) {
 				return runTask(params, signal, onUpdate, ctx, runtime);
 			},
