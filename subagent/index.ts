@@ -7,7 +7,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
@@ -23,43 +22,10 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
+import { MetadataStore } from "./metadata.js";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
-const HEX_ID_BYTES = 4;
-const HUMAN_NAMES = [
-	"Tom",
-	"Ada",
-	"Max",
-	"Ivy",
-	"Leo",
-	"Nora",
-	"Sam",
-	"Mia",
-	"Eli",
-	"Zoe",
-	"Kai",
-	"Ava",
-	"Ben",
-	"Lia",
-	"Gus",
-	"Nia",
-	"Ray",
-	"Uma",
-	"Jan",
-	"Eva",
-	"Sol",
-	"Kim",
-	"Ari",
-	"Liv",
-	"Cal",
-	"Bea",
-	"Ned",
-	"Pia",
-	"Ren",
-	"Tess",
-];
-
 const REQUIRED_TEMPLATE_VARS = new Set([
 	"tools",
 	"guidelines",
@@ -94,35 +60,7 @@ interface RuntimeContext {
 	depth: number;
 	rootMaxDepth: number;
 	canSpawn?: string[];
-	store?: MetadataContext;
-}
-
-interface MetadataContext {
-	sessionManager: {
-		getSessionDir(): string;
-		getSessionId(): string;
-		getSessionFile(): string | undefined;
-	};
-}
-
-export interface SubagentRecord {
-	id: string;
-	humanName: string;
-	displayName: string;
-	agentType: string;
-	sessionFile: string;
-	parentAgentId?: string;
-	depth: number;
-	createdAt: string;
-	updatedAt: string;
-}
-
-export interface MetadataFile {
-	version: 1;
-	mainSessionId: string;
-	mainSessionFile?: string;
-	selectedMainAgent?: string;
-	records: SubagentRecord[];
+	store?: MetadataStore;
 }
 
 interface TaskDetails {
@@ -143,88 +81,6 @@ function today(): string {
 	const mm = String(now.getMonth() + 1).padStart(2, "0");
 	const dd = String(now.getDate()).padStart(2, "0");
 	return `${yyyy}-${mm}-${dd}`;
-}
-
-export function metadataPath(ctx: { sessionManager: { getSessionDir(): string; getSessionId(): string } }): string {
-	return path.join(ctx.sessionManager.getSessionDir(), `.task-subagents-${ctx.sessionManager.getSessionId()}.json`);
-}
-
-function toMetadataContext(ctx: MetadataContext): MetadataContext {
-	const sessionDir = ctx.sessionManager.getSessionDir();
-	const sessionId = ctx.sessionManager.getSessionId();
-	const sessionFile = ctx.sessionManager.getSessionFile();
-	return {
-		sessionManager: {
-			getSessionDir: () => sessionDir,
-			getSessionId: () => sessionId,
-			getSessionFile: () => sessionFile,
-		},
-	};
-}
-
-export function loadMetadata(ctx: { sessionManager: { getSessionDir(): string; getSessionId(): string; getSessionFile(): string | undefined } }): MetadataFile {
-	const filePath = metadataPath(ctx);
-	if (fs.existsSync(filePath)) {
-		try {
-			const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as MetadataFile;
-			if (parsed.version === 1 && Array.isArray(parsed.records)) return parsed;
-		} catch {
-			// Fall through to a clean metadata file.
-		}
-	}
-	return {
-		version: 1,
-		mainSessionId: ctx.sessionManager.getSessionId(),
-		mainSessionFile: ctx.sessionManager.getSessionFile(),
-		records: [],
-	};
-}
-
-export function saveMetadata(ctx: { sessionManager: { getSessionDir(): string; getSessionId(): string; getSessionFile(): string | undefined } }, metadata: MetadataFile): void {
-	const filePath = metadataPath(ctx);
-	fs.mkdirSync(path.dirname(filePath), { recursive: true });
-	metadata.mainSessionId = ctx.sessionManager.getSessionId();
-	metadata.mainSessionFile = ctx.sessionManager.getSessionFile();
-	fs.writeFileSync(filePath, `${JSON.stringify(metadata, null, 2)}\n`, "utf-8");
-}
-
-function deleteMetadataAndSubsessions(ctx: { sessionManager: { getSessionDir(): string; getSessionId(): string; getSessionFile(): string | undefined } }): void {
-	const metadata = loadMetadata(ctx);
-	for (const record of metadata.records) {
-		try {
-			if (record.sessionFile) fs.unlinkSync(record.sessionFile);
-		} catch {
-			// Ignore cleanup errors.
-		}
-	}
-	try {
-		fs.unlinkSync(metadataPath(ctx));
-	} catch {
-		// Ignore cleanup errors.
-	}
-}
-
-export function randomHexId(existing: Set<string>): string {
-	for (let attempt = 0; attempt < 1000; attempt++) {
-		const id = Array.from(randomBytes(HEX_ID_BYTES))
-			.map((byte) => byte.toString(16).padStart(2, "0"))
-			.join("");
-		if (!existing.has(id)) return id;
-	}
-	throw new Error("Could not allocate a unique sub-agent ID.");
-}
-
-export function pickHumanName(agentName: string, records: SubagentRecord[]): { humanName: string; displayName: string } {
-	const used = new Set(records.map((record) => record.humanName));
-	for (const name of HUMAN_NAMES) {
-		if (!used.has(name)) return { humanName: name, displayName: `${agentName} ${name}` };
-	}
-	for (let i = 1; ; i++) {
-		for (const base of HUMAN_NAMES) {
-			const name = `${base}${i}`;
-			if (!used.has(name)) return { humanName: name, displayName: `${agentName} ${name}` };
-		}
-	}
 }
 
 export function checkSpawnAllowed(
@@ -424,11 +280,8 @@ function setGlobalSelectedAgent(name: string | undefined): void {
 }
 
 export default function (pi: ExtensionAPI) {
-	let metadata: MetadataFile | undefined;
-	let selectedMainAgent: string | undefined;
 	const openSessions = new Map<string, AgentSession>();
-	// Serializes metadata read-allocate-write to prevent races between concurrent Task calls.
-	let metadataLock: Promise<void> = Promise.resolve();
+	let store: MetadataStore | undefined;
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
 		depth: 0,
@@ -437,18 +290,6 @@ export default function (pi: ExtensionAPI) {
 
 	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
 		ctx.ui.notify(content, type);
-	};
-
-	const getMetadata = (ctx: { sessionManager: { getSessionDir(): string; getSessionId(): string; getSessionFile(): string | undefined } }) => {
-		metadata = loadMetadata(ctx);
-		selectedMainAgent = metadata.selectedMainAgent;
-		return metadata;
-	};
-
-	const persistMetadata = (ctx: { sessionManager: { getSessionDir(): string; getSessionId(): string; getSessionFile(): string | undefined } }) => {
-		if (!metadata) metadata = loadMetadata(ctx);
-		metadata.selectedMainAgent = selectedMainAgent;
-		saveMetadata(ctx, metadata);
 	};
 
 	const makeTaskToolFactory = (runtime: RuntimeContext): ExtensionFactory => {
@@ -481,6 +322,7 @@ export default function (pi: ExtensionAPI) {
 		effectiveCwd?: string,
 	): Promise<AgentSession> => {
 		const cwd = effectiveCwd ?? ctx.cwd;
+		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
 		const loader = new DefaultResourceLoader({
 			cwd,
 			agentDir: getAgentDir(),
@@ -498,12 +340,12 @@ export default function (pi: ExtensionAPI) {
 		});
 		await loader.reload();
 
-		const sessionDir = (runtime.store ?? ctx).sessionManager.getSessionDir();
+		const sessionDir = activeStore.ctx.sessionDir;
 		const sessionManager = fs.existsSync(record.sessionFile)
 			? SessionManager.open(record.sessionFile, sessionDir, cwd)
 			: SessionManager.create(cwd, sessionDir);
 		record.sessionFile = sessionManager.getSessionFile() ?? record.sessionFile;
-		persistMetadata(runtime.store ?? ctx);
+		activeStore.save();
 
 		const session = (
 			await createAgentSession({
@@ -526,7 +368,7 @@ export default function (pi: ExtensionAPI) {
 		const unsubscribe = session.subscribe((event: any) => {
 			if (event.type === "agent_end") {
 				record.updatedAt = new Date().toISOString();
-				persistMetadata(runtime.store ?? ctx);
+				activeStore.save();
 			}
 		});
 		const originalDispose = session.dispose.bind(session);
@@ -548,10 +390,9 @@ export default function (pi: ExtensionAPI) {
 		const discovery = discoverAgents(effectiveCwd, DEFAULT_AGENT_SCOPE);
 		const agents = discovery.agents;
 		const warnings: string[] = [];
-		const storeCtx = runtime.store ?? toMetadataContext(ctx);
-		const store = getMetadata(storeCtx);
+		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
 
-		const resolved = resolveTaskAgent(params, store, agents);
+		const resolved = resolveTaskAgent(params, activeStore.load(), agents);
 		if (!resolved.ok) {
 			return {
 				content: [{ type: "text", text: resolved.errorText }],
@@ -570,35 +411,11 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		if (!record) {
-			// Serialize metadata allocation to prevent concurrent Task calls
-			// from picking the same hex ID or human name.
-			const prevLock = metadataLock;
-			let releaseLock: () => void;
-			metadataLock = new Promise<void>((resolve) => { releaseLock = resolve; });
-			await prevLock;
-			try {
-				// Re-read metadata after acquiring lock in case another
-				// concurrent Task already wrote new records.
-				const fresh = getMetadata(storeCtx);
-				const id = randomHexId(new Set(fresh.records.map((item) => item.id)));
-				const names = pickHumanName(agent.name, fresh.records);
-				const now = new Date().toISOString();
-				record = {
-					id,
-					humanName: names.humanName,
-					displayName: names.displayName,
-					agentType: agent.name,
-					sessionFile: "",
-					parentAgentId: runtime.parentAgentId,
-					depth: runtime.depth + 1,
-					createdAt: now,
-					updatedAt: now,
-				};
-				fresh.records.push(record);
-				saveMetadata(storeCtx, fresh);
-			} finally {
-				releaseLock();
-			}
+			record = await activeStore.allocateRecord(
+				agent.name,
+				runtime.parentAgentId,
+				runtime.depth + 1,
+			);
 		}
 
 		let session = openSessions.get(record.id);
@@ -670,8 +487,7 @@ export default function (pi: ExtensionAPI) {
 			};
 		} finally {
 			signal?.removeEventListener("abort", abort);
-			record.updatedAt = new Date().toISOString();
-			persistMetadata(storeCtx);
+			activeStore.touchRecord(record.id);
 			// Dispose the in-memory session to prevent unbounded accumulation.
 			// The session file remains on disk; resume reopens from the file.
 			session.dispose();
@@ -681,7 +497,7 @@ export default function (pi: ExtensionAPI) {
 
 	function registerTaskTool(targetPi: ExtensionAPI, runtime: RuntimeContext): void {
 		const discovery = discoverAgents(
-			runtime.store?.sessionManager?.getSessionDir?.() ?? process.cwd(),
+			runtime.store?.ctx?.sessionDir ?? process.cwd(),
 			DEFAULT_AGENT_SCOPE,
 		);
 
@@ -769,27 +585,25 @@ export default function (pi: ExtensionAPI) {
 	registerTaskTool(pi, mainRuntime);
 
 	pi.on("session_start", async (_event, ctx) => {
-		const storeCtx = toMetadataContext(ctx);
-		mainRuntime.store = storeCtx;
-		const store = getMetadata(storeCtx);
+		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
+		mainRuntime.store = activeStore;
+		store = activeStore;
+		activeStore.load();
 		// Restore the agent set by /agent X before newSession.
 		// globalThis is used because the extension module is reloaded during
 		// newSession (jiti with moduleCache: false), and closure-level vars
 		// are lost.
 		const globalAgent = getGlobalSelectedAgent();
 		if (globalAgent) {
-			selectedMainAgent = globalAgent;
 			setGlobalSelectedAgent(undefined);
-			store.selectedMainAgent = selectedMainAgent;
-			persistMetadata(storeCtx);
+			activeStore.selectedMainAgent = globalAgent;
 		}
 		const flagAgent = pi.getFlag("agent");
 		if (typeof flagAgent === "string" && flagAgent.trim()) {
-			selectedMainAgent = flagAgent.trim();
-			store.selectedMainAgent = selectedMainAgent;
-			persistMetadata(storeCtx);
+			activeStore.selectedMainAgent = flagAgent.trim();
 		}
-		const selected = selectedMainAgent ? findAgent(discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE).agents, selectedMainAgent) : undefined;
+		const selectedAgentName = activeStore.selectedMainAgent;
+		const selected = selectedAgentName ? findAgent(discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE).agents, selectedAgentName) : undefined;
 		mainRuntime.rootMaxDepth = selected ? (selected.depth ?? 0) : Number.POSITIVE_INFINITY;
 		mainRuntime.canSpawn = selected ? (selected.canSpawn ?? []) : undefined;
 	});
@@ -800,20 +614,20 @@ export default function (pi: ExtensionAPI) {
 		if (event.reason === "new") {
 			// Persist selected main agent to globalThis so it survives
 			// extension module reload during newSession.
-			if (selectedMainAgent) setGlobalSelectedAgent(selectedMainAgent);
-			deleteMetadataAndSubsessions(ctx);
-			metadata = undefined;
-			selectedMainAgent = undefined;
+			if (store?.selectedMainAgent) setGlobalSelectedAgent(store.selectedMainAgent);
+			store?.cleanup();
+			store = undefined;
 		}
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!selectedMainAgent) getMetadata(toMetadataContext(ctx));
-		if (!selectedMainAgent) return;
+		if (!store) store = MetadataStore.fromSessionManager(ctx.sessionManager);
+		const selectedAgentName = store.selectedMainAgent;
+		if (!selectedAgentName) return;
 		const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
-		const agent = findAgent(discovery.agents, selectedMainAgent);
-		if (!agent) throw new Error(`Configured main agent "${selectedMainAgent}" was not found.`);
-		mainRuntime.store = toMetadataContext(ctx);
+		const agent = findAgent(discovery.agents, selectedAgentName);
+		if (!agent) throw new Error(`Configured main agent "${selectedAgentName}" was not found.`);
+		mainRuntime.store = store;
 		mainRuntime.rootMaxDepth = agent.depth ?? 0;
 		mainRuntime.canSpawn = agent.canSpawn ?? [];
 		const prompt = renderPromptTemplate({
@@ -837,7 +651,8 @@ export default function (pi: ExtensionAPI) {
 			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
 			if (!name) {
 				const available = formatAgentList(discovery.agents, 30).text;
-				showMessage(ctx, `Current agent: ${selectedMainAgent ?? "(default)"}\n\nAvailable: ${available}`, "info");
+				const current = store?.selectedMainAgent ?? "(default)";
+				showMessage(ctx, `Current agent: ${current}\n\nAvailable: ${available}`, "info");
 				return;
 			}
 			const agent = findAgent(discovery.agents, name);
@@ -846,15 +661,66 @@ export default function (pi: ExtensionAPI) {
 				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
 				return;
 			}
-			const storeCtx = toMetadataContext(ctx);
-			getMetadata(storeCtx);
-			selectedMainAgent = agent.name;
-			mainRuntime.store = storeCtx;
+			const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
+			store = activeStore;
+			activeStore.selectedMainAgent = agent.name;
+			mainRuntime.store = activeStore;
 			mainRuntime.rootMaxDepth = agent.depth ?? 0;
 			mainRuntime.canSpawn = agent.canSpawn ?? [];
-			persistMetadata(storeCtx);
 			await ctx.newSession({ parentSession: ctx.sessionManager.getSessionFile() });
 		},
 	});
 
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility re-exports for existing tests
+// ---------------------------------------------------------------------------
+
+export { randomHexId, pickHumanName, type SubagentRecord, type MetadataFile, type MetadataStoreContext } from "./metadata.js";
+
+/** @deprecated Use MetadataStore instead. */
+export function metadataPath(ctx: {
+	sessionManager: { getSessionDir(): string; getSessionId(): string };
+}): string {
+	return MetadataStore.metadataPath({
+		sessionDir: ctx.sessionManager.getSessionDir(),
+		sessionId: ctx.sessionManager.getSessionId(),
+	});
+}
+
+/** @deprecated Use MetadataStore instead. */
+export function loadMetadata(ctx: {
+	sessionManager: {
+		getSessionDir(): string;
+		getSessionId(): string;
+		getSessionFile(): string | undefined;
+	};
+}): MetadataFile {
+	return MetadataStore.loadStatic({
+		sessionDir: ctx.sessionManager.getSessionDir(),
+		sessionId: ctx.sessionManager.getSessionId(),
+		sessionFile: ctx.sessionManager.getSessionFile(),
+	});
+}
+
+/** @deprecated Use MetadataStore instead. */
+export function saveMetadata(
+	ctx: {
+		sessionManager: {
+			getSessionDir(): string;
+			getSessionId(): string;
+			getSessionFile(): string | undefined;
+		};
+	},
+	metadata: MetadataFile,
+): void {
+	MetadataStore.saveStatic(
+		{
+			sessionDir: ctx.sessionManager.getSessionDir(),
+			sessionId: ctx.sessionManager.getSessionId(),
+			sessionFile: ctx.sessionManager.getSessionFile(),
+		},
+		metadata,
+	);
 }
