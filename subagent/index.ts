@@ -5,25 +5,21 @@
  * creates or resumes a real Pi AgentSession stored in normal session storage.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
 import {
-	AgentSession,
-	createAgentSession,
 	DefaultResourceLoader,
 	type ExtensionAPI,
 	type ExtensionFactory,
 	getAgentDir,
 	getMarkdownTheme,
-	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
 import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
+import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 const REQUIRED_TEMPLATE_VARS = new Set([
@@ -201,31 +197,6 @@ export function renderPromptTemplate(context: RenderContext): string {
 	});
 }
 
-function modelFromConfig(
-	modelRegistry: any,
-	modelName: string | undefined,
-	fallback?: Model<any>,
-	warnings?: string[],
-): Model<any> | undefined {
-	if (!modelName) return undefined;
-	let model: Model<any> | undefined;
-	if (modelName.includes("/")) {
-		const [provider, id] = modelName.split("/", 2);
-		model = modelRegistry.find(provider, id);
-	} else {
-		const all = typeof modelRegistry.getAll === "function" ? modelRegistry.getAll() : [];
-		model = all.find((candidate: Model<any>) => candidate.id === modelName || `${candidate.provider}/${candidate.id}` === modelName);
-	}
-	if (!model) {
-		warnings?.push(`Configured model "${modelName}" was not found; using the current/default model.`);
-		return fallback;
-	}
-	if (typeof modelRegistry.hasConfiguredAuth === "function" && !modelRegistry.hasConfiguredAuth(model)) {
-		warnings?.push(`Configured model "${modelName}" is not available because its provider is not authenticated; using the current/default model.`);
-		return fallback;
-	}
-	return model;
-}
 
 function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
 	return agents.find((agent) => agent.name === name);
@@ -280,8 +251,6 @@ function setGlobalSelectedAgent(name: string | undefined): void {
 }
 
 export default function (pi: ExtensionAPI) {
-	const openSessions = new Map<string, AgentSession>();
-	const recordRunLocks = new Map<string, Promise<void>>();
 	let store: MetadataStore | undefined;
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
@@ -289,23 +258,21 @@ export default function (pi: ExtensionAPI) {
 		rootMaxDepth: Number.POSITIVE_INFINITY,
 	};
 
-	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
-		ctx.ui.notify(content, type);
+	// Create the session manager lazily once the MetadataStore is available.
+	let sessionManager: SubagentSessionManager | undefined;
+
+	const getOrCreateSessionManager = (): SubagentSessionManager => {
+		if (!sessionManager) {
+			sessionManager = new SubagentSessionManager(
+				new PiSessionManagerProvider(),
+				new PiAgentSessionFactory(),
+			);
+		}
+		return sessionManager;
 	};
 
-	const withRecordRunLock = async <T>(id: string, fn: () => Promise<T>): Promise<T> => {
-		const previous = recordRunLocks.get(id) ?? Promise.resolve();
-		let release!: () => void;
-		const current = new Promise<void>((resolve) => { release = resolve; });
-		const tail = previous.catch(() => undefined).then(() => current);
-		recordRunLocks.set(id, tail);
-		await previous.catch(() => undefined);
-		try {
-			return await fn();
-		} finally {
-			release();
-			if (recordRunLocks.get(id) === tail) recordRunLocks.delete(id);
-		}
+	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
+		ctx.ui.notify(content, type);
 	};
 
 	const makeTaskToolFactory = (runtime: RuntimeContext): ExtensionFactory => {
@@ -327,72 +294,6 @@ export default function (pi: ExtensionAPI) {
 				return { systemPrompt: prompt };
 			});
 		};
-	};
-
-	const createSessionForRecord = async (
-		ctx: any,
-		record: SubagentRecord,
-		agent: AgentConfig,
-		runtime: RuntimeContext,
-		warnings: string[],
-		effectiveCwd?: string,
-	): Promise<AgentSession> => {
-		const cwd = effectiveCwd ?? ctx.cwd;
-		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
-		const loader = new DefaultResourceLoader({
-			cwd,
-			agentDir: getAgentDir(),
-			extensionsOverride: filterExtensionsForAgent(agent, selfPath),
-			extensionFactories: [
-				makeAgentRuntimeFactory(agent, {
-					parentAgentId: record.id,
-					depth: record.depth,
-					rootMaxDepth: runtime.rootMaxDepth,
-					canSpawn: agent.canSpawn ?? [],
-					store: activeStore,
-				}),
-			],
-			systemPromptOverride: () => agent.systemPrompt,
-		});
-		await loader.reload();
-
-		const sessionDir = activeStore.ctx.sessionDir;
-		const sessionManager = fs.existsSync(record.sessionFile)
-			? SessionManager.open(record.sessionFile, sessionDir, cwd)
-			: SessionManager.create(cwd, sessionDir);
-		record.sessionFile = sessionManager.getSessionFile() ?? record.sessionFile;
-		activeStore.upsertRecord(record);
-
-		const session = (
-			await createAgentSession({
-				cwd,
-				model: modelFromConfig(ctx.modelRegistry, agent.model, ctx.model, warnings),
-				tools: agent.tools,
-				resourceLoader: loader,
-				sessionManager,
-				thinkingLevel: agent.reasoningEffort as ThinkingLevel | undefined,
-			})
-		).session;
-
-		if (agent.tools) {
-			const active = new Set(session.getActiveToolNames());
-			for (const tool of agent.tools) {
-				if (!active.has(tool)) warnings.push(`Configured tool "${tool}" is not available for ${agent.name}.`);
-			}
-		}
-
-		const unsubscribe = session.subscribe((event: any) => {
-			if (event.type === "agent_end") {
-				record.updatedAt = new Date().toISOString();
-				activeStore.upsertRecord(record);
-			}
-		});
-		const originalDispose = session.dispose.bind(session);
-		session.dispose = () => {
-			unsubscribe();
-			originalDispose();
-		};
-		return session;
 	};
 
 	const runTask = async (
@@ -443,14 +344,40 @@ export default function (pi: ExtensionAPI) {
 			);
 		}
 
+		const sm = getOrCreateSessionManager();
 		const recordId = record.id;
-		return withRecordRunLock(recordId, async () => {
+		return sm.withRecordRunLock(recordId, async () => {
 			record = activeStore.findRecord(recordId) ?? record!;
-			let session = openSessions.get(record.id);
-			if (!session) {
-				session = await createSessionForRecord(ctx, record, agent, runtime, warnings, effectiveCwd);
-				openSessions.set(record.id, session);
-			}
+
+			const session = await sm.getOrCreateSession(
+				record,
+				agent,
+				warnings,
+				{
+					metadataStore: activeStore,
+					cwd: effectiveCwd,
+					fallbackModel: ctx.model,
+					modelResolver: new PiModelResolver(ctx.modelRegistry),
+					createResourceLoader: async (agent) => {
+						const childRuntime: RuntimeContext = {
+							parentAgentId: record.id,
+							depth: record.depth,
+							rootMaxDepth: runtime.rootMaxDepth,
+							canSpawn: agent.canSpawn ?? [],
+							store: activeStore,
+						};
+						const loader = new DefaultResourceLoader({
+							cwd: effectiveCwd,
+							agentDir: getAgentDir(),
+							extensionsOverride: filterExtensionsForAgent(agent, selfPath),
+							extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime)],
+							systemPromptOverride: () => agent.systemPrompt,
+						});
+						await loader.reload();
+						return loader;
+					},
+				},
+			);
 
 			const emit = (text: string) => {
 				onUpdate?.({
@@ -518,8 +445,7 @@ export default function (pi: ExtensionAPI) {
 				activeStore.touchRecord(record.id);
 				// Dispose the in-memory session to prevent unbounded accumulation.
 				// The session file remains on disk; resume reopens from the file.
-				session.dispose();
-				openSessions.delete(record.id);
+				sm.disposeSession(record.id);
 			}
 		});
 	};
@@ -638,8 +564,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		for (const session of openSessions.values()) session.dispose();
-		openSessions.clear();
+		sessionManager?.disposeAll();
+		sessionManager = undefined;
 		if (event.reason === "new") {
 			// Persist selected main agent to globalThis so it survives
 			// extension module reload during newSession.
