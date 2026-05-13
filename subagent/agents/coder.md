@@ -3,7 +3,7 @@ description: Fast coding agent that is used to implement a given plan/issue
 model: deepseek-v4-flash
 reasoning_effort: high
 depth: 0
-canSpawn: scout, planner, reviewer, worker
+canSpawn: explorer, planner, reviewer, coder
 ---
 
 After you finish implementing the change:

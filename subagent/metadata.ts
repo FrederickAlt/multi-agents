@@ -98,10 +98,27 @@ export function pickHumanName(agentName: string, records: SubagentRecord[]): { h
 // ---------------------------------------------------------------------------
 
 export class MetadataStore {
+	private static pathLocks = new Map<string, Promise<void>>();
 	private _metadata: MetadataFile | null = null;
-	private lock: Promise<void> = Promise.resolve();
 
 	constructor(public readonly ctx: MetadataStoreContext) {}
+
+	private async withPathLock<T>(fn: () => T | Promise<T>): Promise<T> {
+		const previous = MetadataStore.pathLocks.get(this.path) ?? Promise.resolve();
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => { release = resolve; });
+		const tail = previous.catch(() => undefined).then(() => current);
+		MetadataStore.pathLocks.set(this.path, tail);
+		await previous.catch(() => undefined);
+		try {
+			return await fn();
+		} finally {
+			release();
+			if (MetadataStore.pathLocks.get(this.path) === tail) {
+				MetadataStore.pathLocks.delete(this.path);
+			}
+		}
+	}
 
 	// ---- Path ----
 
@@ -226,11 +243,7 @@ export class MetadataStore {
 		parentAgentId?: string,
 		depth: number = 1,
 	): Promise<SubagentRecord> {
-		const prevLock = this.lock;
-		let releaseLock: () => void;
-		this.lock = new Promise<void>((resolve) => { releaseLock = resolve; });
-		await prevLock;
-		try {
+		return this.withPathLock(() => {
 			const metadata = this.reload();
 			const id = randomHexId(new Set(metadata.records.map((r) => r.id)));
 			const { humanName, displayName } = pickHumanName(agentName, metadata.records);
@@ -249,9 +262,7 @@ export class MetadataStore {
 			metadata.records.push(record);
 			this.save();
 			return record;
-		} finally {
-			releaseLock!();
-		}
+		});
 	}
 
 	// ---- Record mutation ----

@@ -22,7 +22,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { MetadataStore } from "./metadata.js";
+import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
@@ -281,6 +281,7 @@ function setGlobalSelectedAgent(name: string | undefined): void {
 
 export default function (pi: ExtensionAPI) {
 	const openSessions = new Map<string, AgentSession>();
+	const recordRunLocks = new Map<string, Promise<void>>();
 	let store: MetadataStore | undefined;
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
@@ -290,6 +291,21 @@ export default function (pi: ExtensionAPI) {
 
 	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
 		ctx.ui.notify(content, type);
+	};
+
+	const withRecordRunLock = async <T>(id: string, fn: () => Promise<T>): Promise<T> => {
+		const previous = recordRunLocks.get(id) ?? Promise.resolve();
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => { release = resolve; });
+		const tail = previous.catch(() => undefined).then(() => current);
+		recordRunLocks.set(id, tail);
+		await previous.catch(() => undefined);
+		try {
+			return await fn();
+		} finally {
+			release();
+			if (recordRunLocks.get(id) === tail) recordRunLocks.delete(id);
+		}
 	};
 
 	const makeTaskToolFactory = (runtime: RuntimeContext): ExtensionFactory => {
@@ -333,7 +349,7 @@ export default function (pi: ExtensionAPI) {
 					depth: record.depth,
 					rootMaxDepth: runtime.rootMaxDepth,
 					canSpawn: agent.canSpawn ?? [],
-					store: runtime.store,
+					store: activeStore,
 				}),
 			],
 			systemPromptOverride: () => agent.systemPrompt,
@@ -345,7 +361,7 @@ export default function (pi: ExtensionAPI) {
 			? SessionManager.open(record.sessionFile, sessionDir, cwd)
 			: SessionManager.create(cwd, sessionDir);
 		record.sessionFile = sessionManager.getSessionFile() ?? record.sessionFile;
-		activeStore.save();
+		activeStore.upsertRecord(record);
 
 		const session = (
 			await createAgentSession({
@@ -368,7 +384,7 @@ export default function (pi: ExtensionAPI) {
 		const unsubscribe = session.subscribe((event: any) => {
 			if (event.type === "agent_end") {
 				record.updatedAt = new Date().toISOString();
-				activeStore.save();
+				activeStore.upsertRecord(record);
 			}
 		});
 		const originalDispose = session.dispose.bind(session);
@@ -418,81 +434,85 @@ export default function (pi: ExtensionAPI) {
 			);
 		}
 
-		let session = openSessions.get(record.id);
-		if (!session) {
-			session = await createSessionForRecord(ctx, record, agent, runtime, warnings, effectiveCwd);
-			openSessions.set(record.id, session);
-		}
+		const recordId = record.id;
+		return withRecordRunLock(recordId, async () => {
+			record = activeStore.findRecord(recordId) ?? record!;
+			let session = openSessions.get(record.id);
+			if (!session) {
+				session = await createSessionForRecord(ctx, record, agent, runtime, warnings, effectiveCwd);
+				openSessions.set(record.id, session);
+			}
 
-		const emit = (text: string) => {
-			onUpdate?.({
-				content: [{ type: "text", text }],
-				details: {
-					id: record.id,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					description: params.description,
-					resumed: Boolean(params.resume),
-					sessionFile: record.sessionFile,
-					warnings,
-				},
-			});
-		};
-
-		const abort = () => {
-			void session?.abort();
-		};
-		if (signal?.aborted) abort();
-		else signal?.addEventListener("abort", abort, { once: true });
-
-		try {
-			emit(`${record.displayName} (${record.id}) running...`);
-			await session.prompt(params.prompt);
-			const output = getFinalTextFromMessages(session.messages as any[]);
-			const header = `${record.displayName} (${record.id}) completed. Use resume: "${record.id}" to continue this agent.`;
-			const warningText = warnings.length > 0 ? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}` : "";
-			return {
-				content: [{ type: "text", text: `${header}\n\n${output || "(no output)"}${warningText}` }],
-				details: {
-					id: record.id,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					description: params.description,
-					resumed: Boolean(params.resume),
-					sessionFile: record.sessionFile,
-					warnings,
-					output,
-				},
-			};
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			const warningText = warnings.length > 0 ? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}` : "";
-			return {
-				content: [
-					{
-						type: "text",
-						text: `${record.displayName} (${record.id}) failed. Use resume: "${record.id}" to retry or continue this agent.\n\n${message}${warningText}`,
+			const emit = (text: string) => {
+				onUpdate?.({
+					content: [{ type: "text", text }],
+					details: {
+						id: record.id,
+						displayName: record.displayName,
+						agentType: record.agentType,
+						description: params.description,
+						resumed: Boolean(params.resume),
+						sessionFile: record.sessionFile,
+						warnings,
 					},
-				],
-				details: {
-					id: record.id,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					description: params.description,
-					resumed: Boolean(params.resume),
-					sessionFile: record.sessionFile,
-					warnings,
-					error: message,
-				},
+				});
 			};
-		} finally {
-			signal?.removeEventListener("abort", abort);
-			activeStore.touchRecord(record.id);
-			// Dispose the in-memory session to prevent unbounded accumulation.
-			// The session file remains on disk; resume reopens from the file.
-			session.dispose();
-			openSessions.delete(record.id);
-		}
+
+			const abort = () => {
+				void session?.abort();
+			};
+			if (signal?.aborted) abort();
+			else signal?.addEventListener("abort", abort, { once: true });
+
+			try {
+				emit(`${record.displayName} (${record.id}) running...`);
+				await session.prompt(params.prompt);
+				const output = getFinalTextFromMessages(session.messages as any[]);
+				const header = `${record.displayName} (${record.id}) completed. Use resume: "${record.id}" to continue this agent.`;
+				const warningText = warnings.length > 0 ? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}` : "";
+				return {
+					content: [{ type: "text", text: `${header}\n\n${output || "(no output)"}${warningText}` }],
+					details: {
+						id: record.id,
+						displayName: record.displayName,
+						agentType: record.agentType,
+						description: params.description,
+						resumed: Boolean(params.resume),
+						sessionFile: record.sessionFile,
+						warnings,
+						output,
+					},
+				};
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				const warningText = warnings.length > 0 ? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}` : "";
+				return {
+					content: [
+						{
+							type: "text",
+							text: `${record.displayName} (${record.id}) failed. Use resume: "${record.id}" to retry or continue this agent.\n\n${message}${warningText}`,
+						},
+					],
+					details: {
+						id: record.id,
+						displayName: record.displayName,
+						agentType: record.agentType,
+						description: params.description,
+						resumed: Boolean(params.resume),
+						sessionFile: record.sessionFile,
+						warnings,
+						error: message,
+					},
+				};
+			} finally {
+				signal?.removeEventListener("abort", abort);
+				activeStore.touchRecord(record.id);
+				// Dispose the in-memory session to prevent unbounded accumulation.
+				// The session file remains on disk; resume reopens from the file.
+				session.dispose();
+				openSessions.delete(record.id);
+			}
+		});
 	};
 
 	function registerTaskTool(targetPi: ExtensionAPI, runtime: RuntimeContext): void {

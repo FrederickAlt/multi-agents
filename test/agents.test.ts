@@ -3,15 +3,21 @@
  *
  * Tests pure functions first, then I/O-dependent functions with temp directories.
  */
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	discoverAgents,
 	formatAgentList,
 	type AgentConfig,
 } from "../subagent/agents.js";
+
+const bundledAgentsDir = fileURLToPath(new URL("../subagent/agents/", import.meta.url));
+const bundledAgentNames = () => readdirSync(bundledAgentsDir)
+	.filter((name) => name.endsWith(".md") && !name.startsWith("."))
+	.map((name) => name.slice(0, -".md".length));
 
 // ---------------------------------------------------------------------------
 // Pure functions — no I/O
@@ -123,17 +129,16 @@ describe("discoverAgents", () => {
 	});
 
 	it("with 'both' scope, project agents override bundled agents of the same name", () => {
-		// Create a project agent that overrides a built-in (scout)
-		writeAgent(agentsDir, "scout", "Project-specific scout");
+		const [builtinName, otherBuiltinName] = bundledAgentNames();
+		writeAgent(agentsDir, builtinName, "Project-specific override");
 
 		const result = discoverAgents(tempDir, "both");
-		const scout = result.agents.find((a) => a.name === "scout")!;
-		expect(scout).toBeDefined();
-		expect(scout.description).toBe("Project-specific scout");
-		expect(scout.source).toBe("project");
+		const overridden = result.agents.find((a) => a.name === builtinName)!;
+		expect(overridden).toBeDefined();
+		expect(overridden.description).toBe("Project-specific override");
+		expect(overridden.source).toBe("project");
 		// Other bundled agents should still be present
-		expect(result.agents.map((a) => a.name)).toContain("planner");
-		expect(result.agents.map((a) => a.name)).toContain("reviewer");
+		expect(result.agents.map((a) => a.name)).toContain(otherBuiltinName);
 	});
 
 	it("skips markdown files without required frontmatter", () => {
@@ -171,13 +176,10 @@ describe("discoverAgents", () => {
 		mkdirSync(cleanTemp, { recursive: true });
 		try {
 			const result = discoverAgents(cleanTemp, "project");
-			// Bundled agents are always included
-			expect(result.agents.length).toBeGreaterThanOrEqual(4);
 			const names = result.agents.map((a) => a.name);
-			expect(names).toContain("scout");
-			expect(names).toContain("planner");
-			expect(names).toContain("reviewer");
-			expect(names).toContain("worker");
+			for (const bundledName of bundledAgentNames()) {
+				expect(names).toContain(bundledName);
+			}
 			expect(result.projectAgentsDir).toBeNull();
 		} finally {
 			try { rmSync(cleanTemp, { recursive: true, force: true }); } catch { /* ignore */ }
