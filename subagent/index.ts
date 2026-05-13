@@ -23,7 +23,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
-import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
+import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 const REQUIRED_TEMPLATE_VARS = new Set([
@@ -403,9 +403,18 @@ export default function (pi: ExtensionAPI) {
 		runtime: RuntimeContext,
 	): Promise<AgentToolResult<TaskDetails>> => {
 		const effectiveCwd = params.cwd || ctx.cwd;
-		const discovery = discoverAgents(effectiveCwd, DEFAULT_AGENT_SCOPE);
-		const agents = discovery.agents;
-		const warnings: string[] = [];
+		const registry = new AgentRegistry({ cwd: effectiveCwd, scope: DEFAULT_AGENT_SCOPE });
+		registry.discover();
+		const agents = registry.agents;
+		const warnings: string[] = registry.diagnostics
+			.filter((d) => d.level === "warn")
+			.map((d) => `[AgentRegistry] ${d.filePath}: ${d.reason}`);
+		const errors = registry.diagnostics.filter((d) => d.level === "error");
+		if (errors.length > 0) {
+			warnings.push(
+				`Some agent definitions were skipped due to errors:\n${errors.map((d) => `- ${d.filePath}: ${d.reason}`).join("\n")}`,
+			);
+		}
 		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
 
 		const resolved = resolveTaskAgent(params, activeStore.load(), agents);
