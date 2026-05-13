@@ -7,7 +7,6 @@
 
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
 	DefaultResourceLoader,
 	type ExtensionAPI,
@@ -20,6 +19,7 @@ import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
 import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
+import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext } from "./task-controller.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 const REQUIRED_TEMPLATE_VARS = new Set([
@@ -51,100 +51,12 @@ export interface RenderContext {
 	depth: number;
 }
 
-interface RuntimeContext {
-	parentAgentId?: string;
-	depth: number;
-	rootMaxDepth: number;
-	canSpawn?: string[];
-	store?: MetadataStore;
-}
-
-interface TaskDetails {
-	id?: string;
-	displayName?: string;
-	agentType?: string;
-	description?: string;
-	resumed?: boolean;
-	sessionFile?: string;
-	warnings: string[];
-	error?: string;
-	output?: string;
-}
-
 function today(): string {
 	const now = new Date();
 	const yyyy = now.getFullYear();
 	const mm = String(now.getMonth() + 1).padStart(2, "0");
 	const dd = String(now.getDate()).padStart(2, "0");
 	return `${yyyy}-${mm}-${dd}`;
-}
-
-export function checkSpawnAllowed(
-	runtime: { depth: number; rootMaxDepth: number; canSpawn: string[] | undefined },
-	agentName: string,
-): { allowed: boolean; error?: string; code?: string } {
-	if (runtime.depth >= runtime.rootMaxDepth) {
-		return {
-			allowed: false,
-			error: `Cannot spawn ${agentName}: depth limit ${runtime.rootMaxDepth} has been reached.`,
-			code: "depth_limit",
-		};
-	}
-	if (runtime.canSpawn && !runtime.canSpawn.includes(agentName)) {
-		return {
-			allowed: false,
-			error: `Cannot spawn ${agentName}: parent agent is only allowed to spawn ${runtime.canSpawn.join(", ")}.`,
-			code: "spawn_not_allowed",
-		};
-	}
-	return { allowed: true };
-}
-
-export function resolveTaskAgent(
-	params: { subagent_type: string; resume?: string },
-	store: MetadataFile,
-	agents: AgentConfig[],
-):
-	| { ok: true; record?: SubagentRecord; agent: AgentConfig }
-	| { ok: false; errorText: string; errorCode: string } {
-	let record: SubagentRecord | undefined;
-	let agent = findAgent(agents, params.subagent_type);
-
-	if (params.resume) {
-		record = store.records.find((item) => item.id === params.resume);
-		if (!record) {
-			const known = store.records.map((item) => `${item.id} (${item.displayName})`).join(", ") || "none";
-			return {
-				ok: false,
-				errorText: `Unknown sub-agent ID "${params.resume}". Known agents: ${known}`,
-				errorCode: "unknown_resume_id",
-			};
-		}
-		agent = findAgent(agents, record.agentType);
-	}
-
-	if (!agent) {
-		const available = formatAgentList(agents, 30).text;
-		return {
-			ok: false,
-			errorText: `Unknown sub-agent type "${params.subagent_type}". Available: ${available}`,
-			errorCode: "unknown_agent_type",
-		};
-	}
-
-	return { ok: true, record, agent };
-}
-
-export function getFinalTextFromMessages(messages: any[]): string {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i];
-		if (msg?.role !== "assistant") continue;
-		const content = Array.isArray(msg.content) ? msg.content : [];
-		for (const part of content) {
-			if (part?.type === "text" && typeof part.text === "string") return part.text;
-		}
-	}
-	return "";
 }
 
 function formatTools(parts: PromptParts): string {
@@ -296,158 +208,43 @@ export default function (pi: ExtensionAPI) {
 		};
 	};
 
+	const controller = new TaskController();
+
 	const runTask = async (
 		params: { description: string; prompt: string; subagent_type: string; resume?: string; cwd?: string },
 		signal: AbortSignal | undefined,
-		onUpdate: ((partial: AgentToolResult<TaskDetails>) => void) | undefined,
+		onUpdate: ((partial: TaskResult) => void) | undefined,
 		ctx: any,
 		runtime: RuntimeContext,
-	): Promise<AgentToolResult<TaskDetails>> => {
-		const effectiveCwd = params.cwd || ctx.cwd;
-		const registry = new AgentRegistry({ cwd: effectiveCwd, scope: DEFAULT_AGENT_SCOPE });
-		registry.discover();
-		const agents = registry.agents;
-		const warnings: string[] = registry.diagnostics
-			.filter((d) => d.level === "warn")
-			.map((d) => `[AgentRegistry] ${d.filePath}: ${d.reason}`);
-		const errors = registry.diagnostics.filter((d) => d.level === "error");
-		if (errors.length > 0) {
-			warnings.push(
-				`Some agent definitions were skipped due to errors:\n${errors.map((d) => `- ${d.filePath}: ${d.reason}`).join("\n")}`,
-			);
-		}
+	): Promise<TaskResult> => {
 		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
-
-		const resolved = resolveTaskAgent(params, activeStore.load(), agents);
-		if (!resolved.ok) {
-			return {
-				content: [{ type: "text", text: resolved.errorText }],
-				details: { warnings, error: resolved.errorCode },
-			};
-		}
-		const { agent } = resolved;
-		let record = resolved.record;
-
-		const spawnCheck = checkSpawnAllowed(runtime, agent.name);
-		if (!spawnCheck.allowed) {
-			return {
-				content: [{ type: "text", text: spawnCheck.error! }],
-				details: { warnings, agentType: agent.name, error: spawnCheck.code },
-			};
-		}
-
-		if (!record) {
-			record = await activeStore.allocateRecord(
-				agent.name,
-				runtime.parentAgentId,
-				runtime.depth + 1,
-			);
-		}
-
 		const sm = getOrCreateSessionManager();
-		const recordId = record.id;
-		return sm.withRecordRunLock(recordId, async () => {
-			record = activeStore.findRecord(recordId) ?? record!;
 
-			const session = await sm.getOrCreateSession(
-				record,
-				agent,
-				warnings,
-				{
-					metadataStore: activeStore,
-					cwd: effectiveCwd,
-					fallbackModel: ctx.model,
-					modelResolver: new PiModelResolver(ctx.modelRegistry),
-					createResourceLoader: async (agent) => {
-						const childRuntime: RuntimeContext = {
-							parentAgentId: record.id,
-							depth: record.depth,
-							rootMaxDepth: runtime.rootMaxDepth,
-							canSpawn: agent.canSpawn ?? [],
-							store: activeStore,
-						};
-						const loader = new DefaultResourceLoader({
-							cwd: effectiveCwd,
-							agentDir: getAgentDir(),
-							extensionsOverride: filterExtensionsForAgent(agent, selfPath),
-							extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime)],
-							systemPromptOverride: () => agent.systemPrompt,
-						});
-						await loader.reload();
-						return loader;
-					},
-				},
-			);
-
-			const emit = (text: string) => {
-				onUpdate?.({
-					content: [{ type: "text", text }],
-					details: {
-						id: record.id,
-						displayName: record.displayName,
-						agentType: record.agentType,
-						description: params.description,
-						resumed: Boolean(params.resume),
-						sessionFile: record.sessionFile,
-						warnings,
-					},
+		const executeContext: TaskExecuteContext = {
+			cwd: ctx.cwd,
+			signal,
+			runtime,
+			agentScope: DEFAULT_AGENT_SCOPE,
+			metadataStore: activeStore,
+			sessionManager: sm,
+			modelResolver: new PiModelResolver(ctx.modelRegistry),
+			fallbackModel: ctx.model,
+			createResourceLoaderFactory: async (agent, childRuntime) => {
+				const loader = new DefaultResourceLoader({
+					cwd: params.cwd || ctx.cwd,
+					agentDir: getAgentDir(),
+					extensionsOverride: filterExtensionsForAgent(agent, selfPath),
+					extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime)],
+					systemPromptOverride: () => agent.systemPrompt,
 				});
-			};
+				await loader.reload();
+				return loader;
+			},
+			selfPath,
+			onUpdate,
+		};
 
-			const abort = () => {
-				void session?.abort();
-			};
-			if (signal?.aborted) abort();
-			else signal?.addEventListener("abort", abort, { once: true });
-
-			try {
-				emit(`${record.displayName} (${record.id}) running...`);
-				await session.prompt(params.prompt);
-				const output = getFinalTextFromMessages(session.messages as any[]);
-				const header = `${record.displayName} (${record.id}) completed. Use resume: "${record.id}" to continue this agent.`;
-				const warningText = warnings.length > 0 ? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}` : "";
-				return {
-					content: [{ type: "text", text: `${header}\n\n${output || "(no output)"}${warningText}` }],
-					details: {
-						id: record.id,
-						displayName: record.displayName,
-						agentType: record.agentType,
-						description: params.description,
-						resumed: Boolean(params.resume),
-						sessionFile: record.sessionFile,
-						warnings,
-						output,
-					},
-				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				const warningText = warnings.length > 0 ? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}` : "";
-				return {
-					content: [
-						{
-							type: "text",
-							text: `${record.displayName} (${record.id}) failed. Use resume: "${record.id}" to retry or continue this agent.\n\n${message}${warningText}`,
-						},
-					],
-					details: {
-						id: record.id,
-						displayName: record.displayName,
-						agentType: record.agentType,
-						description: params.description,
-						resumed: Boolean(params.resume),
-						sessionFile: record.sessionFile,
-						warnings,
-						error: message,
-					},
-				};
-			} finally {
-				signal?.removeEventListener("abort", abort);
-				activeStore.touchRecord(record.id);
-				// Dispose the in-memory session to prevent unbounded accumulation.
-				// The session file remains on disk; resume reopens from the file.
-				sm.disposeSession(record.id);
-			}
-		});
+		return controller.execute(params, executeContext);
 	};
 
 	function registerTaskTool(targetPi: ExtensionAPI, runtime: RuntimeContext): void {
@@ -631,6 +428,14 @@ export default function (pi: ExtensionAPI) {
 // ---------------------------------------------------------------------------
 // Compatibility re-exports for existing tests
 // ---------------------------------------------------------------------------
+
+// Re-export utility functions that were moved to TaskController
+export const checkSpawnAllowed = TaskController.checkSpawnAllowed.bind(TaskController);
+export const resolveTaskAgent = TaskController.resolveTaskAgent.bind(TaskController);
+export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages.bind(TaskController);
+
+// Re-export types introduced by task-controller
+export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";
 
 export { randomHexId, pickHumanName, type SubagentRecord, type MetadataFile, type MetadataStoreContext } from "./metadata.js";
 
