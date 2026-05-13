@@ -234,7 +234,7 @@ export class MetadataStore {
 	 * Allocation is serialised via an internal promise-based lock so that
 	 * concurrent callers never race on the same hex ID or human name.
 	 *
-	 * @param agentName  The agent type name (e.g. "scout", "worker").
+	 * @param agentName  The agent type name (e.g. "explorer", "coder").
 	 * @param parentAgentId  Optional ID of the parent agent.
 	 * @param depth  Nesting depth for the new sub-agent (default 1).
 	 */

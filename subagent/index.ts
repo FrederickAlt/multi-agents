@@ -626,6 +626,47 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("dump-prompt", {
+		description: "Print the resolved system prompt for the current or named agent",
+		getArgumentCompletions(prefix) {
+			const discovery = discoverAgents(process.cwd(), DEFAULT_AGENT_SCOPE);
+			return discovery.agents
+				.filter((agent) => agent.name.startsWith(prefix))
+				.map((agent) => ({ value: agent.name, label: agent.name, description: agent.description }));
+		},
+		handler: async (args, ctx) => {
+			const name = args.trim();
+			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
+			const targetAgent = name
+				? findAgent(discovery.agents, name)
+				: (store?.selectedMainAgent
+					? findAgent(discovery.agents, store.selectedMainAgent)
+					: undefined);
+
+			if (!targetAgent) {
+				const available = formatAgentList(discovery.agents, 30).text;
+				const msg = name
+					? `Unknown agent "${name}".\n\nAvailable: ${available}`
+					: `No agent selected. Use /agent <name> first or pass a name.\n\nAvailable: ${available}`;
+				showMessage(ctx, msg, "warning");
+				return;
+			}
+
+			// Build prompt parts with the context available from a command handler.
+			// Session-specific variables (tools, guidelines, skills) are rendered as
+			// "(none)" because they vary per session and are not accessible from commands.
+			const promptParts: PromptParts = {
+				cwd: ctx.cwd,
+			};
+			const prompt = renderPromptTemplate({
+				agent: targetAgent,
+				parts: promptParts,
+				depth: 0,
+			});
+			showMessage(ctx, `# Resolved prompt for ${targetAgent.name}\n\n${prompt}`, "info");
+		},
+	});
+
 }
 
 // ---------------------------------------------------------------------------
