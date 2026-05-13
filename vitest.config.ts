@@ -1,11 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-const aiSrc = fileURLToPath(new URL("../pi-mono/packages/ai/src/index.ts", import.meta.url));
-const aiOauthSrc = fileURLToPath(new URL("../pi-mono/packages/ai/src/oauth.ts", import.meta.url));
-const agentSrc = fileURLToPath(new URL("../pi-mono/packages/agent/src/index.ts", import.meta.url));
-const codingAgentSrc = fileURLToPath(new URL("../pi-mono/packages/coding-agent/src/index.ts", import.meta.url));
-const tuiSrc = fileURLToPath(new URL("../pi-mono/packages/tui/src/index.ts", import.meta.url));
+const aiSrc = fileURLToPath(new URL("../../pi-mono/packages/ai/src/index.ts", import.meta.url));
+const aiOauthSrc = fileURLToPath(new URL("../../pi-mono/packages/ai/src/oauth.ts", import.meta.url));
+const agentSrc = fileURLToPath(new URL("../../pi-mono/packages/agent/src/index.ts", import.meta.url));
+const codingAgentSrc = fileURLToPath(new URL("../../pi-mono/packages/coding-agent/src/index.ts", import.meta.url));
+const tuiSrc = fileURLToPath(new URL("../../pi-mono/packages/tui/src/index.ts", import.meta.url));
 
 export default defineConfig({
 	test: {

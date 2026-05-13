@@ -430,9 +430,9 @@ export default function (pi: ExtensionAPI) {
 // ---------------------------------------------------------------------------
 
 // Re-export utility functions that were moved to TaskController
-export const checkSpawnAllowed = TaskController.checkSpawnAllowed.bind(TaskController);
-export const resolveTaskAgent = TaskController.resolveTaskAgent.bind(TaskController);
-export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages.bind(TaskController);
+export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
+export const resolveTaskAgent = TaskController.resolveTaskAgent;
+export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
 
 // Re-export types introduced by task-controller
 export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";
