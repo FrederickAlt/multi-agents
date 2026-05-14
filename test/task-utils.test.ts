@@ -540,17 +540,16 @@ describe("resolveTaskAgent", () => {
 		const record = makeRecord("abc12345", "deleted-agent", "Deleted Tom");
 		const store = { version: 1 as const, mainSessionId: "main", records: [record] };
 		const result = resolveTaskAgent(
-			{ subagent_type: "Deleted", resume: "abc12345" },
+			{ subagent_type: "Explore", resume: "abc12345" },
 			store,
 			[makeAgent("Explore")], // deleted-agent is not here
 		);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.errorCode).toBe("unknown_agent_type");
-			// The error should help the user understand which agent type is missing.
-			// Currently mentions params.subagent_type; ideally it would mention the
-			// record's agentType. This documents current behavior.
-			expect(result.errorText).toContain("Unknown sub-agent type");
+			// Error should mention the record's actual agentType, not params.subagent_type
+			expect(result.errorText).toContain("deleted-agent");
+			expect(result.errorText).toContain("no longer available");
 		}
 	});
 });

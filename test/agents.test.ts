@@ -371,7 +371,7 @@ describe("AgentRegistry", () => {
 		expect(() => registry.agents).toThrow("has not been initialized");
 
 		registry.discover();
-		expect(registry.agents.length).toBeGreaterThanOrEqual(4);
+		expect(registry.agents.length).toBeGreaterThanOrEqual(bundledAgentNames().length);
 	});
 
 	// -----------------------------------------------------------------------
