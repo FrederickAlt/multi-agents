@@ -33,7 +33,6 @@ Agents are markdown files with YAML frontmatter:
 
 ```markdown
 ---
-name: explorer
 description: Fast codebase exploration
 tools: read, grep, find, ls, bash
 extensions: web

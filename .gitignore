@@ -1,2 +1,17 @@
 pi-mono-docs
 node_modules/
+
+# Local harness/home files that may be mounted into worktrees.
+.bash_profile
+.bashrc
+.claude/
+.env
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc

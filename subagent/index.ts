@@ -237,6 +237,7 @@ function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: 
 // Extension-level closure variables are lost on reload because jiti uses
 // moduleCache: false. globalThis survives because it's process-global.
 const GLOBAL_SELECTED_AGENT_KEY = "__multi_agents_selected_main_agent";
+const GLOBAL_SYSTEM_PROMPT_OPTIONS_KEY = "__multi_agents_last_system_prompt_options";
 
 function getGlobalSelectedAgent(): string | undefined {
 	return (globalThis as any)[GLOBAL_SELECTED_AGENT_KEY];
@@ -248,6 +249,14 @@ function setGlobalSelectedAgent(name: string | undefined): void {
 	} else {
 		(globalThis as any)[GLOBAL_SELECTED_AGENT_KEY] = name;
 	}
+}
+
+function getGlobalSystemPromptOptions(): any | undefined {
+	return (globalThis as any)[GLOBAL_SYSTEM_PROMPT_OPTIONS_KEY];
+}
+
+function setGlobalSystemPromptOptions(options: any): void {
+	(globalThis as any)[GLOBAL_SYSTEM_PROMPT_OPTIONS_KEY] = options;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -576,6 +585,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		// Capture system prompt options for /dump-prompt to use
+		setGlobalSystemPromptOptions(event.systemPromptOptions);
 		if (!store) store = MetadataStore.fromSessionManager(ctx.sessionManager);
 		const selectedAgentName = store.selectedMainAgent;
 		if (!selectedAgentName) return;
@@ -636,28 +647,34 @@ export default function (pi: ExtensionAPI) {
 		},
 		handler: async (args, ctx) => {
 			const name = args.trim();
-			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
-			const targetAgent = name
-				? findAgent(discovery.agents, name)
-				: (store?.selectedMainAgent
-					? findAgent(discovery.agents, store.selectedMainAgent)
-					: undefined);
 
-			if (!targetAgent) {
-				const available = formatAgentList(discovery.agents, 30).text;
-				const msg = name
-					? `Unknown agent "${name}".\n\nAvailable: ${available}`
-					: `No agent selected. Use /agent <name> first or pass a name.\n\nAvailable: ${available}`;
-				showMessage(ctx, msg, "warning");
+			// No argument: dump the current effective system prompt (live, fully resolved)
+			if (!name) {
+				const currentPrompt = ctx.getSystemPrompt();
+				const label = store?.selectedMainAgent
+					? `Current prompt (agent: ${store.selectedMainAgent})`
+					: "Current prompt (default Pi agent)";
+				showMessage(ctx, `# ${label}\n\n${currentPrompt}`, "info");
 				return;
 			}
 
-			// Build prompt parts with the context available from a command handler.
-			// Session-specific variables (tools, guidelines, skills) are rendered as
-			// "(none)" because they vary per session and are not accessible from commands.
-			const promptParts: PromptParts = {
-				cwd: ctx.cwd,
-			};
+			// Named agent: render the agent template with the captured system-prompt options
+			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
+			const targetAgent = findAgent(discovery.agents, name);
+			if (!targetAgent) {
+				const available = formatAgentList(discovery.agents, 30).text;
+				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
+				return;
+			}
+
+			// Use the last systemPromptOptions captured by before_agent_start,
+			// falling back to cwd-only parts if none have been captured yet.
+			const capturedOptions = getGlobalSystemPromptOptions();
+			const promptParts: PromptParts = capturedOptions
+				? buildPromptPartsFromOptions(capturedOptions)
+				: { cwd: ctx.cwd };
+			promptParts.cwd ??= ctx.cwd;
+
 			const prompt = renderPromptTemplate({
 				agent: targetAgent,
 				parts: promptParts,

@@ -1,11 +1,21 @@
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-const aiSrc = fileURLToPath(new URL("../pi-mono/packages/ai/src/index.ts", import.meta.url));
-const aiOauthSrc = fileURLToPath(new URL("../pi-mono/packages/ai/src/oauth.ts", import.meta.url));
-const agentSrc = fileURLToPath(new URL("../pi-mono/packages/agent/src/index.ts", import.meta.url));
-const codingAgentSrc = fileURLToPath(new URL("../pi-mono/packages/coding-agent/src/index.ts", import.meta.url));
-const tuiSrc = fileURLToPath(new URL("../pi-mono/packages/tui/src/index.ts", import.meta.url));
+function piMonoSourcePath(relativePath: string): string {
+	const candidates = [
+		new URL(`../pi-mono/${relativePath}`, import.meta.url),
+		new URL(`../../pi-mono/${relativePath}`, import.meta.url),
+	];
+	const existing = candidates.find((candidate) => existsSync(fileURLToPath(candidate)));
+	return fileURLToPath(existing ?? candidates[0]);
+}
+
+const aiSrc = piMonoSourcePath("packages/ai/src/index.ts");
+const aiOauthSrc = piMonoSourcePath("packages/ai/src/oauth.ts");
+const agentSrc = piMonoSourcePath("packages/agent/src/index.ts");
+const codingAgentSrc = piMonoSourcePath("packages/coding-agent/src/index.ts");
+const tuiSrc = piMonoSourcePath("packages/tui/src/index.ts");
 
 export default defineConfig({
 	test: {
