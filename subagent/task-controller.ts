@@ -2,30 +2,66 @@
  * TaskController — orchestrates a single Task (sub-agent) execution.
  *
  * Responsibilities:
- * - Agent discovery and validation (AgentRegistry)
+ * - Agent discovery and validation (via AgentDiscoveryAdapter)
  * - Spawn permission checks (depth, canSpawn allowlist)
- * - Record allocation via MetadataStore
- * - Session lifecycle via SubagentSessionManager
+ * - Record allocation (via MetadataAdapter)
+ * - Session lifecycle (via SessionAdapter)
  * - Prompt execution and result formatting
  * - Error handling (returns structured error results, never throws)
  *
- * The class is stateless; all runtime dependencies are passed via the
- * TaskExecuteContext parameter to execute().
+ * The class is stateless; all runtime dependencies are injected via
+ * adapter interfaces in TaskExecuteContext.
  */
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DefaultResourceLoader, Model } from "@mariozechner/pi-coding-agent";
-import {
-	AgentRegistry,
-	type AgentConfig,
-	type AgentScope,
-	formatAgentList,
+import type {
+	AgentConfig,
+	AgentDiagnostic,
+	AgentScope,
 } from "./agents.js";
+import { formatAgentList } from "./agents.js";
 import type { MetadataFile, MetadataStore, SubagentRecord } from "./metadata.js";
 import type {
 	ModelResolver,
-	SubagentSessionManager,
+	SessionSetupContext,
 } from "./session-manager.js";
+
+// ---------------------------------------------------------------------------
+// Adapter interfaces (injectable, testable without concrete classes)
+// ---------------------------------------------------------------------------
+
+/** What the controller needs from agent discovery. */
+export interface AgentDiscoveryAdapter {
+	discover(cwd: string, scope: AgentScope): {
+		agents: AgentConfig[];
+		diagnostics: readonly AgentDiagnostic[];
+	};
+}
+
+/** What the controller (and SessionSetupContext) needs from the metadata store. */
+export interface MetadataAdapter {
+	load(): MetadataFile;
+	allocateRecord(agentName: string, parentAgentId?: string, depth?: number): Promise<SubagentRecord>;
+	findRecord(id: string): SubagentRecord | undefined;
+	touchRecord(id: string): void;
+	/** Required by session manager for session directory resolution. */
+	readonly ctx: { sessionDir: string };
+	/** Persist an update to a record (required by session manager). */
+	upsertRecord(record: SubagentRecord): void;
+}
+
+/** What the controller needs from the session manager. */
+export interface SessionAdapter {
+	getOrCreateSession(
+		record: SubagentRecord,
+		agent: AgentConfig,
+		warnings: string[],
+		context: SessionSetupContext,
+	): Promise<any>;
+	withRecordRunLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
+	disposeSession(id: string): void;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,31 +82,28 @@ export interface RuntimeContext {
 	depth: number;
 	rootMaxDepth: number;
 	canSpawn?: string[];
-	store?: MetadataStore;
+	store?: MetadataAdapter;
 }
 
 /**
  * All runtime dependencies injected into TaskController.execute().
  *
- * The `createResourceLoaderFactory` callback is a factory function:
- * `(agent: AgentConfig, childRuntime: RuntimeContext) => Promise<DefaultResourceLoader>`.
- * The TaskController calls it to obtain the resource loader passed to the
- * session manager for each Task execution.
+ * Adapts concrete Pi platform classes through narrow interfaces so
+ * the controller can be tested with fakes.
  */
 export interface TaskExecuteContext {
 	cwd: string;
 	signal?: AbortSignal;
 	runtime: RuntimeContext;
-	agentScope: AgentScope;
-	metadataStore: MetadataStore;
-	sessionManager: SubagentSessionManager;
+	agentDiscovery: AgentDiscoveryAdapter;
+	metadataStore: MetadataAdapter;
+	sessionManager: SessionAdapter;
 	modelResolver: ModelResolver;
 	fallbackModel?: Model;
 	createResourceLoaderFactory: (
 		agent: AgentConfig,
 		childRuntime: RuntimeContext,
 	) => Promise<DefaultResourceLoader>;
-	selfPath: string;
 	/** Optional streaming update callback (used for progress emission). */
 	onUpdate?: (partial: TaskResult) => void;
 }
@@ -143,7 +176,7 @@ export class TaskController {
 		| { ok: true; record?: SubagentRecord; agent: AgentConfig }
 		| { ok: false; errorText: string; errorCode: string } {
 		let record: SubagentRecord | undefined;
-		let agent = findAgent(agents, params.subagent_type);
+		let agent: AgentConfig | undefined;
 
 		if (params.resume) {
 			record = store.records.find((item) => item.id === params.resume);
@@ -159,15 +192,24 @@ export class TaskController {
 				};
 			}
 			agent = findAgent(agents, record.agentType);
-		}
-
-		if (!agent) {
-			const available = formatAgentList(agents, 30).text;
-			return {
-				ok: false,
-				errorText: `Unknown sub-agent type "${params.subagent_type}". Available: ${available}`,
-				errorCode: "unknown_agent_type",
-			};
+			if (!agent) {
+				const available = formatAgentList(agents, 30).text;
+				return {
+					ok: false,
+					errorText: `Sub-agent "${params.resume}" (${record.displayName}) uses agent type "${record.agentType}" which is no longer available. Available: ${available}`,
+					errorCode: "unknown_agent_type",
+				};
+			}
+		} else {
+			agent = findAgent(agents, params.subagent_type);
+			if (!agent) {
+				const available = formatAgentList(agents, 30).text;
+				return {
+					ok: false,
+					errorText: `Unknown sub-agent type "${params.subagent_type}". Available: ${available}`,
+					errorCode: "unknown_agent_type",
+				};
+			}
 		}
 
 		return { ok: true, record, agent };
@@ -194,8 +236,9 @@ export class TaskController {
 	 * Execute a single Task (sub-agent) invocation.
 	 *
 	 * All runtime state is passed via `context`; the controller itself
-	 * is stateless. Errors are returned as structured results — this
-	 * method never throws.
+	 * is stateless. Setup errors (discovery, metadata, resource-loader
+	 * creation, session creation, lock acquisition) are caught and
+	 * returned as structured error results — this method never throws.
 	 */
 	async execute(
 		params: TaskExecuteParams,
@@ -204,40 +247,56 @@ export class TaskController {
 		const effectiveCwd = params.cwd || context.cwd;
 		const {
 			runtime,
-			agentScope,
+			agentDiscovery,
 			metadataStore,
 			sessionManager,
 			modelResolver,
 			fallbackModel,
 			createResourceLoaderFactory,
-			selfPath,
 			onUpdate,
 		} = context;
 
-		// a. Agent discovery
-		const registry = new AgentRegistry({ cwd: effectiveCwd, scope: agentScope });
-		registry.discover();
-		const agents = registry.agents;
+		// a. Agent discovery (via injected adapter)
+		let agents: AgentConfig[];
+		const warnings: string[] = [];
+		try {
+			const discovery = agentDiscovery.discover(effectiveCwd, "both" as AgentScope);
+			agents = discovery.agents;
 
-		// b. Collect warnings from diagnostics
-		const warnings: string[] = registry.diagnostics
-			.filter((d) => d.level === "warn")
-			.map((d) => `[AgentRegistry] ${d.filePath}: ${d.reason}`);
-		const errors = registry.diagnostics.filter((d) => d.level === "error");
-		if (errors.length > 0) {
-			warnings.push(
-				`Some agent definitions were skipped due to errors:\n${errors
-					.map((d) => `- ${d.filePath}: ${d.reason}`)
-					.join("\n")}`,
-			);
+			for (const d of discovery.diagnostics) {
+				if (d.level === "warn") {
+					warnings.push(`[AgentRegistry] ${d.filePath}: ${d.reason}`);
+				}
+			}
+			const errors = discovery.diagnostics.filter((d) => d.level === "error");
+			if (errors.length > 0) {
+				warnings.push(
+					`Some agent definitions were skipped due to errors:\n${errors
+						.map((d) => `- ${d.filePath}: ${d.reason}`)
+						.join("\n")}`,
+				);
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return {
+				content: [{ type: "text", text: `Task failed during agent discovery: ${message}` }],
+				details: { warnings, error: message },
+			};
 		}
 
-		// c. Resolve agent (and possibly record for resume)
-		const resolved = TaskController.resolveTaskAgent(
-			params,
-			metadataStore.load(),
-			agents,
-		);
+		// b. Resolve agent (and possibly record for resume)
+		let metadata: MetadataFile;
+		try {
+			metadata = metadataStore.load();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return {
+				content: [{ type: "text", text: `Task failed while loading metadata: ${message}` }],
+				details: { warnings, error: message },
+			};
+		}
+
+		const resolved = TaskController.resolveTaskAgent(params, metadata, agents);
 		if (!resolved.ok) {
 			return {
 				content: [{ type: "text", text: resolved.errorText }],
@@ -247,7 +306,7 @@ export class TaskController {
 		const { agent } = resolved;
 		let record = resolved.record;
 
-		// d. Check spawn permission
+		// c. Check spawn permission
 		const spawnCheck = TaskController.checkSpawnAllowed(runtime, agent.name);
 		if (!spawnCheck.allowed) {
 			return {
@@ -256,126 +315,186 @@ export class TaskController {
 			};
 		}
 
-		// e. Allocate record if not resuming
+		// d. Allocate record if not resuming
 		if (!record) {
-			record = await metadataStore.allocateRecord(
-				agent.name,
-				runtime.parentAgentId,
-				runtime.depth + 1,
-			);
+			try {
+				record = await metadataStore.allocateRecord(
+					agent.name,
+					runtime.parentAgentId,
+					runtime.depth + 1,
+				);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return {
+					content: [{ type: "text", text: `Task failed during record allocation: ${message}` }],
+					details: { warnings, agentType: agent.name, error: message },
+				};
+			}
 		}
 
 		const recordId = record.id;
 
-		// f. Run serialised within the record lock
-		return sessionManager.withRecordRunLock(recordId, async () => {
-			// Re-read record in case another concurrent path updated it
-			record = metadataStore.findRecord(recordId) ?? record!;
+		// e. Run serialised within the record lock
+		try {
+			return await sessionManager.withRecordRunLock(recordId, async () => {
+				// Re-read record in case another concurrent path updated it
+				record = metadataStore.findRecord(recordId) ?? record!;
 
-			// Build the child runtime for the sub-agent
-			const childRuntime: RuntimeContext = {
-				parentAgentId: record!.id,
-				depth: record!.depth,
-				rootMaxDepth: runtime.rootMaxDepth,
-				canSpawn: agent.canSpawn ?? [],
-				store: metadataStore,
-			};
+				// Build the child runtime for the sub-agent
+				const childRuntime: RuntimeContext = {
+					parentAgentId: record!.id,
+					depth: record!.depth,
+					rootMaxDepth: runtime.rootMaxDepth,
+					canSpawn: agent.canSpawn ?? [],
+					store: metadataStore,
+				};
 
-			// Obtain the resource loader via the injected factory
-			const resourceLoader = await createResourceLoaderFactory(agent, childRuntime);
+				// Obtain the resource loader via the injected factory
+				let resourceLoader: DefaultResourceLoader;
+				try {
+					resourceLoader = await createResourceLoaderFactory(agent, childRuntime);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					return {
+						content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed to initialise resource loader. Use resume: "${record!.id}" to retry.\n\n${message}` }],
+						details: {
+							id: record!.id,
+							displayName: record!.displayName,
+							agentType: record!.agentType,
+							description: params.description,
+							resumed: Boolean(params.resume),
+							sessionFile: record!.sessionFile,
+							warnings,
+							error: message,
+						},
+					};
+				}
 
-			const session = await sessionManager.getOrCreateSession(
-				record!,
-				agent,
-				warnings,
-				{
-					metadataStore,
-					cwd: effectiveCwd,
-					fallbackModel,
-					modelResolver,
-					createResourceLoader: async () => resourceLoader,
+				let session: any;
+				try {
+					session = await sessionManager.getOrCreateSession(
+						record!,
+						agent,
+						warnings,
+						{
+							metadataStore: metadataStore as MetadataStore,
+							cwd: effectiveCwd,
+							fallbackModel,
+							modelResolver,
+							createResourceLoader: async () => resourceLoader,
+						},
+					);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					return {
+						content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed to create session. Use resume: "${record!.id}" to retry.\n\n${message}` }],
+						details: {
+							id: record!.id,
+							displayName: record!.displayName,
+							agentType: record!.agentType,
+							description: params.description,
+							resumed: Boolean(params.resume),
+							sessionFile: record!.sessionFile,
+							warnings,
+							error: message,
+						},
+					};
+				}
+
+				const emit = (text: string) => {
+					onUpdate?.({
+						content: [{ type: "text", text }],
+						details: {
+							id: record!.id,
+							displayName: record!.displayName,
+							agentType: record!.agentType,
+							description: params.description,
+							resumed: Boolean(params.resume),
+							sessionFile: record!.sessionFile,
+							warnings,
+						},
+					});
+				};
+
+				const abort = () => {
+					void session?.abort();
+				};
+				if (context.signal?.aborted) abort();
+				else context.signal?.addEventListener("abort", abort, { once: true });
+
+				try {
+					emit(`${record!.displayName} (${record!.id}) running...`);
+					await session.prompt(params.prompt);
+					const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
+					const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
+					const warningText =
+						warnings.length > 0
+							? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
+							: "";
+					return {
+						content: [
+							{
+								type: "text",
+								text: `${header}\n\n${output || "(no output)"}${warningText}`,
+							},
+						],
+						details: {
+							id: record!.id,
+							displayName: record!.displayName,
+							agentType: record!.agentType,
+							description: params.description,
+							resumed: Boolean(params.resume),
+							sessionFile: record!.sessionFile,
+							warnings,
+							output,
+						},
+					};
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					const warningText =
+						warnings.length > 0
+							? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
+							: "";
+					return {
+						content: [
+							{
+								type: "text",
+								text: `${record!.displayName} (${record!.id}) failed. Use resume: "${record!.id}" to retry or continue this agent.\n\n${message}${warningText}`,
+							},
+						],
+						details: {
+							id: record!.id,
+							displayName: record!.displayName,
+							agentType: record!.agentType,
+							description: params.description,
+							resumed: Boolean(params.resume),
+							sessionFile: record!.sessionFile,
+							warnings,
+							error: message,
+						},
+					};
+				} finally {
+					context.signal?.removeEventListener("abort", abort);
+					try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
+					try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
+				}
+			});
+		} catch (err) {
+			// Catch failures from withRecordRunLock itself (lock acquisition).
+			const message = err instanceof Error ? err.message : String(err);
+			return {
+				content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed during execution: ${message}` }],
+				details: {
+					id: record!.id,
+					displayName: record!.displayName,
+					agentType: record!.agentType,
+					description: params.description,
+					resumed: Boolean(params.resume),
+					sessionFile: record!.sessionFile,
+					warnings,
+					error: message,
 				},
-			);
-
-			const emit = (text: string) => {
-				onUpdate?.({
-					content: [{ type: "text", text }],
-					details: {
-						id: record!.id,
-						displayName: record!.displayName,
-						agentType: record!.agentType,
-						description: params.description,
-						resumed: Boolean(params.resume),
-						sessionFile: record!.sessionFile,
-						warnings,
-					},
-				});
 			};
-
-			const abort = () => {
-				void session?.abort();
-			};
-			if (context.signal?.aborted) abort();
-			else context.signal?.addEventListener("abort", abort, { once: true });
-
-			try {
-				emit(`${record!.displayName} (${record!.id}) running...`);
-				await session.prompt(params.prompt);
-				const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
-				const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
-				const warningText =
-					warnings.length > 0
-						? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
-						: "";
-				return {
-					content: [
-						{
-							type: "text",
-							text: `${header}\n\n${output || "(no output)"}${warningText}`,
-						},
-					],
-					details: {
-						id: record!.id,
-						displayName: record!.displayName,
-						agentType: record!.agentType,
-						description: params.description,
-						resumed: Boolean(params.resume),
-						sessionFile: record!.sessionFile,
-						warnings,
-						output,
-					},
-				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				const warningText =
-					warnings.length > 0
-						? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
-						: "";
-				return {
-					content: [
-						{
-							type: "text",
-							text: `${record!.displayName} (${record!.id}) failed. Use resume: "${record!.id}" to retry or continue this agent.\n\n${message}${warningText}`,
-						},
-					],
-					details: {
-						id: record!.id,
-						displayName: record!.displayName,
-						agentType: record!.agentType,
-						description: params.description,
-						resumed: Boolean(params.resume),
-						sessionFile: record!.sessionFile,
-						warnings,
-						error: message,
-					},
-				};
-			} finally {
-				context.signal?.removeEventListener("abort", abort);
-				metadataStore.touchRecord(record!.id);
-				// Dispose the in-memory session to prevent unbounded accumulation.
-				// The session file remains on disk; resume reopens from the file.
-				sessionManager.disposeSession(record!.id);
-			}
-		});
+		}
 	}
 }

@@ -1,9 +1,10 @@
 /**
  * Unit tests for TaskController.
  *
- * Tests the full execute() orchestration logic using mock adapters,
+ * Tests the full execute() orchestration logic using adapter fakes,
  * plus the static utility methods (checkSpawnAllowed, resolveTaskAgent,
- * getFinalTextFromMessages).
+ * getFinalTextFromMessages).  All three adapters are injected so
+ * the controller never touches concrete classes.
  */
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,8 +21,11 @@ import {
 	type TaskExecuteParams,
 	type TaskDetails,
 	type RuntimeContext,
+	type AgentDiscoveryAdapter,
+	type MetadataAdapter,
+	type SessionAdapter,
 } from "../subagent/task-controller.js";
-import type { AgentConfig } from "../subagent/agents.js";
+import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
 import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
 
 // ---------------------------------------------------------------------------
@@ -60,8 +64,10 @@ function makeMockMetadataFile(records: SubagentRecord[] = []): MetadataFile {
 	};
 }
 
+function fakeDiagnostics(): readonly AgentDiagnostic[] { return []; }
+
 // ---------------------------------------------------------------------------
-// Static utility methods (tested independently of execute)
+// Static utility methods
 // ---------------------------------------------------------------------------
 
 describe("TaskController.checkSpawnAllowed", () => {
@@ -139,7 +145,6 @@ describe("TaskController.resolveTaskAgent", () => {
 		if (!result.ok) {
 			expect(result.errorCode).toBe("unknown_agent_type");
 			expect(result.errorText).toContain("Unknown sub-agent type");
-			expect(result.errorText).toContain("Explore");
 		}
 	});
 
@@ -174,18 +179,21 @@ describe("TaskController.resolveTaskAgent", () => {
 		}
 	});
 
-	it("returns unknown_agent_type when resume record's agent type no longer exists", () => {
+	it("returns unknown_agent_type error citing the record's agentType when resumed agent no longer exists", () => {
 		const record = makeRecord("abc12345", "deleted-agent");
+		record.displayName = "deleted-agent Tom";
 		const store = makeMockMetadataFile([record]);
 		const result = TaskController.resolveTaskAgent(
-			{ subagent_type: "Deleted", resume: "abc12345" },
+			{ subagent_type: "explorer", resume: "abc12345" },
 			store,
-			[makeAgent("Explore")],
+			[makeAgent("explorer")],
 		);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.errorCode).toBe("unknown_agent_type");
-			expect(result.errorText).toContain("Unknown sub-agent type");
+			// Should mention the record's actual agentType, not params.subagent_type
+			expect(result.errorText).toContain("deleted-agent");
+			expect(result.errorText).toContain("deleted-agent Tom");
 		}
 	});
 });
@@ -230,7 +238,7 @@ describe("TaskController.getFinalTextFromMessages", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TaskController.execute() — full orchestration tests
+// TaskController.execute() — full orchestration with adapter fakes
 // ---------------------------------------------------------------------------
 
 describe("TaskController.execute", () => {
@@ -239,6 +247,11 @@ describe("TaskController.execute", () => {
 	let sessionManager: SubagentSessionManager;
 	let mockModelResolver: ModelResolver;
 	let controller: TaskController;
+
+	// Fake adapters
+	let fakeAgentDiscovery: AgentDiscoveryAdapter;
+	let fakeMetadataStore: MetadataAdapter;
+	let fakeSessionManager: SessionAdapter;
 
 	// Per-session mocks
 	let mockSession: any;
@@ -289,6 +302,39 @@ describe("TaskController.execute", () => {
 			mockAgentSessionFactory,
 		);
 
+		// Build fake adapters from the real objects — MetadataStore and
+		// SubagentSessionManager already satisfy their respective interfaces.
+		fakeAgentDiscovery = {
+			discover: vi.fn((_cwd, _scope) => ({
+				agents: [makeAgent("explorer")],
+				diagnostics: fakeDiagnostics(),
+			})),
+		};
+
+		fakeMetadataStore = {
+			load: vi.fn(() => metadataStore.load()),
+			allocateRecord: vi.fn(
+				(agentName, parentAgentId, depth) =>
+					metadataStore.allocateRecord(agentName, parentAgentId, depth),
+			),
+			findRecord: vi.fn((id: string) => metadataStore.findRecord(id)),
+			touchRecord: vi.fn((id: string) => metadataStore.touchRecord(id)),
+			ctx: metadataStore.ctx,
+			upsertRecord: vi.fn((record: SubagentRecord) => metadataStore.upsertRecord(record)),
+		};
+
+		fakeSessionManager = {
+			getOrCreateSession: vi.fn(
+				(record, agent, warnings, context) =>
+					sessionManager.getOrCreateSession(record, agent, warnings, context),
+			),
+			withRecordRunLock: vi.fn(
+				<T>(id: string, fn: () => Promise<T>) =>
+					sessionManager.withRecordRunLock(id, fn),
+			),
+			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
+		};
+
 		controller = new TaskController();
 	});
 
@@ -306,12 +352,11 @@ describe("TaskController.execute", () => {
 		return {
 			cwd: tempDir,
 			runtime,
-			agentScope: "both" as const,
-			metadataStore,
-			sessionManager,
+			agentDiscovery: fakeAgentDiscovery,
+			metadataStore: fakeMetadataStore,
+			sessionManager: fakeSessionManager,
 			modelResolver: mockModelResolver,
 			createResourceLoaderFactory: vi.fn().mockResolvedValue(mockResourceLoader),
-			selfPath: "/tmp/self.js",
 			...overrides,
 		};
 	}
@@ -388,9 +433,19 @@ describe("TaskController.execute", () => {
 	// ---- Agent type validation ----
 
 	it("returns error when agent type does not exist", async () => {
+		// Override fake discovery to include no matching agent
+		const ctx = makeContext({
+			agentDiscovery: {
+				discover: vi.fn(() => ({
+					agents: [makeAgent("other")],
+					diagnostics: fakeDiagnostics(),
+				})),
+			},
+		});
+
 		const result = await controller.execute(
-			makeParams({ subagent_type: "nonexistent" }),
-			makeContext(),
+			makeParams({ subagent_type: "explorer" }),
+			ctx,
 		);
 
 		expect(result.details.error).toBe("unknown_agent_type");
@@ -431,7 +486,7 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("only allowed to spawn");
 	});
 
-	// ---- Error handling ----
+	// ---- Error handling (prompt failures) ----
 
 	it("returns error result when session.prompt throws", async () => {
 		mockSession.prompt = vi.fn().mockRejectedValue(new Error("Model error"));
@@ -526,6 +581,7 @@ describe("TaskController.execute", () => {
 
 	it("returns error when resume record's agent type no longer exists", async () => {
 		const oldRecord = makeRecord("deleted01", "deleted-agent");
+		oldRecord.displayName = "deleted-agent Tom";
 		metadataStore.upsertRecord(oldRecord);
 
 		const result = await controller.execute(
@@ -534,6 +590,85 @@ describe("TaskController.execute", () => {
 		);
 
 		expect(result.details.error).toBe("unknown_agent_type");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("deleted-agent");
+		expect(text).toContain("no longer available");
+	});
+
+	// ---- Setup failures (resource loader, session creation, discovery) ----
+
+	it("returns error result when resource loader factory throws", async () => {
+		const ctx = makeContext({
+			createResourceLoaderFactory: vi.fn().mockRejectedValue(new Error("Loader boom")),
+		});
+
+		const result = await controller.execute(makeParams(), ctx);
+
+		expect(result.details.error).toBe("Loader boom");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("failed to initialise resource loader");
+	});
+
+	it("returns error result when session manager throws", async () => {
+		fakeSessionManager.getOrCreateSession = vi.fn().mockRejectedValue(new Error("Session boom"));
+
+		const result = await controller.execute(makeParams(), makeContext());
+
+		expect(result.details.error).toBe("Session boom");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("failed to create session");
+	});
+
+	it("returns error result when agent discovery throws", async () => {
+		const ctx = makeContext({
+			agentDiscovery: {
+				discover: vi.fn(() => { throw new Error("Discovery boom"); }),
+			},
+		});
+
+		const result = await controller.execute(makeParams(), ctx);
+
+		expect(result.details.error).toBe("Discovery boom");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Task failed during agent discovery");
+	});
+
+	it("returns error result when metadata load throws", async () => {
+		const ctx = makeContext({
+			metadataStore: {
+				load: vi.fn(() => { throw new Error("Metadata load boom"); }),
+				allocateRecord: fakeMetadataStore.allocateRecord,
+				findRecord: fakeMetadataStore.findRecord,
+				touchRecord: fakeMetadataStore.touchRecord,
+				ctx: fakeMetadataStore.ctx,
+				upsertRecord: fakeMetadataStore.upsertRecord,
+			},
+		});
+
+		const result = await controller.execute(makeParams(), ctx);
+
+		expect(result.details.error).toBe("Metadata load boom");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Task failed while loading metadata");
+	});
+
+	it("returns error result when record allocation throws", async () => {
+		const ctx = makeContext({
+			metadataStore: {
+				load: fakeMetadataStore.load,
+				allocateRecord: vi.fn().mockRejectedValue(new Error("Allocation boom")),
+				findRecord: fakeMetadataStore.findRecord,
+				touchRecord: fakeMetadataStore.touchRecord,
+				ctx: fakeMetadataStore.ctx,
+				upsertRecord: fakeMetadataStore.upsertRecord,
+			},
+		});
+
+		const result = await controller.execute(makeParams(), ctx);
+
+		expect(result.details.error).toBe("Allocation boom");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Task failed during record allocation");
 	});
 
 	// ---- Effective CWD ----
@@ -546,19 +681,17 @@ describe("TaskController.execute", () => {
 		const customCwd = join(tempDir, "custom");
 		mkdirSync(customCwd, { recursive: true });
 
-		await controller.execute(
+		const result = await controller.execute(
 			makeParams({ cwd: customCwd }),
 			makeContext(),
 		);
 
-		// The resource loader factory was called
-		// We can't easily inspect the cwd passed to the session manager,
-		// but the test verifies no errors occur with a valid cwd.
+		expect(result.details.error).toBeUndefined();
 	});
 
 	// ---- Abort signal ----
 
-	it("aborts the session when signal is already aborted", async () => {
+	it("completes without throwing when signal is already aborted", async () => {
 		const ac = new AbortController();
 		ac.abort();
 

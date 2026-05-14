@@ -19,7 +19,7 @@ import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
 import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
-import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext } from "./task-controller.js";
+import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 const REQUIRED_TEMPLATE_VARS = new Set([
@@ -220,11 +220,25 @@ export default function (pi: ExtensionAPI) {
 		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
 		const sm = getOrCreateSessionManager();
 
+		// Build adapter objects from concrete classes.
+		// MetadataStore / SubagentSessionManager already satisfy their
+		// respective adapter interfaces.
+		const agentDiscoveryAdapter: AgentDiscoveryAdapter = {
+			discover(cwd: string, scope: AgentScope) {
+				const registry = new AgentRegistry({ cwd, scope });
+				registry.discover();
+				return {
+					agents: registry.agents,
+					diagnostics: registry.diagnostics,
+				};
+			},
+		};
+
 		const executeContext: TaskExecuteContext = {
 			cwd: ctx.cwd,
 			signal,
 			runtime,
-			agentScope: DEFAULT_AGENT_SCOPE,
+			agentDiscovery: agentDiscoveryAdapter,
 			metadataStore: activeStore,
 			sessionManager: sm,
 			modelResolver: new PiModelResolver(ctx.modelRegistry),
@@ -240,7 +254,6 @@ export default function (pi: ExtensionAPI) {
 				await loader.reload();
 				return loader;
 			},
-			selfPath,
 			onUpdate,
 		};
 

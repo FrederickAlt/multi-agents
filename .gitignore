@@ -1,2 +1,17 @@
 pi-mono-docs
 node_modules/
+
+# Sandbox-injected dotfiles (not part of the project)
+.bash_profile
+.bashrc
+.claude/
+.env
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc
