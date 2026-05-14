@@ -43,6 +43,7 @@ export interface AgentSessionFactory {
 		resourceLoader: DefaultResourceLoader;
 		sessionManager: SessionManager;
 		thinkingLevel: ThinkingLevel | undefined;
+		modelRegistry?: any;
 	}): Promise<AgentSession>;
 }
 
@@ -78,6 +79,7 @@ export class PiAgentSessionFactory implements AgentSessionFactory {
 		resourceLoader: DefaultResourceLoader;
 		sessionManager: SessionManager;
 		thinkingLevel: ThinkingLevel | undefined;
+		modelRegistry?: any;
 	}): Promise<AgentSession> {
 		const { session } = await createAgentSession({
 			cwd: config.cwd,
@@ -86,6 +88,9 @@ export class PiAgentSessionFactory implements AgentSessionFactory {
 			resourceLoader: config.resourceLoader,
 			sessionManager: config.sessionManager,
 			thinkingLevel: config.thinkingLevel,
+			// Share parent's modelRegistry so the child inherits the same
+			// auth state, runtime overrides, and dynamically-registered providers.
+			modelRegistry: config.modelRegistry,
 		});
 		return session;
 	}
@@ -101,26 +106,65 @@ export class PiModelResolver implements ModelResolver {
 	): Model | undefined {
 		if (!modelName) return undefined;
 		let model: Model | undefined;
+
 		if (modelName.includes("/")) {
+			// Provider-prefixed name: look up exact provider+id
 			const [provider, id] = modelName.split("/", 2);
 			model = this.modelRegistry.find(provider, id);
-		} else {
-			const all =
-				typeof this.modelRegistry.getAll === "function"
-					? this.modelRegistry.getAll()
-					: [];
-			model = all.find(
+			if (!model) {
+				warnings.push(
+					`Configured model "${modelName}" was not found; using the current/default model.`,
+				);
+				return fallback;
+			}
+			if (
+				typeof this.modelRegistry.hasConfiguredAuth === "function" &&
+				!this.modelRegistry.hasConfiguredAuth(model)
+			) {
+				warnings.push(
+					`Configured model "${modelName}" is not available because its provider is not authenticated; using the current/default model.`,
+				);
+				return fallback;
+			}
+			return model;
+		}
+
+		// Bare model id: prefer authenticated providers, then fall back.
+		// getAvailable() returns only models whose provider has auth configured;
+		// getAll() returns all models regardless of auth status.
+		// We search getAvailable() first because a bare id may exist under
+		// multiple providers (e.g. "deepseek-v4-flash" under both "deepseek"
+		// and "opencode-go") and we want the one the user can actually use.
+		const available =
+			typeof this.modelRegistry.getAvailable === "function"
+				? this.modelRegistry.getAvailable()
+				: [];
+		const all: Model[] =
+			typeof this.modelRegistry.getAll === "function"
+				? this.modelRegistry.getAll()
+				: [];
+
+		const matchIn = (source: Model[]): Model | undefined =>
+			source.find(
 				(candidate: Model) =>
 					candidate.id === modelName ||
 					`${candidate.provider}/${candidate.id}` === modelName,
 			);
+
+		model = matchIn(available);
+		if (!model) {
+			model = matchIn(all);
 		}
+
 		if (!model) {
 			warnings.push(
 				`Configured model "${modelName}" was not found; using the current/default model.`,
 			);
 			return fallback;
 		}
+
+		// If we found the model in getAvailable() it's already authenticated.
+		// If we fell back to getAll(), verify auth explicitly.
 		if (
 			typeof this.modelRegistry.hasConfiguredAuth === "function" &&
 			!this.modelRegistry.hasConfiguredAuth(model)
@@ -130,6 +174,7 @@ export class PiModelResolver implements ModelResolver {
 			);
 			return fallback;
 		}
+
 		return model;
 	}
 }
@@ -149,6 +194,8 @@ export interface SessionSetupContext {
 	cwd: string;
 	fallbackModel?: Model;
 	modelResolver: ModelResolver;
+	/** The parent's ModelRegistry, so the child shares auth state and providers. */
+	modelRegistry?: any;
 	/**
 	 * Create and reload a ResourceLoader configured for the given agent.
 	 * The implementation captures any parent-runtime state needed.
@@ -216,7 +263,7 @@ export class SubagentSessionManager {
 		const existing = this.openSessions.get(record.id);
 		if (existing) return existing;
 
-		const { metadataStore, cwd, fallbackModel, modelResolver } = context;
+		const { metadataStore, cwd, fallbackModel, modelResolver, modelRegistry } = context;
 
 		// 1. Create resource loader
 		const resourceLoader = await context.createResourceLoader(agent);
@@ -236,7 +283,7 @@ export class SubagentSessionManager {
 		// 4. Resolve model
 		const model = modelResolver.resolve(agent.model, fallbackModel, warnings);
 
-		// 5. Create agent session
+		// 5. Create agent session (pass parent's modelRegistry for shared auth)
 		const session = await this.agentSessionFactory.create({
 			cwd,
 			model,
@@ -244,6 +291,7 @@ export class SubagentSessionManager {
 			resourceLoader,
 			sessionManager: piSessionManager,
 			thinkingLevel: agent.reasoningEffort as ThinkingLevel | undefined,
+			modelRegistry,
 		});
 
 		// 6. Check tool availability

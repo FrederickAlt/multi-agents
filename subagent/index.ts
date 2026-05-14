@@ -358,6 +358,7 @@ export default function (pi: ExtensionAPI) {
 					cwd: effectiveCwd,
 					fallbackModel: ctx.model,
 					modelResolver: new PiModelResolver(ctx.modelRegistry),
+					modelRegistry: ctx.modelRegistry,
 					createResourceLoader: async (agent) => {
 						const childRuntime: RuntimeContext = {
 							parentAgentId: record.id,
