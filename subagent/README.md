@@ -18,7 +18,7 @@ Pi extension for delegating work to persistent configured sub-agents.
 {
   "description": "short task label",
   "prompt": "full autonomous task description",
-  "subagent_type": "Explore",
+  "subagent_type": "explorer",
   "resume": "fad96168"
 }
 ```
@@ -33,13 +33,12 @@ Agents are markdown files with YAML frontmatter:
 
 ```markdown
 ---
-name: Explore
 description: Fast codebase exploration
 tools: read, grep, find, ls, bash
 extensions: web
 model: claude-haiku-4-5
 depth: 0
-canSpawn: Planner, Reviewer
+canSpawn: planner, reviewer
 ---
 
 You are an exploration agent.
@@ -74,9 +73,9 @@ Unknown variables are errors.
 ## Commands
 
 ```text
-/agent scout
+/agent explorer
 /dump-prompt
-/dump-prompt scout
+/dump-prompt explorer
 ```
 
 `/agent` selects the main user-facing persona. `/dump-prompt` prints either the current main prompt or a configured agent prompt with variables resolved.
@@ -85,10 +84,10 @@ Unknown variables are errors.
 
 | Agent | Purpose | Tools |
 | --- | --- | --- |
-| `worker` | General-purpose subagent with full capabilities, isolated context | Pi defaults |
-| `scout` | Fast codebase recon for handoff to other agents | `read`, `grep`, `find`, `ls`, `bash` |
-| `planner` | Implementation planning | `read`, `grep`, `find`, `ls` |
+| `explorer` | Fast codebase recon for handoff to other agents | Pi defaults (all tools) |
+| `planner` | Implementation planning | Pi defaults (all tools) |
 | `reviewer` | Code review | `read`, `grep`, `find`, `ls`, `bash` |
+| `coder` | Fast coding agent for implementing plans | Pi defaults (all tools) |
 
 ## Persistence
 
