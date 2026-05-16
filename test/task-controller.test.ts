@@ -25,6 +25,7 @@ import {
 	type MetadataAdapter,
 	type SessionAdapter,
 } from "../subagent/task-controller.js";
+import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "../subagent/depth-policy.js";
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
 import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
 
@@ -78,7 +79,7 @@ describe("TaskController.checkSpawnAllowed", () => {
 		);
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("depth_limit");
-		expect(result.error).toContain("depth limit 2 has been reached");
+		expect(result.error).toContain("root depth limit 2");
 	});
 
 	it("allows spawn when below depth limit", () => {
@@ -96,7 +97,7 @@ describe("TaskController.checkSpawnAllowed", () => {
 		);
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("spawn_not_allowed");
-		expect(result.error).toContain("only allowed to spawn Planner, Reviewer");
+		expect(result.error).toContain("only allowed to task Planner, Reviewer");
 	});
 
 	it("allows spawn when canSpawn is undefined (no restriction)", () => {
@@ -114,7 +115,7 @@ describe("TaskController.checkSpawnAllowed", () => {
 		);
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("depth_limit");
-		expect(result.error).toContain("depth limit 0 has been reached");
+		expect(result.error).toContain("root depth limit 0");
 	});
 });
 
@@ -346,8 +347,8 @@ describe("TaskController.execute", () => {
 
 	function makeContext(overrides: Partial<TaskExecuteContext> = {}): TaskExecuteContext {
 		const runtime: RuntimeContext = {
-			depth: 0,
-			rootMaxDepth: Number.POSITIVE_INFINITY,
+			treeDepth: 0,
+			depthPolicy: defaultRootPolicy(),
 		};
 		return {
 			cwd: tempDir,
@@ -457,8 +458,13 @@ describe("TaskController.execute", () => {
 
 	it("returns error when depth limit would be exceeded", async () => {
 		const runtime: RuntimeContext = {
-			depth: 2,
-			rootMaxDepth: 2,
+			treeDepth: 2,
+			depthPolicy: {
+				treeDepth: 2,
+				rootDepthLimit: 2,
+				localDepthLimit: 1,
+				canSpawn: undefined,
+			},
 		};
 		const result = await controller.execute(
 			makeParams(),
@@ -467,14 +473,18 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("depth_limit");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("depth limit 2 has been reached");
+		expect(text).toContain("root depth limit 2");
 	});
 
 	it("returns error when agent not in canSpawn allowlist", async () => {
 		const runtime: RuntimeContext = {
-			depth: 0,
-			rootMaxDepth: 5,
-			canSpawn: ["planner", "reviewer"],
+			treeDepth: 0,
+			depthPolicy: {
+				treeDepth: 0,
+				rootDepthLimit: 5,
+				localDepthLimit: 5,
+				canSpawn: ["planner", "reviewer"],
+			},
 		};
 		const result = await controller.execute(
 			makeParams({ subagent_type: "explorer" }),
@@ -483,7 +493,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("spawn_not_allowed");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("only allowed to spawn");
+		expect(text).toContain("only allowed to task");
 	});
 
 	// ---- Error handling (prompt failures) ----

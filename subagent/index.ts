@@ -20,6 +20,7 @@ import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadat
 import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
+import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 const REQUIRED_TEMPLATE_VARS = new Set([
@@ -175,8 +176,8 @@ export default function (pi: ExtensionAPI) {
 	let store: MetadataStore | undefined;
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
-		depth: 0,
-		rootMaxDepth: Number.POSITIVE_INFINITY,
+		treeDepth: 0,
+		depthPolicy: defaultRootPolicy(),
 	};
 
 	// Create the session manager lazily once the MetadataStore is available.
@@ -210,7 +211,7 @@ export default function (pi: ExtensionAPI) {
 					agent,
 					parts: buildPromptPartsFromOptions(event.systemPromptOptions),
 					parentAgentId: runtime.parentAgentId,
-					depth: runtime.depth,
+					depth: runtime.treeDepth,
 				});
 				return { systemPrompt: prompt };
 			});
@@ -277,11 +278,9 @@ export default function (pi: ExtensionAPI) {
 		);
 
 		// Filter to only what THIS agent is allowed to spawn.
-		// If canSpawn is undefined (root agent with no persona selected),
-		// all agents are allowed.
-		const allowed = runtime.canSpawn && runtime.canSpawn.length > 0
-			? discovery.agents.filter(a => runtime.canSpawn!.includes(a.name))
-			: discovery.agents;
+		// DepthPolicy is the single source of truth.
+		const policy = runtime.depthPolicy;
+		const allowed = discovery.agents.filter(a => checkTaskAllowed(policy, a.name).allowed);
 
 		const agentNames = allowed.map(a => a.name);
 		const descriptionText = allowed
@@ -379,8 +378,8 @@ export default function (pi: ExtensionAPI) {
 		}
 		const selectedAgentName = activeStore.selectedMainAgent;
 		const selected = selectedAgentName ? findAgent(discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE).agents, selectedAgentName) : undefined;
-		mainRuntime.rootMaxDepth = selected ? (selected.depth ?? 0) : Number.POSITIVE_INFINITY;
-		mainRuntime.canSpawn = selected ? (selected.canSpawn ?? []) : undefined;
+		mainRuntime.treeDepth = 0;
+		mainRuntime.depthPolicy = selected ? selectedRootPolicy(selected) : defaultRootPolicy();
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
@@ -405,8 +404,8 @@ export default function (pi: ExtensionAPI) {
 		const agent = findAgent(discovery.agents, selectedAgentName);
 		if (!agent) throw new Error(`Configured main agent "${selectedAgentName}" was not found.`);
 		mainRuntime.store = store;
-		mainRuntime.rootMaxDepth = agent.depth ?? 0;
-		mainRuntime.canSpawn = agent.canSpawn ?? [];
+		mainRuntime.treeDepth = 0;
+		mainRuntime.depthPolicy = selectedRootPolicy(agent);
 		const prompt = renderPromptTemplate({
 			agent,
 			parts: buildPromptPartsFromOptions(event.systemPromptOptions),
@@ -442,8 +441,8 @@ export default function (pi: ExtensionAPI) {
 			store = activeStore;
 			activeStore.selectedMainAgent = agent.name;
 			mainRuntime.store = activeStore;
-			mainRuntime.rootMaxDepth = agent.depth ?? 0;
-			mainRuntime.canSpawn = agent.canSpawn ?? [];
+			mainRuntime.treeDepth = 0;
+			mainRuntime.depthPolicy = selectedRootPolicy(agent);
 			await ctx.newSession({ parentSession: ctx.sessionManager.getSessionFile() });
 		},
 	});

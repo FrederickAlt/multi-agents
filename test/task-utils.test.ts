@@ -425,7 +425,7 @@ describe("checkSpawnAllowed", () => {
 		const result = checkSpawnAllowed({ depth: 2, rootMaxDepth: 2, canSpawn: undefined }, "Explore");
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("depth_limit");
-		expect(result.error).toContain("depth limit 2 has been reached");
+		expect(result.error).toContain("root depth limit 2");
 	});
 
 	it("allows spawn when below depth limit", () => {
@@ -439,7 +439,7 @@ describe("checkSpawnAllowed", () => {
 		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, canSpawn: ["Planner", "Reviewer"] }, "Explore");
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("spawn_not_allowed");
-		expect(result.error).toContain("only allowed to spawn Planner, Reviewer");
+		expect(result.error).toContain("only allowed to task Planner, Reviewer");
 	});
 
 	it("allows spawn when agent type is in canSpawn allowlist", () => {
@@ -456,7 +456,7 @@ describe("checkSpawnAllowed", () => {
 		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 0, canSpawn: undefined }, "Explore");
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("depth_limit");
-		expect(result.error).toContain("depth limit 0 has been reached");
+		expect(result.error).toContain("root depth limit 0");
 	});
 
 	it("allows spawn at depth 0 when rootMaxDepth is 1", () => {

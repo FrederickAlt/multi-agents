@@ -21,6 +21,11 @@ import type {
 	AgentScope,
 } from "./agents.js";
 import { formatAgentList } from "./agents.js";
+import {
+	type DepthPolicyState,
+	checkTaskAllowed,
+	childPolicy,
+} from "./depth-policy.js";
 import type { MetadataFile, MetadataStore, SubagentRecord } from "./metadata.js";
 import type {
 	ModelResolver,
@@ -79,9 +84,10 @@ export interface TaskExecuteParams {
 /** Typed subset of the parent runtime state needed by the TaskController. */
 export interface RuntimeContext {
 	parentAgentId?: string;
-	depth: number;
-	rootMaxDepth: number;
-	canSpawn?: string[];
+	/** Current position in the agent tree (Root = 0, child = 1, …). */
+	treeDepth: number;
+	/** Spawn-policy state for the current agent. */
+	depthPolicy: DepthPolicyState;
 	store?: MetadataAdapter;
 }
 
@@ -141,28 +147,24 @@ export class TaskController {
 	// ---- Static utility methods ----
 
 	/**
-	 * Check whether spawning `agentName` is allowed given the parent
-	 * runtime depth and canSpawn constraints.
+	 * Check whether tasking `agentName` is allowed given the current
+	 * depth-policy state.
+	 *
+	 * @deprecated Prefer {@link checkTaskAllowed} from depth-policy.js.
 	 */
 	static checkSpawnAllowed(
 		runtime: { depth: number; rootMaxDepth: number; canSpawn: string[] | undefined },
 		agentName: string,
 	): { allowed: boolean; error?: string; code?: string } {
-		if (runtime.depth >= runtime.rootMaxDepth) {
-			return {
-				allowed: false,
-				error: `Cannot spawn ${agentName}: depth limit ${runtime.rootMaxDepth} has been reached.`,
-				code: "depth_limit",
-			};
-		}
-		if (runtime.canSpawn && !runtime.canSpawn.includes(agentName)) {
-			return {
-				allowed: false,
-				error: `Cannot spawn ${agentName}: parent agent is only allowed to spawn ${runtime.canSpawn.join(", ")}.`,
-				code: "spawn_not_allowed",
-			};
-		}
-		return { allowed: true };
+		return checkTaskAllowed(
+			{
+				treeDepth: runtime.depth,
+				rootDepthLimit: runtime.rootMaxDepth,
+				localDepthLimit: runtime.rootMaxDepth, // old impl ignores local depth
+				canSpawn: runtime.canSpawn,
+			},
+			agentName,
+		);
 	}
 
 	/**
@@ -308,12 +310,12 @@ export class TaskController {
 		const { agent } = resolved;
 		let record = resolved.record;
 
-		// c. Check spawn permission
-		const spawnCheck = TaskController.checkSpawnAllowed(runtime, agent.name);
-		if (!spawnCheck.allowed) {
+		// c. Check task permission via DepthPolicy
+		const taskCheck = checkTaskAllowed(runtime.depthPolicy, agent.name);
+		if (!taskCheck.allowed) {
 			return {
-				content: [{ type: "text", text: spawnCheck.error! }],
-				details: { warnings, agentType: agent.name, error: spawnCheck.code },
+				content: [{ type: "text", text: taskCheck.error! }],
+				details: { warnings, agentType: agent.name, error: taskCheck.code },
 			};
 		}
 
@@ -323,7 +325,7 @@ export class TaskController {
 				record = await metadataStore.allocateRecord(
 					agent.name,
 					runtime.parentAgentId,
-					runtime.depth + 1,
+					runtime.treeDepth + 1,
 				);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -343,11 +345,11 @@ export class TaskController {
 				record = metadataStore.findRecord(recordId) ?? record!;
 
 				// Build the child runtime for the sub-agent
+				const childTreeDepth = record!.depth;
 				const childRuntime: RuntimeContext = {
 					parentAgentId: record!.id,
-					depth: record!.depth,
-					rootMaxDepth: runtime.rootMaxDepth,
-					canSpawn: agent.canSpawn ?? [],
+					treeDepth: childTreeDepth,
+					depthPolicy: childPolicy(runtime.depthPolicy, agent, childTreeDepth),
 					store: metadataStore,
 				};
 

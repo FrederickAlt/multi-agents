@@ -55,6 +55,18 @@ Locations:
 - `~/.pi/agent/agents/*.md`
 - nearest `.pi/agents/*.md`
 
+Frontmatter fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `description` | string | Required. Short description for agent lists |
+| `tools` | comma-separated | Tool whitelist |
+| `extensions` | comma-separated | Filter for extensions to load |
+| `model` | string | Model override |
+| `reasoning_effort` | string | Thinking/reasoning effort level |
+| `depth` | number | Spawn allowance — how many more Task levels this agent permits |
+| `canSpawn` | comma-separated | Allowlist of agent types this agent may delegate to |
+
 Supported prompt variables:
 
 - `{{tools}}`
@@ -82,12 +94,14 @@ Unknown variables are errors.
 
 ## Included Agents
 
-| Agent | Purpose | Tools |
+| Agent | Purpose | Depth |
 | --- | --- | --- |
-| `explorer` | Fast codebase recon for handoff to other agents | Pi defaults (all tools) |
-| `planner` | Implementation planning | Pi defaults (all tools) |
-| `reviewer` | Code review | `read`, `grep`, `find`, `ls`, `bash` |
-| `coder` | Fast coding agent for implementing plans | Pi defaults (all tools) |
+| `coder` | Fast coding agent for implementing plans/issues | 0 |
+| `explorer` | Fast codebase recon for handoff to other agents | 0 |
+| `planner` | Creates implementation plans from context and requirements | 0 |
+| `reviewer` | Code review specialist for quality and security analysis | 0 |
+
+All built-in agents have `depth: 0` and cannot spawn further sub-agents.
 
 ## Persistence
 
