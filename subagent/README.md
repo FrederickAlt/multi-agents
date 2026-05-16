@@ -79,14 +79,12 @@ Supported prompt variables:
 - `{{date}}`
 - `{{agent_name}}`
 - `{{agent_description}}`
-- `{{parent_agent_id}}`
-- `{{depth}}`
 
-Unknown variables are errors.
+Unknown variables are errors. Internal tree metadata such as parent IDs and depth is not available as prompt variables.
 
 ## Prompt Parts
 
-In addition to the agent's own system prompt, sub-agents receive prompt-part fragments. Prompt parts are independent `.md` files with YAML frontmatter that get resolved separately and appended to the sub-agent's system prompt.
+In addition to the agent's own system prompt, rendered Agent definitions receive prompt-part fragments. Prompt parts are independent `.md` files with YAML frontmatter that get resolved separately and appended to the Agent-definition system prompt.
 
 Locations (same precedence as agents: bundled → user → project):
 - `subagent/prompt-parts/*.md` (bundled with the extension)
@@ -113,9 +111,11 @@ Prompt parts support the same `{{variables}}` as agent definitions. Each part is
 
 Prompt parts apply whenever this extension renders an Agent definition: the configured Root agent, a session-local `/agent` selection, and Task sub-agents. They are discovered from the agent's effective working directory, so project-specific prompt-parts can extend or override built-in ones.
 
+The Agent definition path is the full prompt contract. Pi's hidden generic suffix and append-system prompt material are not preserved; use prompt parts and explicit `{{context_files}}` placement instead.
+
 Built-in prompt parts (shipped with the extension):
 - `010-tools.md` — shared tool information
-- `020-runtime-context.md` — runtime context (cwd, date, agent, parent ID)
+- `020-runtime-context.md` — runtime context (cwd, date, agent name and description)
 
 ## Commands
 
@@ -144,7 +144,7 @@ The built-in specialist agents have `depth: 0` and cannot spawn further sub-agen
 | Part | Purpose |
 | --- | --- |
 | `010-tools` | Shared tool information for rendered Agent definitions (`{{tools}}`, `{{guidelines}}`) |
-| `020-runtime-context` | Runtime context for rendered Agent definitions (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`, `{{parent_agent_id}}`) |
+| `020-runtime-context` | Runtime context for rendered Agent definitions (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`) |
 
 ## Persistence
 

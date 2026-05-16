@@ -61,9 +61,6 @@ CRITICAL SAFETY RULES:
 - You may ONLY read files from the current working directory ({{cwd}}) and its subdirectories.
 - Do NOT attempt to read files outside the project.
 - Be concise.
-
-Parent agent: {{parent_agent_id}}
-Depth: {{depth}}
 `;
 		writeFileSync(join(agentsDir, "testreader.md"), agentConfig, "utf-8");
 	});

@@ -13,9 +13,11 @@ Each part is rendered independently (variable substitution applied separately) a
 
 Prompt parts are applied whenever this extension renders an Agent definition: the configured Root agent, a session-local `/agent` selection, and Task sub-agents.
 
+The Agent definition path is the full prompt contract. Pi's hidden generic suffix and append-system prompt material are not preserved; use prompt parts and explicit `{{context_files}}` placement instead.
+
 Built-in prompt parts:
 - `010-tools.md` — shared tool info (`{{tools}}`, `{{guidelines}}`)
-- `020-runtime-context.md` — runtime context (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{parent_agent_id}}`)
+- `020-runtime-context.md` — runtime context (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`)
 
 ## Default Root Agent
 
@@ -31,16 +33,14 @@ Agent markdown files support these `{{variable}}` substitutions in the system pr
 |---|---|
 | `{{tools}}` | Available tool names and snippets |
 | `{{guidelines}}` | Tool usage guidelines |
-| `{{context_files}}` | Injected context file contents |
+| `{{context_files}}` | Loaded project context file contents, only at the explicit template location |
 | `{{skills}}` | Available skill names and descriptions |
 | `{{cwd}}` | Current working directory |
 | `{{date}}` | Today's date (`YYYY-MM-DD`) |
 | `{{agent_name}}` | Agent name (filename stem) |
 | `{{agent_description}}` | Description from frontmatter |
-| `{{parent_agent_id}}` | Parent agent's hex ID (empty for root) |
-| `{{depth}}` | Tree depth — current position in agent tree (`0` for root) |
 
-Any unrecognised variable is a hard error at render time.
+Any unrecognised variable is a hard error at render time. Internal tree metadata such as parent IDs and depth is not available as prompt variables.
 
 ## Depth and Spawn Control
 

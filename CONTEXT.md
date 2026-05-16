@@ -38,5 +38,5 @@
 - **MetadataStore**: Concurrent-safe module owning metadata read/write/lock.
 - **SubagentSessionManager**: Module owning session creation, tracking, and disposal.
 - **Prompt inheritance policy**: Per-agent configuration that controls which parent/root prompt material is inherited by a sub-agent. This project intentionally does not need a `systemPromptMode` domain concept because agent prompts are always composed with universal prompt parts.
-- **Context file injection**: Project context files (for example `AGENTS.md`) are only included in a sub-agent prompt when an agent or prompt-part template explicitly uses `{{context_files}}`; they are not automatically appended by Pi's generic `# Project Context` section.
+- **Context file injection**: Project context files (for example `AGENTS.md`) are only included in an Agent-definition prompt when an agent or prompt-part template explicitly uses `{{context_files}}`; they are not automatically appended by Pi's generic `# Project Context` section.
 - **Skill selection**: Per-agent allowlist for skills included in a sub-agent prompt. Missing `skills` means inherit all parent/root skills; an empty list means include no skills; a non-empty list means include only those named skills.

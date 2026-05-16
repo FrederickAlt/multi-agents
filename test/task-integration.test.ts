@@ -164,6 +164,31 @@ describe("extension loading", () => {
 		expect(result?.systemPrompt).toContain("- read: Read file contents");
 	});
 
+	it("does not preserve hidden Pi prompt material for Root Agent definitions", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nRoot Agent Marker\n`);
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = makeSessionManager(tempDir, "root-no-hidden-session");
+		const result = await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt\n\n# Project Context\n\nimplicit AGENTS content",
+			systemPromptOptions: {
+				selectedTools: ["read"],
+				toolSnippets: { read: "Read file contents" },
+				promptGuidelines: [],
+				contextFiles: [{ path: "AGENTS.md", content: "implicit AGENTS content" }],
+				skills: [],
+				cwd: tempDir,
+				appendSystemPrompt: "APPEND_SYSTEM content",
+			},
+		}, { cwd: tempDir, sessionManager });
+
+		expect(result?.systemPrompt).toContain("Root Agent Marker");
+		expect(result?.systemPrompt).not.toContain("Pi base prompt");
+		expect(result?.systemPrompt).not.toContain("APPEND_SYSTEM content");
+		expect(result?.systemPrompt).not.toContain("implicit AGENTS content");
+	});
+
 	it("renders a configured non-default Root agent when the session has no /agent selection", async () => {
 		writeFile(join(tempDir, ".pi", "agents", "customroot.md"), `---\ndescription: Custom Root agent\ndepth: 1\n---\n\nCustom Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();

@@ -26,11 +26,12 @@ multi-agents/
 │   │   └── coder.md          # Fast coding agent for implementing plans
 │   └── prompt-parts/         # Built-in prompt-part fragments appended to rendered Agent definitions
 │       ├── 010-tools.md      # Shared tool information for rendered Agent definitions
-│       └── 020-runtime-context.md  # Runtime context (cwd, date, agent, parent ID)
+│       └── 020-runtime-context.md  # Runtime context (cwd, date, agent name/description)
 ├── test/
 │   ├── agents.test.ts        # Unit tests for agent discovery and config parsing
 │   ├── task-utils.test.ts    # Unit tests for pure functions (hex IDs, names, rendering, metadata)
 │   ├── task-integration.test.ts  # Integration tests (extension loading, tool registration)
+│   ├── subagent-resource-loader.test.ts # Sub-agent resource-loader prompt semantics
 │   └── task-llm.test.ts      # LLM integration tests (real Task execution with a live model)
 └── docs/                     # Reserved for future documentation
 ```
@@ -118,6 +119,7 @@ Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`
 - **`test/root-agent.test.ts`** — Tests Root agent resolution: configured default fallback, session-local selection precedence, and missing-default errors.
 - **`test/task-utils.test.ts`** — Tests `randomHexId`, `pickHumanName`, `renderPromptTemplate`, `loadMetadata`/`saveMetadata`, `getFinalTextFromMessages`, `checkSpawnAllowed`, `resolveTaskAgent`.
 - **`test/task-integration.test.ts`** — Tests extension loading, Task tool registration with correct schema, prompt snippet/guidelines presence. No real LLM calls.
+- **`test/subagent-resource-loader.test.ts`** — Tests Task sub-agent resource-loader prompt semantics: native context injection disabled while explicit `{{context_files}}` rendering still works.
 - **`test/task-llm.test.ts`** — End-to-end tests with a real LLM (deepseek-v4-flash). Tests spawning a subagent that reads a file, and resuming a subagent to verify conversation memory. Skipped when no API key is available.
 
 Run tests with `npm test` (vitest).
@@ -130,7 +132,7 @@ Every agent has an optional `depth` field. The built-in `default` Root agent use
 
 ### Prompt template variables
 
-Agent and prompt-part system prompts support 10 required variables: `{{tools}}`, `{{guidelines}}`, `{{context_files}}`, `{{skills}}`, `{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`, `{{parent_agent_id}}`, `{{depth}}`. Unknown variables throw at render time.
+Agent and prompt-part system prompts support 8 required variables: `{{tools}}`, `{{guidelines}}`, `{{context_files}}`, `{{skills}}`, `{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`. Unknown variables throw at render time. Internal tree metadata such as parent IDs and depth is intentionally not available as prompt variables.
 
 Variable substitution is performed by `renderTemplateString(template, values, label)` which replaces `{{variable}}` placeholders against a values map. `renderPromptTemplate(context)` renders the agent's own markdown body. `renderSubagentSystemPrompt(context, promptParts)` renders the agent prompt followed by zero or more resolved prompt-part fragments, each rendered independently and joined with double-newline separators.
 
@@ -142,7 +144,7 @@ Prompt parts apply to the configured Root agent, session-local `/agent` selectio
 
 Built-in prompt parts:
 - `010-tools.md` — Shared tool information (`{{tools}}`, `{{guidelines}}`)
-- `020-runtime-context.md` — Runtime context (cwd, date, agent name, parent ID)
+- `020-runtime-context.md` — Runtime context (cwd, date, agent name and description)
 
 Users and projects can add their own: `~/.pi/agent/prompt-parts/*.md` or `.pi/prompt-parts/*.md`.
 

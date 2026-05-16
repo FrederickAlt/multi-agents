@@ -240,7 +240,7 @@ describe("renderPromptTemplate", () => {
 	const baseAgent: AgentConfig = {
 		name: "TestAgent",
 		description: "A test agent",
-		systemPrompt: "You are {{agent_name}}.\n\nAvailable tools:\n{{tools}}\n\nGuidelines:\n{{guidelines}}\n\nCWD: {{cwd}}\nDate: {{date}}\nDepth: {{depth}}",
+		systemPrompt: "You are {{agent_name}}.\n\nAvailable tools:\n{{tools}}\n\nGuidelines:\n{{guidelines}}\n\nCWD: {{cwd}}\nDate: {{date}}",
 		source: "builtin",
 		filePath: "/tmp/test.md",
 	};
@@ -255,7 +255,6 @@ describe("renderPromptTemplate", () => {
 	const baseContext: RenderContext = {
 		agent: baseAgent,
 		parts: baseParts,
-		depth: 0,
 	};
 
 	it("renders tools as one-line snippets", () => {
@@ -304,10 +303,12 @@ describe("renderPromptTemplate", () => {
 		expect(result).toContain("You are TestAgent");
 	});
 
-	it("renders depth placeholder", () => {
-		const deepCtx = { ...baseContext, depth: 3 };
-		const result = renderPromptTemplate(deepCtx);
-		expect(result).toContain("Depth: 3");
+	it("rejects depth as an internal prompt variable", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, systemPrompt: "Depth: {{depth}}" },
+		};
+		expect(() => renderPromptTemplate(ctx)).toThrow("Unknown prompt variable");
 	});
 
 	it("renders agent_description", () => {
@@ -319,14 +320,13 @@ describe("renderPromptTemplate", () => {
 		expect(result).toContain("Description: A test agent");
 	});
 
-	it("renders parent_agent_id when provided", () => {
+	it("rejects parent_agent_id as an internal prompt variable", () => {
 		const ctx = {
 			...baseContext,
 			agent: { ...baseAgent, systemPrompt: "Parent: {{parent_agent_id}}" },
 			parentAgentId: "deadbeef",
 		};
-		const result = renderPromptTemplate(ctx);
-		expect(result).toContain("Parent: deadbeef");
+		expect(() => renderPromptTemplate(ctx)).toThrow("Unknown prompt variable");
 	});
 
 	it("renders context_files as (none) when empty", () => {
@@ -427,22 +427,22 @@ describe("renderPromptTemplate", () => {
 		expect(result).toContain("Shared for TestAgent in /home/user/project");
 	});
 
-	it("preserves generic system-prompt suffixes from Pi when the raw agent prompt is the base prefix", () => {
+	it("does not preserve Pi's hidden generic suffix when composing an Agent definition prompt", () => {
 		const ctx = {
 			...baseContext,
 			agent: { ...baseAgent, systemPrompt: "Agent {{agent_name}}" },
 		};
 		const result = renderComposedAgentSystemPrompt(ctx, [], {
-			baseSystemPrompt: "Agent {{agent_name}}\n\n# Generic additions\n\nAPPEND_SYSTEM content",
+			baseSystemPrompt: "Agent {{agent_name}}\n\n# Project Context\n\n## AGENTS.md\n\nhidden project context",
 		});
 
 		expect(result).toContain("Agent TestAgent");
-		expect(result).toContain("# Generic additions");
-		expect(result).toContain("APPEND_SYSTEM content");
+		expect(result).not.toContain("# Project Context");
+		expect(result).not.toContain("hidden project context");
 		expect(result).not.toContain("{{agent_name}}");
 	});
 
-	it("falls back to appendSystemPrompt when the current base prompt is not the raw agent prompt", () => {
+	it("does not append Pi append-system prompt material in the Agent definition path", () => {
 		const ctx = {
 			...baseContext,
 			agent: { ...baseAgent, systemPrompt: "Agent {{agent_name}}" },
@@ -453,7 +453,7 @@ describe("renderPromptTemplate", () => {
 		});
 
 		expect(result).toContain("Agent TestAgent");
-		expect(result).toContain("APPEND_SYSTEM content");
+		expect(result).not.toContain("APPEND_SYSTEM content");
 		expect(result).not.toContain("Default Pi prompt");
 	});
 });

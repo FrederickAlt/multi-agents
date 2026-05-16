@@ -1,9 +1,9 @@
 ---
-description: Runtime context for all subagents
+description: Runtime context for rendered Agent definitions
 ---
 
 ## Runtime Context
 
 - Current working directory: {{cwd}}
 - Today's date: {{date}}
-- Parent agent ID: {{parent_agent_id}}
+- Agent: {{agent_name}} — {{agent_description}}

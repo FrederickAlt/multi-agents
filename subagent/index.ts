@@ -13,6 +13,7 @@ import {
 	type ExtensionFactory,
 	getAgentDir,
 	getMarkdownTheme,
+	loadProjectContextFiles,
 } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
@@ -34,8 +35,6 @@ const REQUIRED_TEMPLATE_VARS = new Set([
 	"date",
 	"agent_name",
 	"agent_description",
-	"parent_agent_id",
-	"depth",
 ]);
 
 export interface PromptParts {
@@ -50,8 +49,6 @@ export interface PromptParts {
 export interface RenderContext {
 	agent: AgentConfig;
 	parts: PromptParts;
-	parentAgentId?: string;
-	depth: number;
 }
 
 function today(): string {
@@ -101,8 +98,6 @@ export function buildTemplateValues(context: RenderContext): Record<string, stri
 		date: today(),
 		agent_name: context.agent.name,
 		agent_description: context.agent.description,
-		parent_agent_id: context.parentAgentId ?? "",
-		depth: String(context.depth),
 	};
 }
 
@@ -167,40 +162,28 @@ export function renderSubagentSystemPrompt(
 
 export interface SystemPromptCompositionOptions {
 	/**
-	 * The chained prompt Pi has built so far for this turn. For Task
-	 * sub-agents this starts with the raw agent markdown body, followed by Pi's
-	 * generic additions (APPEND_SYSTEM.md, context files, skills, cwd/date, and
-	 * earlier before_agent_start modifications). When that prefix matches we
-	 * preserve the suffix after rendering the agent template.
+	 * The chained prompt Pi built before this extension replaces it. Accepted
+	 * for compatibility with existing callers, but intentionally ignored: Agent
+	 * definitions are the full prompt contract.
 	 */
 	baseSystemPrompt?: string;
-	/** Fallback generic append prompt from Pi's BuildSystemPromptOptions. */
+	/** Pi append-system prompt material. Intentionally ignored for Agent definitions. */
 	appendSystemPrompt?: string;
 }
 
-function genericSystemPromptSuffix(
-	context: RenderContext,
-	options: SystemPromptCompositionOptions,
-): string {
-	const base = options.baseSystemPrompt;
-	if (base?.startsWith(context.agent.systemPrompt)) {
-		return base.slice(context.agent.systemPrompt.length).trim();
-	}
-	return options.appendSystemPrompt?.trim() ?? "";
-}
-
 /**
- * Render an agent prompt, append prompt-part fragments, and preserve Pi's
- * generic system-prompt additions when they are present.
+ * Render the complete Agent-definition system prompt.
+ *
+ * Agent definitions are a full prompt contract: the markdown definition plus
+ * resolved prompt-part fragments. Pi's default prompt, append-system prompt,
+ * and generic context/skills/date suffix are intentionally not preserved here.
  */
 export function renderComposedAgentSystemPrompt(
 	context: RenderContext,
 	promptParts: PromptPartConfig[],
-	options: SystemPromptCompositionOptions = {},
+	_options: SystemPromptCompositionOptions = {},
 ): string {
-	const rendered = renderSubagentSystemPrompt(context, promptParts);
-	const suffix = genericSystemPromptSuffix(context, options);
-	return [rendered, suffix].filter((part) => part.trim().length > 0).join("\n\n");
+	return renderSubagentSystemPrompt(context, promptParts);
 }
 
 function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
@@ -306,7 +289,12 @@ export default function (pi: ExtensionAPI) {
 		};
 	};
 
-	const makeAgentRuntimeFactory = (agent: AgentConfig, runtime: RuntimeContext, effectiveCwd: string): ExtensionFactory => {
+	const makeAgentRuntimeFactory = (
+		agent: AgentConfig,
+		runtime: RuntimeContext,
+		effectiveCwd: string,
+		contextFiles?: Array<{ path: string; content: string }>,
+	): ExtensionFactory => {
 		return (subPi) => {
 			registerTaskTool(subPi, runtime);
 
@@ -314,11 +302,11 @@ export default function (pi: ExtensionAPI) {
 			const promptPartDefs = discoverPromptParts(effectiveCwd, "both").parts;
 
 			subPi.on("before_agent_start", async (event) => {
+				const parts = buildPromptPartsFromOptions(event.systemPromptOptions);
+				if (contextFiles) parts.contextFiles = contextFiles;
 				const context: RenderContext = {
 					agent,
-					parts: buildPromptPartsFromOptions(event.systemPromptOptions),
-					parentAgentId: runtime.parentAgentId,
-					depth: runtime.treeDepth,
+					parts,
 				};
 				const prompt = renderComposedAgentSystemPrompt(context, promptPartDefs, {
 					baseSystemPrompt: event.systemPrompt,
@@ -367,11 +355,15 @@ export default function (pi: ExtensionAPI) {
 			modelRegistry: ctx.modelRegistry,
 			createResourceLoaderFactory: async (agent, childRuntime) => {
 				const effectiveCwd = params.cwd || ctx.cwd;
+				const agentDir = getAgentDir();
+				const contextFiles = loadProjectContextFiles({ cwd: effectiveCwd, agentDir });
 				const loader = new DefaultResourceLoader({
 					cwd: effectiveCwd,
-					agentDir: getAgentDir(),
+					agentDir,
+					noContextFiles: true,
+					appendSystemPromptOverride: () => [],
 					extensionsOverride: filterExtensionsForAgent(agent, selfPath),
-					extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime, effectiveCwd)],
+					extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime, effectiveCwd, contextFiles)],
 					systemPromptOverride: () => agent.systemPrompt,
 				});
 				await loader.reload();
@@ -519,7 +511,6 @@ export default function (pi: ExtensionAPI) {
 		const prompt = renderComposedAgentSystemPrompt({
 			agent,
 			parts: pParts,
-			depth: 0,
 		}, promptPartDefs, {
 			baseSystemPrompt: event.systemPrompt,
 			appendSystemPrompt: event.systemPromptOptions.appendSystemPrompt,
