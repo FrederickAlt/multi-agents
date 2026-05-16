@@ -9,8 +9,9 @@ Pi extension for delegating work to persistent configured sub-agents.
 - Sub-agents can be resumed with short hex IDs
 - Human-readable display names such as `Explore Tom`
 - Configurable agent markdown files with prompt variables
-- Prompt-part fragments appended to sub-agent system prompts (tools, runtime context, project-specific additions)
-- Main/user-facing agent persona via `/agent <name>` or `--agent <name>`
+- Prompt-part fragments appended to rendered Agent definition prompts (tools, runtime context, project-specific additions)
+- Root agent resolved through markdown Agent definitions, with configurable `defaultRootAgent` fallback
+- Main/user-facing agent persona via session-local `/agent <name>` or `--agent <name>`
 - Prompt inspection via Pi's <code>dump-prompt</code> command.
 
 ## Task Tool
@@ -110,11 +111,11 @@ description: Shared tool information for all subagents
 
 Prompt parts support the same `{{variables}}` as agent definitions. Each part is rendered independently with the same rendering context, then joined with double-newline separators after the main agent prompt.
 
-**Prompt parts only apply to Task sub-agents**, not the root/main agent. They are discovered per-sub-agent from its effective working directory, so project-specific prompt-parts can extend or override built-in ones.
+Prompt parts apply whenever this extension renders an Agent definition: the configured Root agent, a session-local `/agent` selection, and Task sub-agents. They are discovered from the agent's effective working directory, so project-specific prompt-parts can extend or override built-in ones.
 
 Built-in prompt parts (shipped with the extension):
 - `010-tools.md` — shared tool information
-- `020-runtime-context.md` — runtime context (cwd, date, agent, depth, parent ID)
+- `020-runtime-context.md` — runtime context (cwd, date, agent, parent ID)
 
 ## Commands
 
@@ -122,7 +123,7 @@ Built-in prompt parts (shipped with the extension):
 /agent explorer
 ```
 
-`/agent` selects the main user-facing persona.
+`/agent` selects the Root agent persona for the current session. Sessions without a selection use the configured `defaultRootAgent`, which defaults to the built-in `default` Agent definition.
 
 Use Pi's built-in system prompt dump to inspect the current system prompt.
 
@@ -130,19 +131,20 @@ Use Pi's built-in system prompt dump to inspect the current system prompt.
 
 | Agent | Purpose | Depth |
 | --- | --- | --- |
+| `default` | Default Root coding assistant | 1 |
 | `coder` | Fast coding agent for implementing plans/issues | 0 |
 | `explorer` | Fast codebase recon for handoff to other agents | 0 |
 | `planner` | Creates implementation plans from context and requirements | 0 |
 | `reviewer` | Code review specialist for quality and security analysis | 0 |
 
-All built-in agents have `depth: 0` and cannot spawn further sub-agents.
+The built-in specialist agents have `depth: 0` and cannot spawn further sub-agents. The built-in `default` Root agent has `depth: 1` so it can delegate one level by default.
 
 ## Included Prompt Parts
 
 | Part | Purpose |
 | --- | --- |
-| `010-tools` | Shared tool information for all sub-agents (`{{tools}}`, `{{guidelines}}`) |
-| `020-runtime-context` | Runtime context for all sub-agents (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`, `{{parent_agent_id}}`, `{{depth}}`) |
+| `010-tools` | Shared tool information for rendered Agent definitions (`{{tools}}`, `{{guidelines}}`) |
+| `020-runtime-context` | Runtime context for rendered Agent definitions (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`, `{{parent_agent_id}}`) |
 
 ## Persistence
 

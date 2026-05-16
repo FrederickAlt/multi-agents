@@ -22,6 +22,7 @@ import { discoverPromptParts, type PromptPartConfig } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
+import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 const REQUIRED_TEMPLATE_VARS = new Set([
@@ -285,6 +286,20 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(content, type);
 	};
 
+	const configuredDefaultRootAgent = (): string => {
+		const flag = pi.getFlag("defaultRootAgent");
+		return typeof flag === "string" && flag.trim() ? flag.trim() : DEFAULT_ROOT_AGENT_NAME;
+	};
+
+	const resolveRootAgentForSession = (cwd: string, selectedAgent?: string): AgentConfig => {
+		const discovery = discoverAgents(cwd, DEFAULT_AGENT_SCOPE);
+		return resolveRootAgent({
+			agents: discovery.agents,
+			selectedAgent,
+			defaultRootAgent: configuredDefaultRootAgent(),
+		}).agent;
+	};
+
 	const makeTaskToolFactory = (runtime: RuntimeContext): ExtensionFactory => {
 		return (subPi) => {
 			registerTaskTool(subPi, runtime);
@@ -453,6 +468,12 @@ export default function (pi: ExtensionAPI) {
 		default: "",
 	});
 
+	pi.registerFlag("defaultRootAgent", {
+		description: "Default Root agent definition to use when no session-local /agent selection exists",
+		type: "string",
+		default: DEFAULT_ROOT_AGENT_NAME,
+	});
+
 	registerTaskTool(pi, mainRuntime);
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -473,19 +494,15 @@ export default function (pi: ExtensionAPI) {
 		if (typeof flagAgent === "string" && flagAgent.trim()) {
 			activeStore.selectedMainAgent = flagAgent.trim();
 		}
-		const selectedAgentName = activeStore.selectedMainAgent;
-		const selected = selectedAgentName ? findAgent(discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE).agents, selectedAgentName) : undefined;
+		const rootAgent = resolveRootAgentForSession(ctx.cwd, activeStore.selectedMainAgent);
 		mainRuntime.treeDepth = 0;
-		mainRuntime.depthPolicy = selected ? selectedRootPolicy(selected) : defaultRootPolicy();
+		mainRuntime.depthPolicy = selectedRootPolicy(rootAgent);
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
 		sessionManager?.disposeAll();
 		sessionManager = undefined;
 		if (event.reason === "new") {
-			// Persist selected main agent to globalThis so it survives
-			// extension module reload during newSession.
-			if (store?.selectedMainAgent) setGlobalSelectedAgent(store.selectedMainAgent);
 			store?.cleanup();
 			store = undefined;
 		}
@@ -493,11 +510,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		if (!store) store = MetadataStore.fromSessionManager(ctx.sessionManager);
-		const selectedAgentName = store.selectedMainAgent;
-		if (!selectedAgentName) return;
-		const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
-		const agent = findAgent(discovery.agents, selectedAgentName);
-		if (!agent) throw new Error(`Configured main agent "${selectedAgentName}" was not found.`);
+		const agent = resolveRootAgentForSession(ctx.cwd, store.selectedMainAgent);
 		mainRuntime.store = store;
 		mainRuntime.treeDepth = 0;
 		mainRuntime.depthPolicy = selectedRootPolicy(agent);
@@ -515,7 +528,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("agent", {
-		description: "Select or show the current main agent persona",
+		description: "Select or show the current Root agent persona",
 		getArgumentCompletions(prefix) {
 			const discovery = discoverAgents(process.cwd(), DEFAULT_AGENT_SCOPE);
 			return discovery.agents
@@ -527,7 +540,7 @@ export default function (pi: ExtensionAPI) {
 			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
 			if (!name) {
 				const available = formatAgentList(discovery.agents, 30).text;
-				const current = store?.selectedMainAgent ?? "(default)";
+				const current = store?.selectedMainAgent ?? configuredDefaultRootAgent();
 				showMessage(ctx, `Current agent: ${current}\n\nAvailable: ${available}`, "info");
 				return;
 			}
@@ -543,7 +556,14 @@ export default function (pi: ExtensionAPI) {
 			mainRuntime.store = activeStore;
 			mainRuntime.treeDepth = 0;
 			mainRuntime.depthPolicy = selectedRootPolicy(agent);
-			await ctx.newSession({ parentSession: ctx.sessionManager.getSessionFile() });
+			setGlobalSelectedAgent(agent.name);
+			try {
+				const result = await ctx.newSession({ parentSession: ctx.sessionManager.getSessionFile() });
+				if (result.cancelled) setGlobalSelectedAgent(undefined);
+			} catch (err) {
+				setGlobalSelectedAgent(undefined);
+				throw err;
+			}
 		},
 	});
 

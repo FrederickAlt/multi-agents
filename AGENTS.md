@@ -2,7 +2,7 @@
 
 This is a **Pi extension** that adds a `Task` tool to Pi. The `Task` tool lets the model delegate autonomous work to **persistent sub-agents** — real Pi `AgentSession` instances with their own transcripts, tools, and config. Each sub-agent survives across Pi restarts, is identified by a short hex ID, and can be resumed later for follow-up work.
 
-Sub-agents are configured via **agent definition files** — markdown files with YAML frontmatter. The project ships four built-in agents (`explorer`, `planner`, `reviewer`, `coder`), and users or projects can add their own.
+Agents are configured via **agent definition files** — markdown files with YAML frontmatter. The project ships five built-in agents (`default`, `explorer`, `planner`, `reviewer`, `coder`), and users or projects can add their own.
 
 ## Project structure
 
@@ -19,13 +19,14 @@ multi-agents/
 │   ├── prompt-parts.ts       # Prompt-part discovery (calls markdown-definitions.ts)
 │   ├── README.md             # Detailed feature documentation
 │   ├── agents/               # Built-in agent definition files
+│   │   ├── default.md        # Default Root coding assistant
 │   │   ├── explorer.md       # Fast read-only codebase exploration
 │   │   ├── planner.md        # Read-only implementation planning
 │   │   ├── reviewer.md       # Read-only code review
 │   │   └── coder.md          # Fast coding agent for implementing plans
-│   └── prompt-parts/         # Built-in prompt-part fragments appended to sub-agent system prompts
-│       ├── 010-tools.md      # Shared tool information for all sub-agents
-│       └── 020-runtime-context.md  # Runtime context (cwd, date, depth, …)
+│   └── prompt-parts/         # Built-in prompt-part fragments appended to rendered Agent definitions
+│       ├── 010-tools.md      # Shared tool information for rendered Agent definitions
+│       └── 020-runtime-context.md  # Runtime context (cwd, date, agent, parent ID)
 ├── test/
 │   ├── agents.test.ts        # Unit tests for agent discovery and config parsing
 │   ├── task-utils.test.ts    # Unit tests for pure functions (hex IDs, names, rendering, metadata)
@@ -45,8 +46,8 @@ Registers the `Task` tool and the `/agent` command. Handles the full sub-agent l
 - **Metadata persistence** (`loadMetadata`, `saveMetadata`, `metadataPath`): stores sub-agent records in a sidecar JSON file (`.task-subagents-<sessionId>.json`) next to the root session. Concurrent-safe via a promise-based lock.
 - **Session lifecycle**: sessions are disposed after each `Task` call to prevent unbounded memory. The on-disk session file is preserved so resuming reopens from disk.
 - **Commands**:
-  - `/agent <name>` — selects a configured agent persona as the main/user-facing agent. Persisted in metadata.
-- **Events**: hooks `session_start`, `session_shutdown`, and `before_agent_start` to manage metadata, clean up sessions on `/new`, and inject agent prompts for the main persona.
+  - `/agent <name>` — selects a configured agent persona as the Root agent for the current session. Persisted in session metadata.
+- **Events**: hooks `session_start`, `session_shutdown`, and `before_agent_start` to manage metadata, clean up sessions on `/new`, resolve the default/session-local Root agent, and inject rendered Agent definition prompts.
 
 Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RenderContext`, `PromptParts`, `RuntimeContext`. Key rendering functions: `renderTemplateString`, `renderPromptTemplate`, `renderSubagentSystemPrompt`, `buildTemplateValues`.
 
@@ -60,9 +61,15 @@ Owns the shared logic for discovering markdown definition files from bundled, us
 
 Types: `RawMarkdownDefinition`, `MarkdownDiagnostic`, `MarkdownDiscoveryOptions`, `MarkdownDefinitionSource`.
 
+### `subagent/root-agent.ts` — Root agent resolution
+
+Resolves the effective Root Agent definition from the session-local `/agent` selection or the configured `defaultRootAgent` fallback (default: `default`). A missing configured default is a hard error instead of falling back to raw Pi behavior.
+
+Key functions: `resolveRootAgent(options)`. Key constants: `DEFAULT_ROOT_AGENT_NAME`.
+
 ### `subagent/prompt-parts.ts` — Prompt-part discovery
 
-Discovers prompt-part fragment files that get appended to sub-agent system prompts at render time. Calls `discoverMarkdownDefinitions` internally.
+Discovers prompt-part fragment files that get appended to rendered Agent definition prompts at render time. Calls `discoverMarkdownDefinitions` internally.
 
 Discovery paths:
 1. **Bundled** — `subagent/prompt-parts/*.md` (shipped with the extension)
@@ -99,6 +106,7 @@ Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`
 
 | Agent | Model | Tools | Depth | canSpawn | Purpose |
 |-------|-------|-------|-------|----------|---------|
+| `default` | inherited | All | 1 | — | Default Root coding assistant |
 | `explorer` | deepseek-v4-flash | All | 0 | — | Fast read-only codebase recon, returns structured findings |
 | `planner` | deepseek-v4-pro | All | 0 | — | Read-only implementation planning |
 | `reviewer` | deepseek-v4-pro | read, grep, find, ls, bash | 0 | — | Code review (read-only bash only) |
@@ -107,6 +115,7 @@ Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`
 ### Test files
 
 - **`test/agents.test.ts`** — Tests `discoverAgents`, `formatAgentList`, frontmatter parsing, depth handling, project agent discovery with temp directories.
+- **`test/root-agent.test.ts`** — Tests Root agent resolution: configured default fallback, session-local selection precedence, and missing-default errors.
 - **`test/task-utils.test.ts`** — Tests `randomHexId`, `pickHumanName`, `renderPromptTemplate`, `loadMetadata`/`saveMetadata`, `getFinalTextFromMessages`, `checkSpawnAllowed`, `resolveTaskAgent`.
 - **`test/task-integration.test.ts`** — Tests extension loading, Task tool registration with correct schema, prompt snippet/guidelines presence. No real LLM calls.
 - **`test/task-llm.test.ts`** — End-to-end tests with a real LLM (deepseek-v4-flash). Tests spawning a subagent that reads a file, and resuming a subagent to verify conversation memory. Skipped when no API key is available.
@@ -117,7 +126,7 @@ Run tests with `npm test` (vitest).
 
 ### Spawn control via depth and canSpawn
 
-Every agent has an optional `depth` field (default ∞ for the root agent, 0 for built-in sub-agents). `depth` is the maximum nesting level: depth 0 means no further sub-agents can be spawned, depth 1 allows sub-agents but no grandchildren, etc. The `canSpawn` field further restricts which agent types are allowed.
+Every agent has an optional `depth` field. The built-in `default` Root agent uses `depth: 1`; the built-in specialist sub-agents use `depth: 0`. `depth` is the maximum nesting level: depth 0 means no further sub-agents can be spawned, depth 1 allows sub-agents but no grandchildren, etc. The `canSpawn` field further restricts which agent types are allowed.
 
 ### Prompt template variables
 
@@ -127,13 +136,13 @@ Variable substitution is performed by `renderTemplateString(template, values, la
 
 ### Prompt parts
 
-Prompt parts are markdown fragments that get appended to a sub-agent's system prompt at render time. They are discovered from the same three sources as agent definitions (bundled, user, project) with the same precedence. Each part is a .md file with YAML frontmatter (at minimum a `description` field) and a body that may contain `{{variables}}`.
+Prompt parts are markdown fragments that get appended to rendered Agent definition prompts at render time. They are discovered from the same three sources as agent definitions (bundled, user, project) with the same precedence. Each part is a .md file with YAML frontmatter (at minimum a `description` field) and a body that may contain `{{variables}}`.
 
-Prompt parts are **only applied to Task sub-agents**, not the root agent. They are discovered fresh for each sub-agent's working directory, so project-specific prompt-parts can extend or override built-in ones.
+Prompt parts apply to the configured Root agent, session-local `/agent` selections, and Task sub-agents. They are discovered fresh for the agent's effective working directory, so project-specific prompt-parts can extend or override built-in ones.
 
 Built-in prompt parts:
 - `010-tools.md` — Shared tool information (`{{tools}}`, `{{guidelines}}`)
-- `020-runtime-context.md` — Runtime context (cwd, date, agent name, depth, parent ID)
+- `020-runtime-context.md` — Runtime context (cwd, date, agent name, parent ID)
 
 Users and projects can add their own: `~/.pi/agent/prompt-parts/*.md` or `.pi/prompt-parts/*.md`.
 

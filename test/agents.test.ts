@@ -88,6 +88,17 @@ describe("discoverAgents", () => {
 		writeFileSync(join(dir, `${name.toLowerCase()}.md`), content, "utf-8");
 	};
 
+	it("discovers the built-in default Root agent definition", () => {
+		const result = discoverAgents(tempDir, "project");
+		const defaultAgent = result.agents.find((a) => a.name === "default");
+
+		expect(defaultAgent).toBeDefined();
+		expect(defaultAgent?.source).toBe("builtin");
+		expect(defaultAgent?.description).toContain("Default Root");
+		expect(defaultAgent?.systemPrompt).toContain("Pi documentation");
+		expect(defaultAgent?.systemPrompt).toContain("file-exploration tools");
+	});
+
 	it("discovers agents from project .pi/agents directory", () => {
 		writeAgent(agentsDir, "CustomExplorer", "Custom exploration agent", { depth: 1, tools: "read, grep" });
 
@@ -142,6 +153,18 @@ describe("discoverAgents", () => {
 		expect(overridden.source).toBe("project");
 		// Other bundled agents should still be present
 		expect(result.agents.map((a) => a.name)).toContain(otherBuiltinName);
+	});
+
+	it("project default agent overrides the built-in default Root agent", () => {
+		writeAgent(agentsDir, "default", "Project default Root", { depth: 2 });
+
+		const result = discoverAgents(tempDir, "both");
+		const defaultAgent = result.agents.find((a) => a.name === "default")!;
+
+		expect(defaultAgent).toBeDefined();
+		expect(defaultAgent.source).toBe("project");
+		expect(defaultAgent.description).toBe("Project default Root");
+		expect(defaultAgent.depth).toBe(2);
 	});
 
 	it("skips markdown files without required frontmatter", () => {

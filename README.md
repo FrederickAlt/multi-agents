@@ -4,18 +4,24 @@ Pi extension for persistent configured sub-agents via the `Task` tool.
 
 ## Prompt Parts
 
-Sub-agent system prompts are composed from two sources:
+Rendered Agent definition prompts are composed from two sources:
 
 1. **Agent definition body** — the markdown body of the agent's `.md` file (after YAML frontmatter).
 2. **Prompt parts** — markdown fragments from `subagent/prompt-parts/*.md` (bundled), `~/.pi/agent/prompt-parts/*.md` (user), or `.pi/prompt-parts/*.md` (project).
 
-Each part is rendered independently (variable substitution applied separately) and joined with double-newline separators after the main agent prompt. This lets projects and users inject shared context (tools, guidelines, runtime info) across all sub-agents without duplicating it in each agent definition.
+Each part is rendered independently (variable substitution applied separately) and joined with double-newline separators after the main agent prompt. This lets projects and users inject shared context (tools, guidelines, runtime info) across all rendered Agent definitions without duplicating it in each file.
 
-Prompt parts are **only applied to Task sub-agents**. The root/main agent prompt is unchanged.
+Prompt parts are applied whenever this extension renders an Agent definition: the configured Root agent, a session-local `/agent` selection, and Task sub-agents.
 
 Built-in prompt parts:
 - `010-tools.md` — shared tool info (`{{tools}}`, `{{guidelines}}`)
-- `020-runtime-context.md` — runtime context (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{depth}}`, `{{parent_agent_id}}`)
+- `020-runtime-context.md` — runtime context (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{parent_agent_id}}`)
+
+## Default Root Agent
+
+The Root agent always resolves through a markdown Agent definition. If no session-local `/agent <name>` selection exists, the extension uses the configured `defaultRootAgent` flag, which defaults to `default`. The built-in `subagent/agents/default.md` can be overridden from `~/.pi/agent/agents/default.md` or the nearest `.pi/agents/default.md` like any other Agent definition.
+
+A missing configured default is a hard error so configuration mistakes are visible.
 
 ## Prompt Template Variables
 
@@ -49,7 +55,7 @@ A sub-agent with `depth: 0` cannot call Task at all, including `resume`.  New Ta
 
 ## Prompt Parts
 
-Prompt-part markdown files are `.md` files with YAML frontmatter that get appended to sub-agent system prompts. They follow the same conventions as agent definitions: frontmatter (at minimum a `description` field) + body with `{{variables}}`.
+Prompt-part markdown files are `.md` files with YAML frontmatter that get appended to rendered Agent definition prompts. They follow the same conventions as agent definitions: frontmatter (at minimum a `description` field) + body with `{{variables}}`.
 
 Locations (same precedence as agents: bundled → user → project):
 - `subagent/prompt-parts/*.md` (bundled with the extension)

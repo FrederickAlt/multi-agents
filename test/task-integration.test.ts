@@ -29,6 +29,28 @@ function writeFile(p: string, content: string) {
 	wfs(p, content, "utf-8");
 }
 
+function createFakeExtensionApi() {
+	const handlers = new Map<string, any>();
+	const commands = new Map<string, any>();
+	const flags = new Map<string, string | boolean | undefined>();
+	const pi = {
+		on: (event: string, handler: any) => handlers.set(event, handler),
+		registerTool: () => {},
+		registerCommand: (name: string, command: any) => commands.set(name, command),
+		registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
+		getFlag: (name: string) => flags.get(name),
+	} as any;
+	return { pi, handlers, commands, flags };
+}
+
+function makeSessionManager(dir: string, sessionId: string) {
+	return {
+		getSessionDir: () => dir,
+		getSessionId: () => sessionId,
+		getSessionFile: () => join(dir, `${sessionId}.jsonl`),
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Extension loading and tool registration (no LLM required)
 // ---------------------------------------------------------------------------
@@ -55,6 +77,7 @@ describe("extension loading", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		delete (globalThis as any).__multi_agents_selected_main_agent;
 		if (tempDir && existsSync(tempDir)) {
 			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
 		}
@@ -115,5 +138,81 @@ describe("extension loading", () => {
 		expect(taskTool?.description).toBeDefined();
 
 		session.dispose();
+	});
+
+	it("renders the configured default Root agent when the session has no /agent selection", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nProject Default Root Marker\n`);
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = makeSessionManager(tempDir, "root-session");
+		const result = await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt that should be replaced for Agent definitions",
+			systemPromptOptions: {
+				selectedTools: ["read"],
+				toolSnippets: { read: "Read file contents" },
+				promptGuidelines: ["Use read for file inspection"],
+				contextFiles: [],
+				skills: [],
+				cwd: tempDir,
+				appendSystemPrompt: "",
+			},
+		}, { cwd: tempDir, sessionManager });
+
+		expect(result?.systemPrompt).toContain("Project Default Root Marker");
+		expect(result?.systemPrompt).toContain("## Available Tools");
+		expect(result?.systemPrompt).toContain("- read: Read file contents");
+	});
+
+	it("renders a configured non-default Root agent when the session has no /agent selection", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "customroot.md"), `---\ndescription: Custom Root agent\ndepth: 1\n---\n\nCustom Root Marker\n`);
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("defaultRootAgent", "customroot");
+
+		const sessionManager = makeSessionManager(tempDir, "custom-root-session");
+		const result = await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+
+		expect(result?.systemPrompt).toContain("Custom Root Marker");
+		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
+	});
+
+	it("throws a visible error when the configured default Root agent is missing", async () => {
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("defaultRootAgent", "missing-root");
+
+		const sessionManager = makeSessionManager(tempDir, "missing-default-session");
+
+		await expect(handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager })).rejects.toThrow('Default Root agent "missing-root" was not found');
+	});
+
+	it("/agent applies a session-local Root selection without mutating the configured default", async () => {
+		const { pi, handlers, commands, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = makeSessionManager(tempDir, "selected-root-session");
+		const ctx = {
+			cwd: tempDir,
+			sessionManager,
+			ui: { notify: () => {} },
+			newSession: async () => ({ cancelled: true }),
+		};
+
+		await commands.get("agent").handler("planner", ctx);
+		const result = await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, ctx);
+
+		expect(flags.get("defaultRootAgent")).toBe("default");
+		expect(result?.systemPrompt).toContain("software architect and planning specialist");
+		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
 	});
 });
