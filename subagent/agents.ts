@@ -34,6 +34,13 @@ export interface AgentConfig {
 	reasoningEffort?: string;
 	depth?: number;
 	canSpawn?: string[];
+	/**
+	 * Skill prompt filtering with tri-state semantics.
+	 * - `undefined` (field missing) → all inherited skill prompt content
+	 * - `[]` (blank value) → no skill prompt content
+	 * - `["skill1", "skill2"]` → only matching named skill prompt content
+	 */
+	skills?: string[];
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -70,7 +77,7 @@ const BUNDLED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "age
  * Map a generic RawMarkdownDefinition to an agent-specific AgentConfig.
  *
  * Parses agent-specific frontmatter fields (tools, extensions, model,
- * reasoning_effort, depth, canSpawn) from the raw frontmatter map.
+ * reasoning_effort, depth, canSpawn, skills) from the raw frontmatter map.
  */
 function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 	const fm = raw.frontmatter;
@@ -87,6 +94,18 @@ function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 		.split(",")
 		.map((t: string) => t.trim())
 		.filter(Boolean);
+
+	// skills: tri-state — undefined when missing, [] when blank, string[] when values
+	let skills: string[] | undefined;
+	if (fm.skills === undefined || fm.skills === null) {
+		// Null (from bare `skills:` in YAML) is treated as blank → []
+		skills = fm.skills === undefined ? undefined : [];
+	} else {
+		const raw = String(fm.skills).trim();
+		skills = raw.length > 0
+			? raw.split(",").map((s: string) => s.trim()).filter(Boolean)
+			: [];
+	}
 
 	const reasoningEffort = fm.reasoning_effort ? String(fm.reasoning_effort) : undefined;
 	const rawDepth = fm.depth;
@@ -106,6 +125,7 @@ function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 		model: fm.model ? String(fm.model) : undefined,
 		depth: Number.isFinite(depth) ? depth : undefined,
 		canSpawn: canSpawn.length > 0 ? canSpawn : undefined,
+		skills,
 		systemPrompt: raw.body,
 		source: raw.source,
 		filePath: raw.filePath,

@@ -116,6 +116,7 @@ describe("discoverAgents", () => {
 			reasoning_effort: "high",
 			depth: 2,
 			canSpawn: "Explore, Planner",
+			skills: "tdd, diagnose",
 		});
 
 		const result = discoverAgents(tempDir, "project");
@@ -127,8 +128,32 @@ describe("discoverAgents", () => {
 		expect(agent.reasoningEffort).toBe("high");
 		expect(agent.depth).toBe(2);
 		expect(agent.canSpawn).toEqual(["Explore", "Planner"]);
+		expect(agent.skills).toEqual(["tdd", "diagnose"]);
 		expect(agent.source).toBe("project");
 		expect(agent.systemPrompt).toContain("You are FullAgent");
+	});
+
+	it("parses skills field with tri-state semantics", () => {
+		// Missing skills: should be undefined
+		writeAgent(agentsDir, "NoSkills", "Agent with no skills field");
+		// Blank skills: comma-string that resolves to empty → []
+		writeAgent(agentsDir, "BlankSkills", "Agent with blank skills", { skills: "" });
+		// Comma-separated skills
+		writeAgent(agentsDir, "FilteredSkills", "Agent with filtered skills", { skills: "tdd, diagnose" });
+
+		const result = discoverAgents(tempDir, "project");
+
+		const noSkills = result.agents.find((a) => a.name === "noskills")!;
+		expect(noSkills).toBeDefined();
+		expect(noSkills.skills).toBeUndefined();
+
+		const blankSkills = result.agents.find((a) => a.name === "blankskills")!;
+		expect(blankSkills).toBeDefined();
+		expect(blankSkills.skills).toEqual([]);
+
+		const filteredSkills = result.agents.find((a) => a.name === "filteredskills")!;
+		expect(filteredSkills).toBeDefined();
+		expect(filteredSkills.skills).toEqual(["tdd", "diagnose"]);
 	});
 
 	it("project agents override same-named agents from other sources", () => {

@@ -68,6 +68,7 @@ Frontmatter fields:
 | `reasoning_effort` | string | Thinking/reasoning effort level |
 | `depth` | number | Spawn allowance — how many more Task levels this agent permits |
 | `canSpawn` | comma-separated | Allowlist of agent types this agent may delegate to |
+| `skills` | comma-separated | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
 
 Supported prompt variables:
 

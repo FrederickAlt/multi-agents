@@ -77,10 +77,16 @@ function formatContextFiles(parts: PromptParts): string {
 	return files.map((file) => `## ${file.path}\n\n${file.content}`).join("\n\n");
 }
 
-function formatSkills(parts: PromptParts): string {
-	const skills = parts.skills ?? [];
-	if (skills.length === 0) return "(none)";
-	return skills.map((skill) => `- ${skill.name}${skill.description ? `: ${skill.description}` : ""}`).join("\n");
+function formatSkills(parts: PromptParts, agentSkills?: string[]): string {
+	const allSkills = parts.skills ?? [];
+	// agentSkills: undefined → all skills; [] → none; ["a","b"] → filter
+	const filtered = agentSkills === undefined
+		? allSkills
+		: agentSkills.length === 0
+			? []
+			: allSkills.filter((s) => agentSkills.includes(s.name));
+	if (filtered.length === 0) return "(none)";
+	return filtered.map((skill) => `- ${skill.name}${skill.description ? `: ${skill.description}` : ""}`).join("\n");
 }
 
 /**
@@ -93,7 +99,7 @@ export function buildTemplateValues(context: RenderContext): Record<string, stri
 		tools: formatTools(context.parts),
 		guidelines: formatGuidelines(context.parts),
 		context_files: formatContextFiles(context.parts),
-		skills: formatSkills(context.parts),
+		skills: formatSkills(context.parts, context.agent.skills),
 		cwd: context.parts.cwd ?? "",
 		date: today(),
 		agent_name: context.agent.name,

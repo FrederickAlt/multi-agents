@@ -385,6 +385,60 @@ describe("renderPromptTemplate", () => {
 		expect(result).not.toContain("(none)");
 	});
 
+	it("renders all skills when agent.skills is undefined (missing)", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, skills: undefined, systemPrompt: "Skills:\n{{skills}}" },
+			parts: {
+				...baseParts,
+				skills: [
+					{ name: "tdd", description: "Test-driven development" },
+					{ name: "diagnose", description: "Structured debugging" },
+				],
+			},
+		};
+		const result = renderPromptTemplate(ctx);
+		expect(result).toContain("- tdd: Test-driven development");
+		expect(result).toContain("- diagnose: Structured debugging");
+		expect(result).not.toContain("(none)");
+	});
+
+	it("renders no skills when agent.skills is an empty array", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, skills: [], systemPrompt: "Skills:\n{{skills}}" },
+			parts: {
+				...baseParts,
+				skills: [
+					{ name: "tdd" },
+					{ name: "diagnose" },
+				],
+			},
+		};
+		const result = renderPromptTemplate(ctx);
+		expect(result).toContain("(none)");
+		expect(result).not.toContain("- tdd");
+		expect(result).not.toContain("- diagnose");
+	});
+
+	it("renders only matching skills when agent.skills is a non-empty array", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, skills: ["tdd"], systemPrompt: "Skills:\n{{skills}}" },
+			parts: {
+				...baseParts,
+				skills: [
+					{ name: "tdd", description: "TDD workflow" },
+					{ name: "diagnose", description: "Bug hunting" },
+				],
+			},
+		};
+		const result = renderPromptTemplate(ctx);
+		expect(result).toContain("- tdd: TDD workflow");
+		expect(result).not.toContain("diagnose");
+		expect(result).not.toContain("(none)");
+	});
+
 	it("throws on unknown placeholder variables", () => {
 		const ctx = {
 			...baseContext,
@@ -425,6 +479,33 @@ describe("renderPromptTemplate", () => {
 
 		expect(result).toContain("You are TestAgent");
 		expect(result).toContain("Shared for TestAgent in /home/user/project");
+	});
+
+	it("applies skills filter to prompt-part fragments via shared RenderContext", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, skills: ["tdd"], systemPrompt: "Main skills:\n{{skills}}" },
+			parts: {
+				...baseParts,
+				skills: [
+					{ name: "tdd", description: "TDD workflow" },
+					{ name: "diagnose", description: "Bug hunting" },
+				],
+			},
+		};
+		const result = renderComposedAgentSystemPrompt(ctx, [
+			{
+				name: "skills-part",
+				description: "prompt part using skills",
+				systemPrompt: "Part skills:\n{{skills}}",
+				source: "builtin",
+				filePath: "/tmp/skills-part.md",
+			},
+		]);
+		// Both agent template and prompt-part should see the same filtered skills.
+		expect(result).toContain("Main skills:\n- tdd: TDD workflow");
+		expect(result).toContain("Part skills:\n- tdd: TDD workflow");
+		expect(result).not.toContain("diagnose");
 	});
 
 	it("does not preserve Pi's hidden generic suffix when composing an Agent definition prompt", () => {

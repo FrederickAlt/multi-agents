@@ -33,7 +33,7 @@ export interface RawMarkdownDefinition {
 	body: string;
 	source: MarkdownDefinitionSource;
 	filePath: string;
-	frontmatter: Record<string, string | number>;
+	frontmatter: Record<string, unknown>;
 }
 
 /**
@@ -167,10 +167,10 @@ export function loadDefinitionsFromDir(
 			continue;
 		}
 
-		let frontmatter: Record<string, string | number>;
+		let frontmatter: Record<string, unknown>;
 		let body: string;
 		try {
-			const parsed = parseFrontmatter<Record<string, string | number>>(content);
+			const parsed = parseFrontmatter<Record<string, unknown>>(content);
 			frontmatter = parsed.frontmatter;
 			body = parsed.body;
 		} catch (err) {

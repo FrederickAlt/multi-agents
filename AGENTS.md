@@ -100,6 +100,7 @@ Internally calls `discoverMarkdownDefinitions` and maps `RawMarkdownDefinition` 
 | `reasoning_effort` | string | Thinking/reasoning effort level |
 | `depth` | number | Maximum nesting depth this agent can spawn (0 = no spawns) |
 | `canSpawn` | comma-separated string | Allowlist of agent types this agent may spawn |
+| `skills` | comma-separated string | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
 
 Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`.
 
@@ -135,6 +136,15 @@ Every agent has an optional `depth` field. The built-in `default` Root agent use
 Agent and prompt-part system prompts support 8 required variables: `{{tools}}`, `{{guidelines}}`, `{{context_files}}`, `{{skills}}`, `{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`. Unknown variables throw at render time. Internal tree metadata such as parent IDs and depth is intentionally not available as prompt variables.
 
 Variable substitution is performed by `renderTemplateString(template, values, label)` which replaces `{{variable}}` placeholders against a values map. `renderPromptTemplate(context)` renders the agent's own markdown body. `renderSubagentSystemPrompt(context, promptParts)` renders the agent prompt followed by zero or more resolved prompt-part fragments, each rendered independently and joined with double-newline separators.
+
+### Skill prompt filtering
+
+Each agent definition can specify a `skills` frontmatter field with tri-state semantics:
+- **Missing** (`skills` field absent) → all inherited skill prompt content appears in `{{skills}}`
+- **Blank** (`skills:` with no value) → no skill prompt content (agent receives no skill guidance in its prompt)
+- **Comma-separated values** (`skills: tdd, diagnose`) → only matching named skills appear in `{{skills}}`
+
+Skill filtering affects prompt content only. It does not disable runtime skill commands, tools, extensions, or user-invoked skills. The same filtered skill list is visible throughout the render context, including agent definition bodies and prompt-part fragments.
 
 ### Prompt parts
 
