@@ -250,6 +250,136 @@ function setGlobalSelectedAgent(name: string | undefined): void {
 	}
 }
 
+type TaskToolRunner = (
+	params: TaskExecuteParams,
+	signal: AbortSignal | undefined,
+	onUpdate: ((partial: TaskResult) => void) | undefined,
+	ctx: any,
+	runtime: RuntimeContext,
+) => Promise<TaskResult>;
+
+function updateActiveTools(
+	targetPi: ExtensionAPI,
+	update: (activeTools: string[]) => string[],
+): void {
+	const api = targetPi as Partial<Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">>;
+	if (typeof api.getActiveTools !== "function" || typeof api.setActiveTools !== "function") return;
+
+	try {
+		const activeTools = api.getActiveTools();
+		const nextTools = update(activeTools);
+		const unchanged = nextTools.length === activeTools.length
+			&& nextTools.every((name, index) => name === activeTools[index]);
+		if (!unchanged) api.setActiveTools(nextTools);
+	} catch {
+		// getActiveTools/setActiveTools are unavailable while an inline extension
+		// is loading before the AgentSession runtime is bound. In that phase there
+		// cannot be a stale active Task in this runtime; post-bind calls will update
+		// active tools explicitly.
+	}
+}
+
+function deactivateTaskTool(targetPi: ExtensionAPI): void {
+	updateActiveTools(targetPi, (activeTools) => activeTools.filter((name) => name !== "Task"));
+}
+
+function activateTaskTool(targetPi: ExtensionAPI): void {
+	updateActiveTools(targetPi, (activeTools) => (
+		activeTools.includes("Task") ? activeTools : [...activeTools, "Task"]
+	));
+}
+
+export function configureTaskToolForRuntime(
+	targetPi: ExtensionAPI,
+	runtime: RuntimeContext,
+	cwd: string,
+	runTask: TaskToolRunner,
+): void {
+	const discovery = discoverAgents(cwd, DEFAULT_AGENT_SCOPE);
+
+	// Filter to only what THIS agent is allowed to spawn.
+	// DepthPolicy is the single source of truth.
+	const policy = runtime.depthPolicy;
+	const allowed = discovery.agents.filter(a => checkTaskAllowed(policy, a.name).allowed);
+
+	// If this runtime previously registered Task, leaving it active would let
+	// the model call a stale tool after the policy has changed. Pi has no
+	// unregisterTool API, so deactivate Task when the current policy exposes no
+	// spawnable targets.
+	if (allowed.length === 0) {
+		deactivateTaskTool(targetPi);
+		return;
+	}
+
+	const agentNames = allowed.map(a => a.name);
+	const descriptionText = allowed
+		.map(a => `${a.name}: ${a.description}`)
+		.join(". ");
+
+	const params = Type.Object({
+		description: Type.String({ description: "Short 3-5 word description of the task." }),
+		prompt: Type.String({
+			description: "Full task description for the agent to perform autonomously. The agent reports back once.",
+		}),
+		subagent_type: Type.Enum(agentNames, {
+			description: `Which sub-agent to delegate to. ${descriptionText}`,
+		}),
+		resume: Type.Optional(Type.String({
+			description: "Short hex ID of a previous sub-agent to continue.",
+		})),
+		cwd: Type.Optional(Type.String({
+			description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
+		})),
+	});
+
+	targetPi.registerTool({
+		name: "Task",
+		label: "Task",
+		description:
+			"Delegate an autonomous task to a configured persistent sub-agent. Use resume to continue a previous sub-agent by ID.",
+		promptSnippet: "Run or resume a configured persistent sub-agent for an autonomous task",
+		promptGuidelines: [
+			"Use Task to delegate independent work to a specialized sub-agent.",
+			"Call Task multiple times in the same turn when independent sub-agent tasks can run in parallel.",
+			"Use Task resume with a returned sub-agent ID when follow-up work needs the same transcript.",
+		],
+		parameters: params,
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			return runTask(params, signal, onUpdate, ctx, runtime);
+		},
+		renderCall(args, theme) {
+			const resume = args.resume ? ` resume ${args.resume}` : " new";
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("Task "))}${theme.fg("accent", args.subagent_type)}${theme.fg("muted", resume)}\n  ${theme.fg("dim", args.description)}`,
+				0,
+				0,
+			);
+		},
+		renderResult(result, { expanded }, theme) {
+			const details = result.details as TaskDetails | undefined;
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "(no output)";
+			if (!expanded || !details) return new Text(text, 0, 0);
+			const container = new Container();
+			container.addChild(
+				new Text(
+					`${theme.fg("toolTitle", theme.bold(details.displayName ?? "Task"))}${details.id ? theme.fg("muted", ` ${details.id}`) : ""}`,
+					0,
+					0,
+				),
+			);
+			if (details.description) container.addChild(new Text(theme.fg("dim", details.description), 0, 0));
+			if (details.warnings.length > 0) {
+				container.addChild(new Spacer(1));
+				container.addChild(new Text(theme.fg("warning", details.warnings.join("\n")), 0, 0));
+			}
+			container.addChild(new Spacer(1));
+			container.addChild(new Markdown(details.output || text, 0, 0, getMarkdownTheme()));
+			return container;
+		},
+	});
+	activateTaskTool(targetPi);
+}
+
 export default function (pi: ExtensionAPI) {
 	let store: MetadataStore | undefined;
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
@@ -289,12 +419,6 @@ export default function (pi: ExtensionAPI) {
 		}).agent;
 	};
 
-	const makeTaskToolFactory = (runtime: RuntimeContext): ExtensionFactory => {
-		return (subPi) => {
-			registerTaskTool(subPi, runtime);
-		};
-	};
-
 	const makeAgentRuntimeFactory = (
 		agent: AgentConfig,
 		runtime: RuntimeContext,
@@ -302,7 +426,7 @@ export default function (pi: ExtensionAPI) {
 		contextFiles?: Array<{ path: string; content: string }>,
 	): ExtensionFactory => {
 		return (subPi) => {
-			registerTaskTool(subPi, runtime);
+			registerTaskTool(subPi, runtime, effectiveCwd);
 
 			// Discover prompt parts for this sub-agent's effective working directory.
 			const promptPartDefs = discoverPromptParts(effectiveCwd, "both").parts;
@@ -381,83 +505,8 @@ export default function (pi: ExtensionAPI) {
 		return controller.execute(params, executeContext);
 	};
 
-	function registerTaskTool(targetPi: ExtensionAPI, runtime: RuntimeContext): void {
-		const discovery = discoverAgents(
-			runtime.store?.ctx?.sessionDir ?? process.cwd(),
-			DEFAULT_AGENT_SCOPE,
-		);
-
-		// Filter to only what THIS agent is allowed to spawn.
-		// DepthPolicy is the single source of truth.
-		const policy = runtime.depthPolicy;
-		const allowed = discovery.agents.filter(a => checkTaskAllowed(policy, a.name).allowed);
-
-		const agentNames = allowed.map(a => a.name);
-		const descriptionText = allowed
-			.map(a => `${a.name}: ${a.description}`)
-			.join(". ");
-
-		const params = Type.Object({
-			description: Type.String({ description: "Short 3-5 word description of the task." }),
-			prompt: Type.String({
-				description: "Full task description for the agent to perform autonomously. The agent reports back once.",
-			}),
-			subagent_type: Type.Enum(agentNames, {
-				description: `Which sub-agent to delegate to. ${descriptionText}`,
-			}),
-			resume: Type.Optional(Type.String({
-				description: "Short hex ID of a previous sub-agent to continue.",
-			})),
-			cwd: Type.Optional(Type.String({
-				description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
-			})),
-		});
-
-		targetPi.registerTool({
-			name: "Task",
-			label: "Task",
-			description:
-				"Delegate an autonomous task to a configured persistent sub-agent. Use resume to continue a previous sub-agent by ID.",
-			promptSnippet: "Run or resume a configured persistent sub-agent for an autonomous task",
-			promptGuidelines: [
-				"Use Task to delegate independent work to a specialized sub-agent.",
-				"Call Task multiple times in the same turn when independent sub-agent tasks can run in parallel.",
-				"Use Task resume with a returned sub-agent ID when follow-up work needs the same transcript.",
-			],
-			parameters: params,
-			async execute(_toolCallId, params, signal, onUpdate, ctx) {
-				return runTask(params, signal, onUpdate, ctx, runtime);
-			},
-			renderCall(args, theme) {
-				const resume = args.resume ? ` resume ${args.resume}` : " new";
-				return new Text(
-					`${theme.fg("toolTitle", theme.bold("Task "))}${theme.fg("accent", args.subagent_type)}${theme.fg("muted", resume)}\n  ${theme.fg("dim", args.description)}`,
-					0,
-					0,
-				);
-			},
-			renderResult(result, { expanded }, theme) {
-				const details = result.details as TaskDetails | undefined;
-				const text = result.content[0]?.type === "text" ? result.content[0].text : "(no output)";
-				if (!expanded || !details) return new Text(text, 0, 0);
-				const container = new Container();
-				container.addChild(
-					new Text(
-						`${theme.fg("toolTitle", theme.bold(details.displayName ?? "Task"))}${details.id ? theme.fg("muted", ` ${details.id}`) : ""}`,
-						0,
-						0,
-					),
-				);
-				if (details.description) container.addChild(new Text(theme.fg("dim", details.description), 0, 0));
-				if (details.warnings.length > 0) {
-					container.addChild(new Spacer(1));
-					container.addChild(new Text(theme.fg("warning", details.warnings.join("\n")), 0, 0));
-				}
-				container.addChild(new Spacer(1));
-				container.addChild(new Markdown(details.output || text, 0, 0, getMarkdownTheme()));
-				return container;
-			},
-		});
+	function registerTaskTool(targetPi: ExtensionAPI, runtime: RuntimeContext, cwd: string): void {
+		configureTaskToolForRuntime(targetPi, runtime, cwd, runTask);
 	}
 
 	pi.registerFlag("agent", {
@@ -471,8 +520,6 @@ export default function (pi: ExtensionAPI) {
 		type: "string",
 		default: DEFAULT_ROOT_AGENT_NAME,
 	});
-
-	registerTaskTool(pi, mainRuntime);
 
 	pi.on("session_start", async (_event, ctx) => {
 		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
@@ -495,6 +542,10 @@ export default function (pi: ExtensionAPI) {
 		const rootAgent = resolveRootAgentForSession(ctx.cwd, activeStore.selectedMainAgent);
 		mainRuntime.treeDepth = 0;
 		mainRuntime.depthPolicy = selectedRootPolicy(rootAgent);
+
+		// Reconcile Task with the resolved Root policy so DepthPolicy
+		// informs both the schema enum and active-tool availability.
+		registerTaskTool(pi, mainRuntime, ctx.cwd);
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
@@ -512,6 +563,12 @@ export default function (pi: ExtensionAPI) {
 		mainRuntime.store = store;
 		mainRuntime.treeDepth = 0;
 		mainRuntime.depthPolicy = selectedRootPolicy(agent);
+
+		// Reconcile Task with the current Root policy (before_agent_start
+		// acts as a safety net when session_start was skipped or
+		// the policy changed between events).
+		registerTaskTool(pi, mainRuntime, ctx.cwd);
+
 		const pParts = buildPromptPartsFromOptions(event.systemPromptOptions);
 		const promptPartDefs = discoverPromptParts(ctx.cwd, "both").parts;
 		const prompt = renderComposedAgentSystemPrompt({

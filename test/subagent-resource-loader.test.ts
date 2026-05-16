@@ -88,14 +88,22 @@ Explicit context:
 		const { default: taskExtension } = await import("../subagent/index.js");
 		const tools: any[] = [];
 		const flags = new Map<string, string | boolean | undefined>();
+		const handlers = new Map<string, any>();
 		const pi = {
-			on: vi.fn(),
+			on: (event: string, handler: any) => handlers.set(event, handler),
 			registerTool: (tool: any) => tools.push(tool),
 			registerCommand: vi.fn(),
 			registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
 			getFlag: (name: string) => flags.get(name),
 		} as any;
 		taskExtension(pi);
+
+		// Fire before_agent_start to trigger Task registration via the resolved policy
+		const sm = makeSessionManager(sessionDir, "root-session");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "base prompt",
+			systemPromptOptions: { cwd: projectDir },
+		}, { cwd: projectDir, sessionManager: sm });
 
 		const taskTool = tools.find((tool) => tool.name === "Task");
 		expect(taskTool).toBeDefined();

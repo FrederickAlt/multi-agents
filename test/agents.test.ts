@@ -156,6 +156,29 @@ describe("discoverAgents", () => {
 		expect(filteredSkills.skills).toEqual(["tdd", "diagnose"]);
 	});
 
+	it("parses canSpawn field with tri-state semantics", () => {
+		// Missing canSpawn: should be undefined (unrestricted)
+		writeAgent(agentsDir, "Unrestricted", "Agent with no canSpawn field");
+		// Blank canSpawn: comma-string that resolves to empty → [] (no spawns)
+		writeAgent(agentsDir, "NoSpawns", "Agent with blank canSpawn", { canSpawn: "" });
+		// Comma-separated canSpawn
+		writeAgent(agentsDir, "LimitedSpawns", "Agent with filtered canSpawn", { canSpawn: "explorer, planner" });
+
+		const result = discoverAgents(tempDir, "project");
+
+		const unrestricted = result.agents.find((a) => a.name === "unrestricted")!;
+		expect(unrestricted).toBeDefined();
+		expect(unrestricted.canSpawn).toBeUndefined();
+
+		const noSpawns = result.agents.find((a) => a.name === "nospawns")!;
+		expect(noSpawns).toBeDefined();
+		expect(noSpawns.canSpawn).toEqual([]);
+
+		const limitedSpawns = result.agents.find((a) => a.name === "limitedspawns")!;
+		expect(limitedSpawns).toBeDefined();
+		expect(limitedSpawns.canSpawn).toEqual(["explorer", "planner"]);
+	});
+
 	it("project agents override same-named agents from other sources", () => {
 		writeAgent(agentsDir, "explore", "Project override Explore");
 

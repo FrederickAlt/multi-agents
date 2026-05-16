@@ -90,10 +90,19 @@ function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 		.split(",")
 		.map((t: string) => t.trim())
 		.filter(Boolean);
-	const canSpawn = String(fm.canSpawn ?? "")
-		.split(",")
-		.map((t: string) => t.trim())
-		.filter(Boolean);
+
+	// canSpawn: tri-state — undefined when missing (unrestricted), [] when blank (no spawns), string[] when values
+	let canSpawn: string[] | undefined;
+	if (fm.canSpawn === undefined) {
+		canSpawn = undefined; // unrestricted
+	} else if (fm.canSpawn === null || String(fm.canSpawn).trim() === "") {
+		canSpawn = []; // blank → no spawnable agents
+	} else {
+		canSpawn = String(fm.canSpawn)
+			.split(",")
+			.map((t: string) => t.trim())
+			.filter(Boolean);
+	}
 
 	// skills: tri-state — undefined when missing, [] when blank, string[] when values
 	let skills: string[] | undefined;
@@ -124,7 +133,7 @@ function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 		extensions: extensions.length > 0 ? extensions : undefined,
 		model: fm.model ? String(fm.model) : undefined,
 		depth: Number.isFinite(depth) ? depth : undefined,
-		canSpawn: canSpawn.length > 0 ? canSpawn : undefined,
+		canSpawn,
 		skills,
 		systemPrompt: raw.body,
 		source: raw.source,

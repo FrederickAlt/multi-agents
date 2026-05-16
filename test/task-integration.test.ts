@@ -14,7 +14,9 @@ import {
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { getModel } from "@mariozechner/pi-ai";
-import taskExtension from "../subagent/index.js";
+import taskExtension, { configureTaskToolForRuntime } from "../subagent/index.js";
+import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
+import type { AgentConfig } from "../subagent/agents.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,16 +31,22 @@ function writeFile(p: string, content: string) {
 	wfs(p, content, "utf-8");
 }
 
-function createFakeExtensionApi() {
+function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 	const handlers = new Map<string, any>();
 	const commands = new Map<string, any>();
 	const flags = new Map<string, string | boolean | undefined>();
+	const registeredTools: any[] = [];
+	let activeTools = [...(options.activeTools ?? ["read", "bash", "edit", "write"])];
 	const pi = {
 		on: (event: string, handler: any) => handlers.set(event, handler),
-		registerTool: () => {},
+		registerTool: (tool: any) => { registeredTools.push(tool); },
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
 		getFlag: (name: string) => flags.get(name),
+		getActiveTools: () => [...activeTools],
+		setActiveTools: (names: string[]) => { activeTools = [...names]; },
+		_registeredTools: registeredTools,
+		_getActiveTools: () => [...activeTools],
 	} as any;
 	return { pi, handlers, commands, flags };
 }
@@ -49,6 +57,21 @@ function makeSessionManager(dir: string, sessionId: string) {
 		getSessionId: () => sessionId,
 		getSessionFile: () => join(dir, `${sessionId}.jsonl`),
 	};
+}
+
+function makeAgent(name: string, overrides: Partial<Pick<AgentConfig, "depth" | "canSpawn">>): AgentConfig {
+	return {
+		name,
+		description: `${name} description`,
+		systemPrompt: `${name} prompt`,
+		source: "project",
+		filePath: join(tmpdir(), `${name}.md`),
+		...overrides,
+	};
+}
+
+function latestTaskTool(pi: any) {
+	return [...((pi as any)._registeredTools ?? [])].reverse().find((tool: any) => tool.name === "Task");
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +123,9 @@ describe("extension loading", () => {
 			resourceLoader,
 		});
 
+		// Bind extensions so session_start fires and registers Task via the resolved policy
+		await session.bindExtensions({});
+
 		const allTools = session.getAllTools();
 		const taskTool = allTools.find((t) => t.name === "Task");
 		expect(taskTool).toBeDefined();
@@ -132,6 +158,9 @@ describe("extension loading", () => {
 			sessionManager,
 			resourceLoader,
 		});
+
+		// Bind extensions so session_start fires and registers Task via the resolved policy
+		await session.bindExtensions({});
 
 		const taskTool = session.getAllTools().find((t) => t.name === "Task");
 		expect(taskTool).toBeDefined();
@@ -239,5 +268,172 @@ describe("extension loading", () => {
 		expect(flags.get("defaultRootAgent")).toBe("default");
 		expect(result?.systemPrompt).toContain("software architect and planning specialist");
 		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
+	});
+
+	// ------------------------------------------------------------------
+	// Task hiding when DepthPolicy has no spawnable targets (issue #13)
+	// ------------------------------------------------------------------
+
+	it("hides Task when the resolved Root agent has depth 0", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "leaf-root.md"), `---\ndescription: Leaf Root agent with depth 0\ndepth: 0\n---\n\nLeaf Root Marker\n`);
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("defaultRootAgent", "leaf-root");
+
+		const sessionManager = makeSessionManager(tempDir, "leaf-root-session");
+		// Fire before_agent_start so the Root agent is resolved and Task registration runs
+		await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+
+		// Verify Task was NOT registered (no spawnable agents)
+		const registeredTools = (pi as any)._registeredTools ?? [];
+		const taskTool = registeredTools.find((t: any) => t.name === "Task");
+		expect(taskTool).toBeUndefined();
+	});
+
+	it("hides Task when the resolved Root agent has empty canSpawn", async () => {
+		// Bare `canSpawn:` (null in YAML) or `canSpawn: ""` both produce an empty array → no spawnable agents
+		writeFile(join(tempDir, ".pi", "agents", "restrictive-root.md"), `---\ndescription: Restrictive Root agent\ndepth: 1\ncanSpawn:\n---\n\nRestrictive Root Marker\n`);
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("defaultRootAgent", "restrictive-root");
+
+		const sessionManager = makeSessionManager(tempDir, "restrictive-root-session");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+
+		const registeredTools = (pi as any)._registeredTools ?? [];
+		const taskTool = registeredTools.find((t: any) => t.name === "Task");
+		expect(taskTool).toBeUndefined();
+	});
+
+	it("registers Task when the resolved Root agent has spawnable targets", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\n---\n\nSpawning Root Marker\n`);
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("defaultRootAgent", "spawning-root");
+
+		const sessionManager = makeSessionManager(tempDir, "spawning-root-session");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+
+		const registeredTools = (pi as any)._registeredTools ?? [];
+		const taskTool = registeredTools.find((t: any) => t.name === "Task");
+		expect(taskTool).toBeDefined();
+	});
+
+	it("Task subagent_type schema only offers spawnable agent types", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "filtered-root.md"), `---\ndescription: Filtered Root agent\ndepth: 1\ncanSpawn: explorer\n---\n\nFiltered Root Marker\n`);
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("defaultRootAgent", "filtered-root");
+
+		const sessionManager = makeSessionManager(tempDir, "filtered-root-session");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+
+		const taskTool = latestTaskTool(pi);
+		expect(taskTool).toBeDefined();
+		// The enum should only include "explorer"
+		const subagentType = taskTool?.parameters?.properties?.subagent_type;
+		expect(subagentType).toBeDefined();
+		// TypeBox enum fields have a `enum` property with the allowed values
+		const enumValues: string[] = subagentType?.enum ?? [];
+		expect(enumValues).toEqual(["explorer"]);
+	});
+
+	it("deactivates a stale Task tool when a later Root policy has no spawnable targets", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\ncanSpawn: explorer\n---\n\nSpawning Root Marker\n`);
+		writeFile(join(tempDir, ".pi", "agents", "leaf-root.md"), `---\ndescription: Leaf Root agent\ndepth: 0\n---\n\nLeaf Root Marker\n`);
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = makeSessionManager(tempDir, "stale-root-session");
+		flags.set("defaultRootAgent", "spawning-root");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+		expect((pi as any)._getActiveTools()).toContain("Task");
+
+		flags.set("defaultRootAgent", "leaf-root");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+
+		expect(latestTaskTool(pi)).toBeDefined();
+		expect((pi as any)._getActiveTools()).not.toContain("Task");
+	});
+
+	it("does not expose Task for a child agent with depth 0", async () => {
+		const parentPolicy = selectedRootPolicy(makeAgent("root", { depth: 2 }));
+		const childAgent = makeAgent("leaf-child", { depth: 0, canSpawn: ["explorer"] });
+		const runtime = {
+			parentAgentId: "child-id",
+			treeDepth: 1,
+			depthPolicy: childPolicy(parentPolicy, childAgent, 1),
+		};
+		const { pi } = createFakeExtensionApi({ activeTools: ["read", "Task"] });
+
+		configureTaskToolForRuntime(pi, runtime, tempDir, async () => ({
+			content: [{ type: "text", text: "unused" }],
+			details: { warnings: [] },
+		}));
+
+		expect(latestTaskTool(pi)).toBeUndefined();
+		expect((pi as any)._getActiveTools()).not.toContain("Task");
+	});
+
+	it("exposes Task for a child agent with allowed targets and filters the enum", async () => {
+		const parentPolicy = selectedRootPolicy(makeAgent("root", { depth: 3 }));
+		const childAgent = makeAgent("delegating-child", { depth: 1, canSpawn: ["explorer", "reviewer"] });
+		const runtime = {
+			parentAgentId: "child-id",
+			treeDepth: 1,
+			depthPolicy: childPolicy(parentPolicy, childAgent, 1),
+		};
+		const { pi } = createFakeExtensionApi();
+
+		configureTaskToolForRuntime(pi, runtime, tempDir, async () => ({
+			content: [{ type: "text", text: "unused" }],
+			details: { warnings: [] },
+		}));
+
+		const taskTool = latestTaskTool(pi);
+		expect(taskTool).toBeDefined();
+		expect((pi as any)._getActiveTools()).toContain("Task");
+		expect(taskTool?.parameters?.properties?.subagent_type?.enum ?? []).toEqual(["explorer", "reviewer"]);
+	});
+
+	it("registers Task from the project cwd even when the session dir is elsewhere", async () => {
+		writeFile(join(tempDir, ".pi", "agents", "project-root.md"), `---\ndescription: Project Root agent\ndepth: 1\ncanSpawn: project-child\n---\n\nProject Root Marker\n`);
+		writeFile(join(tempDir, ".pi", "agents", "project-child.md"), `---\ndescription: Project-only child agent\ndepth: 0\n---\n\nProject Child Marker\n`);
+		const sessionDir = join(tempDir, "sessions-outside-cwd");
+		makeDir(sessionDir);
+
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("defaultRootAgent", "project-root");
+
+		const sessionManager = makeSessionManager(sessionDir, "cwd-registration-session");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "Pi base prompt",
+			systemPromptOptions: { cwd: tempDir },
+		}, { cwd: tempDir, sessionManager });
+
+		const registeredTools = (pi as any)._registeredTools ?? [];
+		const taskTool = registeredTools.find((t: any) => t.name === "Task");
+		expect(taskTool).toBeDefined();
+		const enumValues: string[] = taskTool?.parameters?.properties?.subagent_type?.enum ?? [];
+		expect(enumValues).toEqual(["project-child"]);
 	});
 });

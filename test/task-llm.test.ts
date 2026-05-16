@@ -96,6 +96,9 @@ CRITICAL SAFETY RULES:
 		});
 		session = result.session;
 
+		// Bind extensions so session_start fires and registers Task via the resolved policy
+		await session.bindExtensions({});
+
 		const taskTool = session.agent.state.tools.find((t: any) => t.name === "Task");
 		expect(taskTool).toBeDefined();
 
@@ -141,6 +144,9 @@ CRITICAL SAFETY RULES:
 			resourceLoader,
 		});
 		session = result.session;
+
+		// Bind extensions so session_start fires and registers Task via the resolved policy
+		await session.bindExtensions({});
 
 		const taskTool = session.agent.state.tools.find((t: any) => t.name === "Task");
 		expect(taskTool).toBeDefined();
