@@ -9,8 +9,9 @@ Pi extension for delegating work to persistent configured sub-agents.
 - Sub-agents can be resumed with short hex IDs
 - Human-readable display names such as `Explore Tom`
 - Configurable agent markdown files with prompt variables
+- Prompt-part fragments appended to sub-agent system prompts (tools, runtime context, project-specific additions)
 - Main/user-facing agent persona via `/agent <name>` or `--agent <name>`
-- Prompt inspection via `/dump-prompt [agentName]`
+- Prompt inspection via Pi's <code>dump-prompt</code> command.
 
 ## Task Tool
 
@@ -82,15 +83,48 @@ Supported prompt variables:
 
 Unknown variables are errors.
 
+## Prompt Parts
+
+In addition to the agent's own system prompt, sub-agents receive prompt-part fragments. Prompt parts are independent `.md` files with YAML frontmatter that get resolved separately and appended to the sub-agent's system prompt.
+
+Locations (same precedence as agents: bundled → user → project):
+- `subagent/prompt-parts/*.md` (bundled with the extension)
+- `~/.pi/agent/prompt-parts/*.md` (user)
+- `.pi/prompt-parts/*.md` (project, nearest walking up from CWD)
+
+A prompt-part file looks like:
+
+```markdown
+---
+description: Shared tool information for all subagents
+---
+
+## Available Tools
+
+{{tools}}
+
+## Tool Guidelines
+
+{{guidelines}}
+```
+
+Prompt parts support the same `{{variables}}` as agent definitions. Each part is rendered independently with the same rendering context, then joined with double-newline separators after the main agent prompt.
+
+**Prompt parts only apply to Task sub-agents**, not the root/main agent. They are discovered per-sub-agent from its effective working directory, so project-specific prompt-parts can extend or override built-in ones.
+
+Built-in prompt parts (shipped with the extension):
+- `010-tools.md` — shared tool information
+- `020-runtime-context.md` — runtime context (cwd, date, agent, depth, parent ID)
+
 ## Commands
 
 ```text
 /agent explorer
-/dump-prompt
-/dump-prompt explorer
 ```
 
-`/agent` selects the main user-facing persona. `/dump-prompt` prints either the current main prompt or a configured agent prompt with variables resolved.
+`/agent` selects the main user-facing persona.
+
+Use Pi's built-in system prompt dump to inspect the current system prompt.
 
 ## Included Agents
 
@@ -102,6 +136,13 @@ Unknown variables are errors.
 | `reviewer` | Code review specialist for quality and security analysis | 0 |
 
 All built-in agents have `depth: 0` and cannot spawn further sub-agents.
+
+## Included Prompt Parts
+
+| Part | Purpose |
+| --- | --- |
+| `010-tools` | Shared tool information for all sub-agents (`{{tools}}`, `{{guidelines}}`) |
+| `020-runtime-context` | Runtime context for all sub-agents (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`, `{{parent_agent_id}}`, `{{depth}}`) |
 
 ## Persistence
 

@@ -5,14 +5,21 @@
  * validation diagnostics for skipped definitions, lookup by name,
  * and formatted agent lists for user-facing messages.
  *
+ * Internally delegates to the generic markdown-definitions loader
+ * for directory walking and frontmatter parsing, then maps raw
+ * definitions to agent-specific configs.
+ *
  * Compatibility wrappers (discoverAgents, formatAgentList) preserve
  * the existing public API for callers that don't need diagnostics.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import {
+	type RawMarkdownDefinition,
+	type MarkdownDiagnostic,
+	discoverMarkdownDefinitions,
+} from "./markdown-definitions.js";
 
 export type AgentScope = "user" | "project" | "both";
 export type AgentSource = "builtin" | "user" | "project";
@@ -53,145 +60,66 @@ export interface AgentRegistryOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Mapping helpers — RawMarkdownDefinition -> AgentConfig
 // ---------------------------------------------------------------------------
 
-function isDirectory(p: string): boolean {
-	try {
-		return fs.statSync(p).isDirectory();
-	} catch {
-		return false;
-	}
+// Path to the bundled agents directory, relative to this source file.
+const BUNDLED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
+
+/**
+ * Map a generic RawMarkdownDefinition to an agent-specific AgentConfig.
+ *
+ * Parses agent-specific frontmatter fields (tools, extensions, model,
+ * reasoning_effort, depth, canSpawn) from the raw frontmatter map.
+ */
+function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
+	const fm = raw.frontmatter;
+
+	const tools = String(fm.tools ?? "")
+		.split(",")
+		.map((t: string) => t.trim())
+		.filter(Boolean);
+	const extensions = String(fm.extensions ?? "")
+		.split(",")
+		.map((t: string) => t.trim())
+		.filter(Boolean);
+	const canSpawn = String(fm.canSpawn ?? "")
+		.split(",")
+		.map((t: string) => t.trim())
+		.filter(Boolean);
+
+	const reasoningEffort = fm.reasoning_effort ? String(fm.reasoning_effort) : undefined;
+	const rawDepth = fm.depth;
+	const depth =
+		rawDepth === undefined || rawDepth === ""
+			? undefined
+			: typeof rawDepth === "number"
+				? rawDepth
+				: Number.parseInt(String(rawDepth), 10);
+
+	return {
+		name: raw.name,
+		description: raw.description,
+		reasoningEffort,
+		tools: tools.length > 0 ? tools : undefined,
+		extensions: extensions.length > 0 ? extensions : undefined,
+		model: fm.model ? String(fm.model) : undefined,
+		depth: Number.isFinite(depth) ? depth : undefined,
+		canSpawn: canSpawn.length > 0 ? canSpawn : undefined,
+		systemPrompt: raw.body,
+		source: raw.source,
+		filePath: raw.filePath,
+	};
 }
 
-function findNearestProjectAgentsDir(cwd: string): string | null {
-	let currentDir = cwd;
-	while (true) {
-		const candidate = path.join(currentDir, ".pi", "agents");
-		if (isDirectory(candidate)) return candidate;
-
-		const parentDir = path.dirname(currentDir);
-		if (parentDir === currentDir) return null;
-		currentDir = parentDir;
-	}
-}
-
-function loadAgentsFromDir(
-	dir: string,
-	source: AgentSource,
-	diagnostics: AgentDiagnostic[],
-): AgentConfig[] {
-	const agents: AgentConfig[] = [];
-
-	if (!fs.existsSync(dir)) {
-		return agents;
-	}
-
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return agents;
-	}
-
-	for (const entry of entries) {
-		if (!entry.name.endsWith(".md")) continue;
-		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-
-		const filePath = path.join(dir, entry.name);
-
-		// Agent name is derived from the filename stem, not from a frontmatter field.
-		const name = path.basename(entry.name, ".md");
-		if (name.startsWith(".")) {
-			diagnostics.push({
-				filePath,
-				level: "warn",
-				reason: `Hidden file "${entry.name}" is skipped; agent names must not start with a dot.`,
-			});
-			continue;
-		}
-
-		let content: string;
-		try {
-			content = fs.readFileSync(filePath, "utf-8");
-		} catch (err) {
-			diagnostics.push({
-				filePath,
-				level: "error",
-				reason: `Cannot read file: ${(err as Error).message}`,
-			});
-			continue;
-		}
-
-		let frontmatter: Record<string, string | number>;
-		let body: string;
-		try {
-			const parsed = parseFrontmatter<Record<string, string | number>>(content);
-			frontmatter = parsed.frontmatter;
-			body = parsed.body;
-		} catch (err) {
-			diagnostics.push({
-				filePath,
-				level: "error",
-				reason: `Malformed YAML frontmatter: ${(err as Error).message}`,
-			});
-			continue;
-		}
-
-		if (!frontmatter.description) {
-			diagnostics.push({
-				filePath,
-				level: "error",
-				reason: `Missing required "description" field in frontmatter.`,
-			});
-			continue;
-		}
-
-		const tools = String(frontmatter.tools ?? "")
-			?.split(",")
-			.map((t: string) => t.trim())
-			.filter(Boolean);
-		const extensions = String(frontmatter.extensions ?? "")
-			?.split(",")
-			.map((t: string) => t.trim())
-			.filter(Boolean);
-		const canSpawn = String(frontmatter.canSpawn ?? "")
-			?.split(",")
-			.map((t: string) => t.trim())
-			.filter(Boolean);
-
-		const reasoningEffort = frontmatter.reasoning_effort ? String(frontmatter.reasoning_effort) : undefined;
-		const rawDepth = frontmatter.depth;
-		const depth =
-			rawDepth === undefined || rawDepth === ""
-				? undefined
-				: typeof rawDepth === "number"
-					? rawDepth
-					: Number.parseInt(String(rawDepth), 10);
-
-		agents.push({
-			name,
-			description: String(frontmatter.description),
-			reasoningEffort,
-			tools: tools && tools.length > 0 ? tools : undefined,
-			extensions: extensions && extensions.length > 0 ? extensions : undefined,
-			model: frontmatter.model ? String(frontmatter.model) : undefined,
-			depth: Number.isFinite(depth) ? depth : undefined,
-			canSpawn: canSpawn && canSpawn.length > 0 ? canSpawn : undefined,
-			systemPrompt: body,
-			source,
-			filePath,
-		});
-	}
-
-	return agents;
+/** Map a generic MarkdownDiagnostic to an agent-specific AgentDiagnostic. */
+function mapToAgentDiagnostic(d: MarkdownDiagnostic): AgentDiagnostic {
+	return { filePath: d.filePath, level: d.level, reason: d.reason };
 }
 
 // ---------------------------------------------------------------------------
 // AgentRegistry
 // ---------------------------------------------------------------------------
-
-const BUNDLED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
 
 /**
  * Encapsulates Sub-agent discovery and lookup.
@@ -225,38 +153,22 @@ export class AgentRegistry {
 	}
 
 	/**
-	 * Run (or re-run) agent discovery. Collects diagnostics for any
-	 * definition files that were skipped. Returns this for chaining.
+	 * Run (or re-run) agent discovery. Delegates to the generic
+	 * markdown-definitions loader, then maps raw definitions to
+	 * agent-specific configs. Returns this for chaining.
 	 */
 	discover(): this {
-		this._diagnostics = [];
+		const result = discoverMarkdownDefinitions({
+			cwd: this._cwd,
+			scope: this._scope,
+			bundledDir: BUNDLED_DIR,
+			userSubdir: "agents",
+			projectSubdir: "agents",
+		});
 
-		const userDir = path.join(getAgentDir(), "agents");
-		const projectAgentsDir = findNearestProjectAgentsDir(this._cwd);
-
-		const bundledAgents = loadAgentsFromDir(BUNDLED_DIR, "builtin", this._diagnostics);
-		const userAgents = this._scope === "project"
-			? []
-			: loadAgentsFromDir(userDir, "user", this._diagnostics);
-		const projectAgents = this._scope === "user" || !projectAgentsDir
-			? []
-			: loadAgentsFromDir(projectAgentsDir, "project", this._diagnostics);
-
-		const agentMap = new Map<string, AgentConfig>();
-
-		// Bundled agents are always the base layer.
-		for (const agent of bundledAgents) agentMap.set(agent.name, agent);
-
-		// User agents override bundled; project agents override both.
-		if (this._scope === "both" || this._scope === "user") {
-			for (const agent of userAgents) agentMap.set(agent.name, agent);
-		}
-		if (this._scope === "both" || this._scope === "project") {
-			for (const agent of projectAgents) agentMap.set(agent.name, agent);
-		}
-
-		this._agents = Array.from(agentMap.values());
-		this._projectAgentsDir = projectAgentsDir;
+		this._agents = result.definitions.map(mapToAgentConfig);
+		this._diagnostics = result.diagnostics.map(mapToAgentDiagnostic);
+		this._projectAgentsDir = result.projectDir;
 		this._discovered = true;
 		return this;
 	}

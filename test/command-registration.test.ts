@@ -123,12 +123,12 @@ describe("command registration docs contract", () => {
 		expect([...registered.keys()].sort()).toEqual(documented);
 	});
 
-	it("registers /dump-prompt with command metadata and completions", async () => {
+	it("registers /agent with command metadata and completions", async () => {
 		const registered = await captureRegisteredCommands(tempDir, agentDir);
-		const dumpPrompt = registered.get("dump-prompt");
+		const agentCmd = registered.get("agent");
 
-		expect(dumpPrompt, "/dump-prompt command was not registered").toBeDefined();
-		expect(dumpPrompt.description).toContain("system prompt");
-		expect(typeof dumpPrompt.getArgumentCompletions).toBe("function");
+		expect(agentCmd, "/agent command was not registered").toBeDefined();
+		expect(agentCmd.description).toContain("agent persona");
+		expect(typeof agentCmd.getArgumentCompletions).toBe("function");
 	});
 });

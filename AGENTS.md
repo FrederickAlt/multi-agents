@@ -15,12 +15,17 @@ multi-agents/
 ├── subagent/
 │   ├── index.ts              # Extension entry point — Task tool, commands, lifecycle
 │   ├── agents.ts             # Agent discovery & config parsing from markdown files
+│   ├── markdown-definitions.ts # Generic markdown-definition loader (shared by agents + prompt-parts)
+│   ├── prompt-parts.ts       # Prompt-part discovery (calls markdown-definitions.ts)
 │   ├── README.md             # Detailed feature documentation
-│   └── agents/               # Built-in agent definition files
-│       ├── explorer.md       # Fast read-only codebase exploration
-│       ├── planner.md        # Read-only implementation planning
-│       ├── reviewer.md       # Read-only code review
-│       └── coder.md          # Fast coding agent for implementing plans
+│   ├── agents/               # Built-in agent definition files
+│   │   ├── explorer.md       # Fast read-only codebase exploration
+│   │   ├── planner.md        # Read-only implementation planning
+│   │   ├── reviewer.md       # Read-only code review
+│   │   └── coder.md          # Fast coding agent for implementing plans
+│   └── prompt-parts/         # Built-in prompt-part fragments appended to sub-agent system prompts
+│       ├── 010-tools.md      # Shared tool information for all sub-agents
+│       └── 020-runtime-context.md  # Runtime context (cwd, date, depth, …)
 ├── test/
 │   ├── agents.test.ts        # Unit tests for agent discovery and config parsing
 │   ├── task-utils.test.ts    # Unit tests for pure functions (hex IDs, names, rendering, metadata)
@@ -33,18 +38,40 @@ multi-agents/
 
 ### `subagent/index.ts` — Extension entry point
 
-Registers the `Task` tool and two commands (`/agent`, `/dump-prompt`). Handles the full sub-agent lifecycle:
+Registers the `Task` tool and the `/agent` command. Handles the full sub-agent lifecycle:
 
 - **Task tool execution** (`runTask`): resolves agent config, checks spawn permissions, allocates hex IDs, creates or resumes sessions, runs the prompt, returns results.
-- **Prompt template rendering** (`renderPromptTemplate`): replaces `{{variables}}` in agent markdown with live context (tools, guidelines, cwd, date, etc.). Unknown variables are hard errors.
+- **Prompt template rendering** (`renderPromptTemplate`, `renderTemplateString`, `renderSubagentSystemPrompt`): replaces `{{variables}}` in agent markdown with live context (tools, guidelines, cwd, date, etc.). Unknown variables are hard errors. `renderSubagentSystemPrompt` appends resolved prompt-part fragments after the main agent prompt.
 - **Metadata persistence** (`loadMetadata`, `saveMetadata`, `metadataPath`): stores sub-agent records in a sidecar JSON file (`.task-subagents-<sessionId>.json`) next to the root session. Concurrent-safe via a promise-based lock.
 - **Session lifecycle**: sessions are disposed after each `Task` call to prevent unbounded memory. The on-disk session file is preserved so resuming reopens from disk.
 - **Commands**:
   - `/agent <name>` — selects a configured agent persona as the main/user-facing agent. Persisted in metadata.
-  - `/dump-prompt [name]` — prints the resolved system prompt for the current or named agent. Implemented by this extension.
 - **Events**: hooks `session_start`, `session_shutdown`, and `before_agent_start` to manage metadata, clean up sessions on `/new`, and inject agent prompts for the main persona.
 
-Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RenderContext`, `PromptParts`, `RuntimeContext`.
+Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RenderContext`, `PromptParts`, `RuntimeContext`. Key rendering functions: `renderTemplateString`, `renderPromptTemplate`, `renderSubagentSystemPrompt`, `buildTemplateValues`.
+
+### `subagent/markdown-definitions.ts` — Generic markdown-definition loader
+
+Owns the shared logic for discovering markdown definition files from bundled, user, and project directories. Used by both agents.ts and prompt-parts.ts.
+
+- **`discoverMarkdownDefinitions(options)`** — orchestrates discovery with bundled → user → project precedence. Returns `{ definitions, diagnostics, projectDir }`.
+- **`loadDefinitionsFromDir(dir, source, diagnostics)`** — reads .md files from a directory, parses YAML frontmatter, derives name from filename stem.
+- **`findNearestProjectDir(cwd, kind)`** — walks up from cwd looking for `.pi/<kind>/`.
+
+Types: `RawMarkdownDefinition`, `MarkdownDiagnostic`, `MarkdownDiscoveryOptions`, `MarkdownDefinitionSource`.
+
+### `subagent/prompt-parts.ts` — Prompt-part discovery
+
+Discovers prompt-part fragment files that get appended to sub-agent system prompts at render time. Calls `discoverMarkdownDefinitions` internally.
+
+Discovery paths:
+1. **Bundled** — `subagent/prompt-parts/*.md` (shipped with the extension)
+2. **User** — `~/.pi/agent/prompt-parts/*.md`
+3. **Project** — nearest `.pi/prompt-parts/*.md` walking up from CWD
+
+- **`discoverPromptParts(cwd, scope)`** — returns `{ parts: PromptPartConfig[], diagnostics, projectDir }`.
+
+Types: `PromptPartConfig`, `PromptPartDiscoveryResult`.
 
 ### `subagent/agents.ts` — Agent discovery and configuration
 
@@ -54,7 +81,7 @@ Discovers agent definitions from three sources (in priority order, later overrid
 2. **User** — `~/.pi/agent/agents/*.md`
 3. **Project** — nearest `.pi/agents/*.md` walking up from CWD
 
-Agent markdown files use YAML frontmatter for configuration. The **filename stem** becomes the agent name (not a frontmatter field). Supported frontmatter fields:
+Internally calls `discoverMarkdownDefinitions` and maps `RawMarkdownDefinition` → `AgentConfig`. Agent markdown files use YAML frontmatter for configuration. The **filename stem** becomes the agent name (not a frontmatter field). Supported frontmatter fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -94,7 +121,21 @@ Every agent has an optional `depth` field (default ∞ for the root agent, 0 for
 
 ### Prompt template variables
 
-Agent system prompts support 10 required variables: `{{tools}}`, `{{guidelines}}`, `{{context_files}}`, `{{skills}}`, `{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`, `{{parent_agent_id}}`, `{{depth}}`. Unknown variables throw at render time.
+Agent and prompt-part system prompts support 10 required variables: `{{tools}}`, `{{guidelines}}`, `{{context_files}}`, `{{skills}}`, `{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`, `{{parent_agent_id}}`, `{{depth}}`. Unknown variables throw at render time.
+
+Variable substitution is performed by `renderTemplateString(template, values, label)` which replaces `{{variable}}` placeholders against a values map. `renderPromptTemplate(context)` renders the agent's own markdown body. `renderSubagentSystemPrompt(context, promptParts)` renders the agent prompt followed by zero or more resolved prompt-part fragments, each rendered independently and joined with double-newline separators.
+
+### Prompt parts
+
+Prompt parts are markdown fragments that get appended to a sub-agent's system prompt at render time. They are discovered from the same three sources as agent definitions (bundled, user, project) with the same precedence. Each part is a .md file with YAML frontmatter (at minimum a `description` field) and a body that may contain `{{variables}}`.
+
+Prompt parts are **only applied to Task sub-agents**, not the root agent. They are discovered fresh for each sub-agent's working directory, so project-specific prompt-parts can extend or override built-in ones.
+
+Built-in prompt parts:
+- `010-tools.md` — Shared tool information (`{{tools}}`, `{{guidelines}}`)
+- `020-runtime-context.md` — Runtime context (cwd, date, agent name, depth, parent ID)
+
+Users and projects can add their own: `~/.pi/agent/prompt-parts/*.md` or `.pi/prompt-parts/*.md`.
 
 ### Metadata persistence
 
@@ -119,5 +160,7 @@ Sub-agent `AgentSession` objects are disposed after each `Task` call. The on-dis
 
 1. The project lives inside a `pi_extensions` directory, with `pi-mono` at `../../pi-mono/` (referenced in vitest.config.ts aliases).
 2. Agent markdown files are the primary configuration mechanism. To add a new agent type, create a `.md` file in `subagent/agents/` (bundled), `~/.pi/agent/agents/` (user), or `.pi/agents/` (project).
-3. The extension registers itself via `package.json` → `pi.extensions: ["./subagent/index.ts"]`.
-4. When modifying prompt templates, ensure `REQUIRED_TEMPLATE_VARS` in `index.ts` stays in sync with the variables used in agent markdown.
+3. Prompt-part markdown files can be added to `subagent/prompt-parts/` (bundled), `~/.pi/agent/prompt-parts/` (user), or `.pi/prompt-parts/` (project).
+4. The generic markdown loader (`markdown-definitions.ts`) is shared by both agent and prompt-part discovery. Adding a new kind of markdown definition should reuse this loader.
+5. The extension registers itself via `package.json` → `pi.extensions: ["./subagent/index.ts"]`.
+6. When modifying prompt templates, ensure `REQUIRED_TEMPLATE_VARS` in `index.ts` stays in sync with the variables used in agent and prompt-part markdown.

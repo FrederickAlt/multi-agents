@@ -1,0 +1,14 @@
+document_overview_default_kinds:
+- Class
+- Constructor
+- Enum
+- Event
+- Function
+- Interface
+- Method
+- Module
+- Namespace
+- Struct
+- TypeParameter
+languages:
+- typescript

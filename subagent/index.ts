@@ -18,6 +18,7 @@ import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
 import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
+import { discoverPromptParts, type PromptPartConfig } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
@@ -84,8 +85,13 @@ function formatSkills(parts: PromptParts): string {
 	return skills.map((skill) => `- ${skill.name}${skill.description ? `: ${skill.description}` : ""}`).join("\n");
 }
 
-export function renderPromptTemplate(context: RenderContext): string {
-	const values: Record<string, string> = {
+/**
+ * Build the template-variable value map from a RenderContext.
+ * Extracted so both renderPromptTemplate and renderSubagentSystemPrompt
+ * can share the same source of truth.
+ */
+export function buildTemplateValues(context: RenderContext): Record<string, string> {
+	return {
 		tools: formatTools(context.parts),
 		guidelines: formatGuidelines(context.parts),
 		context_files: formatContextFiles(context.parts),
@@ -97,19 +103,104 @@ export function renderPromptTemplate(context: RenderContext): string {
 		parent_agent_id: context.parentAgentId ?? "",
 		depth: String(context.depth),
 	};
+}
 
-	return context.agent.systemPrompt.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, rawName: string) => {
+/**
+ * Render a single template string by replacing {{variable}} placeholders.
+ *
+ * @param template  The template string containing {{variable}} placeholders.
+ * @param values    The resolved values for each variable.
+ * @param label     Human-readable label for error messages (e.g. agent name or part name).
+ */
+export function renderTemplateString(
+	template: string,
+	values: Record<string, string>,
+	label: string,
+): string {
+	return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, rawName: string) => {
 		if (!REQUIRED_TEMPLATE_VARS.has(rawName)) {
-			throw new Error(`Unknown prompt variable ${match} in ${context.agent.name}.`);
+			throw new Error(`Unknown prompt variable ${match} in ${label}.`);
 		}
 		const value = values[rawName];
 		if (value === undefined) {
-			throw new Error(`Could not render prompt variable ${match} in ${context.agent.name}.`);
+			throw new Error(`Could not render prompt variable ${match} in ${label}.`);
 		}
 		return value;
 	});
 }
 
+/**
+ * Render the agent-specific system prompt template.
+ *
+ * This is the existing single-template renderer, now delegating to
+ * {@link renderTemplateString} for the actual variable substitution.
+ */
+export function renderPromptTemplate(context: RenderContext): string {
+	const values = buildTemplateValues(context);
+	return renderTemplateString(context.agent.systemPrompt, values, context.agent.name);
+}
+
+/**
+ * Render the full sub-agent system prompt by combining the agent's own
+ * prompt template with zero or more prompt-part fragments.
+ *
+ * Each markdown file is rendered separately (variable substitution applied
+ * independently) and then joined with double-newline separators.  This
+ * ensures each part sees the complete {@link RenderContext} without
+ * interference from other parts.
+ *
+ * @param context     The render context for the sub-agent.
+ * @param promptParts Zero or more prompt-part configs to append.
+ */
+export function renderSubagentSystemPrompt(
+	context: RenderContext,
+	promptParts: PromptPartConfig[],
+): string {
+	const values = buildTemplateValues(context);
+	const main = renderPromptTemplate(context);
+	const parts = promptParts.map((part) =>
+		renderTemplateString(part.systemPrompt, values, part.name),
+	);
+	return [main, ...parts].join("\n\n");
+}
+
+export interface SystemPromptCompositionOptions {
+	/**
+	 * The chained prompt Pi has built so far for this turn. For Task
+	 * sub-agents this starts with the raw agent markdown body, followed by Pi's
+	 * generic additions (APPEND_SYSTEM.md, context files, skills, cwd/date, and
+	 * earlier before_agent_start modifications). When that prefix matches we
+	 * preserve the suffix after rendering the agent template.
+	 */
+	baseSystemPrompt?: string;
+	/** Fallback generic append prompt from Pi's BuildSystemPromptOptions. */
+	appendSystemPrompt?: string;
+}
+
+function genericSystemPromptSuffix(
+	context: RenderContext,
+	options: SystemPromptCompositionOptions,
+): string {
+	const base = options.baseSystemPrompt;
+	if (base?.startsWith(context.agent.systemPrompt)) {
+		return base.slice(context.agent.systemPrompt.length).trim();
+	}
+	return options.appendSystemPrompt?.trim() ?? "";
+}
+
+/**
+ * Render an agent prompt, append prompt-part fragments, and preserve Pi's
+ * generic system-prompt additions when they are present.
+ */
+export function renderComposedAgentSystemPrompt(
+	context: RenderContext,
+	promptParts: PromptPartConfig[],
+	options: SystemPromptCompositionOptions = {},
+): string {
+	const rendered = renderSubagentSystemPrompt(context, promptParts);
+	const suffix = genericSystemPromptSuffix(context, options);
+	return [rendered, suffix].filter((part) => part.trim().length > 0).join("\n\n");
+}
 
 function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
 	return agents.find((agent) => agent.name === name);
@@ -130,6 +221,12 @@ function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: 
 	return (base: any) => {
 		const allowed = agent.extensions;
 		const filtered = base.extensions.filter((extension: any) => {
+			const extensionPath = String(extension.path ?? "");
+			const resolvedPath = String(extension.resolvedPath ?? "");
+			// Keep this sub-agent's inline runtime extension. It installs the
+			// before_agent_start hook that renders agent templates and prompt parts;
+			// filtering it out makes children fall back to Pi's default prompt.
+			if (extensionPath.startsWith("<inline:") || resolvedPath.startsWith("<inline:")) return true;
 			if (extension.resolvedPath === selfPath || extension.path === selfPath) return false;
 			if (!allowed || allowed.length === 0) return true;
 			const candidates = [
@@ -150,7 +247,6 @@ function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: 
 // Extension-level closure variables are lost on reload because jiti uses
 // moduleCache: false. globalThis survives because it's process-global.
 const GLOBAL_SELECTED_AGENT_KEY = "__multi_agents_selected_main_agent";
-const GLOBAL_SYSTEM_PROMPT_OPTIONS_KEY = "__multi_agents_last_system_prompt_options";
 
 function getGlobalSelectedAgent(): string | undefined {
 	return (globalThis as any)[GLOBAL_SELECTED_AGENT_KEY];
@@ -162,14 +258,6 @@ function setGlobalSelectedAgent(name: string | undefined): void {
 	} else {
 		(globalThis as any)[GLOBAL_SELECTED_AGENT_KEY] = name;
 	}
-}
-
-function getGlobalSystemPromptOptions(): any | undefined {
-	return (globalThis as any)[GLOBAL_SYSTEM_PROMPT_OPTIONS_KEY];
-}
-
-function setGlobalSystemPromptOptions(options: any): void {
-	(globalThis as any)[GLOBAL_SYSTEM_PROMPT_OPTIONS_KEY] = options;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -203,15 +291,23 @@ export default function (pi: ExtensionAPI) {
 		};
 	};
 
-	const makeAgentRuntimeFactory = (agent: AgentConfig, runtime: RuntimeContext): ExtensionFactory => {
+	const makeAgentRuntimeFactory = (agent: AgentConfig, runtime: RuntimeContext, effectiveCwd: string): ExtensionFactory => {
 		return (subPi) => {
 			registerTaskTool(subPi, runtime);
+
+			// Discover prompt parts for this sub-agent's effective working directory.
+			const promptPartDefs = discoverPromptParts(effectiveCwd, "both").parts;
+
 			subPi.on("before_agent_start", async (event) => {
-				const prompt = renderPromptTemplate({
+				const context: RenderContext = {
 					agent,
 					parts: buildPromptPartsFromOptions(event.systemPromptOptions),
 					parentAgentId: runtime.parentAgentId,
 					depth: runtime.treeDepth,
+				};
+				const prompt = renderComposedAgentSystemPrompt(context, promptPartDefs, {
+					baseSystemPrompt: event.systemPrompt,
+					appendSystemPrompt: event.systemPromptOptions.appendSystemPrompt,
 				});
 				return { systemPrompt: prompt };
 			});
@@ -255,11 +351,12 @@ export default function (pi: ExtensionAPI) {
 			fallbackModel: ctx.model,
 			modelRegistry: ctx.modelRegistry,
 			createResourceLoaderFactory: async (agent, childRuntime) => {
+				const effectiveCwd = params.cwd || ctx.cwd;
 				const loader = new DefaultResourceLoader({
-					cwd: params.cwd || ctx.cwd,
+					cwd: effectiveCwd,
 					agentDir: getAgentDir(),
 					extensionsOverride: filterExtensionsForAgent(agent, selfPath),
-					extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime)],
+					extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime, effectiveCwd)],
 					systemPromptOverride: () => agent.systemPrompt,
 				});
 				await loader.reload();
@@ -395,8 +492,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		// Capture system prompt options for /dump-prompt to use
-		setGlobalSystemPromptOptions(event.systemPromptOptions);
 		if (!store) store = MetadataStore.fromSessionManager(ctx.sessionManager);
 		const selectedAgentName = store.selectedMainAgent;
 		if (!selectedAgentName) return;
@@ -406,10 +501,15 @@ export default function (pi: ExtensionAPI) {
 		mainRuntime.store = store;
 		mainRuntime.treeDepth = 0;
 		mainRuntime.depthPolicy = selectedRootPolicy(agent);
-		const prompt = renderPromptTemplate({
+		const pParts = buildPromptPartsFromOptions(event.systemPromptOptions);
+		const promptPartDefs = discoverPromptParts(ctx.cwd, "both").parts;
+		const prompt = renderComposedAgentSystemPrompt({
 			agent,
-			parts: buildPromptPartsFromOptions(event.systemPromptOptions),
+			parts: pParts,
 			depth: 0,
+		}, promptPartDefs, {
+			baseSystemPrompt: event.systemPrompt,
+			appendSystemPrompt: event.systemPromptOptions.appendSystemPrompt,
 		});
 		return { systemPrompt: prompt };
 	});
@@ -444,53 +544,6 @@ export default function (pi: ExtensionAPI) {
 			mainRuntime.treeDepth = 0;
 			mainRuntime.depthPolicy = selectedRootPolicy(agent);
 			await ctx.newSession({ parentSession: ctx.sessionManager.getSessionFile() });
-		},
-	});
-
-	pi.registerCommand("dump-prompt", {
-		description: "Print the resolved system prompt for the current or named agent",
-		getArgumentCompletions(prefix) {
-			const discovery = discoverAgents(process.cwd(), DEFAULT_AGENT_SCOPE);
-			return discovery.agents
-				.filter((agent) => agent.name.startsWith(prefix))
-				.map((agent) => ({ value: agent.name, label: agent.name, description: agent.description }));
-		},
-		handler: async (args, ctx) => {
-			const name = args.trim();
-
-			// No argument: dump the current effective system prompt (live, fully resolved)
-			if (!name) {
-				const currentPrompt = ctx.getSystemPrompt();
-				const label = store?.selectedMainAgent
-					? `Current prompt (agent: ${store.selectedMainAgent})`
-					: "Current prompt (default Pi agent)";
-				showMessage(ctx, `# ${label}\n\n${currentPrompt}`, "info");
-				return;
-			}
-
-			// Named agent: render the agent template with the captured system-prompt options
-			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
-			const targetAgent = findAgent(discovery.agents, name);
-			if (!targetAgent) {
-				const available = formatAgentList(discovery.agents, 30).text;
-				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
-				return;
-			}
-
-			// Use the last systemPromptOptions captured by before_agent_start,
-			// falling back to cwd-only parts if none have been captured yet.
-			const capturedOptions = getGlobalSystemPromptOptions();
-			const promptParts: PromptParts = capturedOptions
-				? buildPromptPartsFromOptions(capturedOptions)
-				: { cwd: ctx.cwd };
-			promptParts.cwd ??= ctx.cwd;
-
-			const prompt = renderPromptTemplate({
-				agent: targetAgent,
-				parts: promptParts,
-				depth: 0,
-			});
-			showMessage(ctx, `# Resolved prompt for ${targetAgent.name}\n\n${prompt}`, "info");
 		},
 	});
 

@@ -15,6 +15,7 @@ import {
 	saveMetadata,
 	metadataPath,
 	renderPromptTemplate,
+	renderComposedAgentSystemPrompt,
 	getFinalTextFromMessages,
 	checkSpawnAllowed,
 	resolveTaskAgent,
@@ -409,6 +410,51 @@ describe("renderPromptTemplate", () => {
 		const result = renderPromptTemplate(ctx);
 		expect(result).toContain("# Title");
 		expect(result).toContain("**markdown**");
+	});
+
+	it("renders prompt-part fragments after the agent prompt", () => {
+		const result = renderComposedAgentSystemPrompt(baseContext, [
+			{
+				name: "shared",
+				description: "shared prompt part",
+				systemPrompt: "Shared for {{agent_name}} in {{cwd}}",
+				source: "builtin",
+				filePath: "/tmp/shared.md",
+			},
+		]);
+
+		expect(result).toContain("You are TestAgent");
+		expect(result).toContain("Shared for TestAgent in /home/user/project");
+	});
+
+	it("preserves generic system-prompt suffixes from Pi when the raw agent prompt is the base prefix", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, systemPrompt: "Agent {{agent_name}}" },
+		};
+		const result = renderComposedAgentSystemPrompt(ctx, [], {
+			baseSystemPrompt: "Agent {{agent_name}}\n\n# Generic additions\n\nAPPEND_SYSTEM content",
+		});
+
+		expect(result).toContain("Agent TestAgent");
+		expect(result).toContain("# Generic additions");
+		expect(result).toContain("APPEND_SYSTEM content");
+		expect(result).not.toContain("{{agent_name}}");
+	});
+
+	it("falls back to appendSystemPrompt when the current base prompt is not the raw agent prompt", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, systemPrompt: "Agent {{agent_name}}" },
+		};
+		const result = renderComposedAgentSystemPrompt(ctx, [], {
+			baseSystemPrompt: "Default Pi prompt",
+			appendSystemPrompt: "APPEND_SYSTEM content",
+		});
+
+		expect(result).toContain("Agent TestAgent");
+		expect(result).toContain("APPEND_SYSTEM content");
+		expect(result).not.toContain("Default Pi prompt");
 	});
 });
 
