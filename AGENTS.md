@@ -17,6 +17,7 @@ multi-agents/
 │   ├── agents.ts             # Agent discovery & config parsing from markdown files
 │   ├── markdown-definitions.ts # Generic markdown-definition loader (shared by agents + prompt-parts)
 │   ├── prompt-parts.ts       # Prompt-part discovery (calls markdown-definitions.ts)
+│   ├── prompt-composition.ts # Shared Agent-definition prompt renderer used by Root + Task sub-agents
 │   ├── README.md             # Detailed feature documentation
 │   ├── agents/               # Built-in agent definition files
 │   │   ├── default.md        # Default Root coding assistant
@@ -40,17 +41,18 @@ multi-agents/
 
 ### `subagent/index.ts` — Extension entry point
 
-Registers the `Task` tool and the `/agent` command. Handles the full sub-agent lifecycle:
+Registers the `Task` tool plus the `/agent` and `/dump-prompt` commands. Handles the full sub-agent lifecycle:
 
 - **Task tool execution** (`runTask`): resolves agent config, checks spawn permissions, allocates hex IDs, creates or resumes sessions, runs the prompt, returns results.
-- **Prompt template rendering** (`renderPromptTemplate`, `renderTemplateString`, `renderSubagentSystemPrompt`): replaces `{{variables}}` in agent markdown with live context (tools, guidelines, cwd, date, etc.). Unknown variables are hard errors. `renderSubagentSystemPrompt` appends resolved prompt-part fragments after the main agent prompt.
+- **Prompt composition**: delegates to `prompt-composition.ts` so Root agents and Task sub-agents use the same Agent-definition rendering path.
 - **Metadata persistence** (`loadMetadata`, `saveMetadata`, `metadataPath`): stores sub-agent records in a sidecar JSON file (`.task-subagents-<sessionId>.json`) next to the root session. Concurrent-safe via a promise-based lock.
 - **Session lifecycle**: sessions are disposed after each `Task` call to prevent unbounded memory. The on-disk session file is preserved so resuming reopens from disk.
 - **Commands**:
   - `/agent <name>` — selects a configured agent persona as the Root agent for the current session. Persisted in session metadata.
+  - `/dump-prompt [next]` — dumps the current rendered multi-agents Root prompt, or with `next` dumps the exact prompt sent on the next provider request.
 - **Events**: hooks `session_start`, `session_shutdown`, and `before_agent_start` to manage metadata, clean up sessions on `/new`, resolve the default/session-local Root agent, and inject rendered Agent definition prompts.
 
-Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RenderContext`, `PromptParts`, `RuntimeContext`. Key rendering functions: `renderTemplateString`, `renderPromptTemplate`, `renderSubagentSystemPrompt`, `buildTemplateValues`.
+Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RuntimeContext`. Prompt rendering types/functions are re-exported from `prompt-composition.ts` for compatibility.
 
 ### `subagent/markdown-definitions.ts` — Generic markdown-definition loader
 
@@ -67,6 +69,14 @@ Types: `RawMarkdownDefinition`, `MarkdownDiagnostic`, `MarkdownDiscoveryOptions`
 Resolves the effective Root Agent definition from the session-local `/agent` selection or the configured `defaultRootAgent` fallback (default: `default`). A missing configured default is a hard error instead of falling back to raw Pi behavior.
 
 Key functions: `resolveRootAgent(options)`. Key constants: `DEFAULT_ROOT_AGENT_NAME`.
+
+### `subagent/prompt-composition.ts` — Shared Agent-definition prompt composition
+
+Owns the stable prompt-rendering interface used by both Root agents and Task sub-agents. It replaces `{{variables}}` in agent markdown with live context (tools, guidelines, cwd, date, context files, skills, etc.), rejects unknown variables, applies skill filtering, renders prompt-part fragments independently, and intentionally ignores Pi raw/base and append-system prompt material.
+
+Agent definition symmetry in this project means prompt-composition symmetry. The same Agent markdown body, prompt variables, skill filtering, explicit `{{context_files}}` placement, and prompt parts render with the same semantics for Root and Task sub-agents; runtime placement can still differ for model/tool/extension/session behavior.
+
+Key types: `RenderContext`, `PromptParts`. Key functions: `renderTemplateString`, `renderPromptTemplate`, `renderSubagentSystemPrompt`, `renderComposedAgentSystemPrompt`, `buildTemplateValues`.
 
 ### `subagent/prompt-parts.ts` — Prompt-part discovery
 
@@ -99,7 +109,7 @@ Internally calls `discoverMarkdownDefinitions` and maps `RawMarkdownDefinition` 
 | `model` | string | Model override (e.g. `claude-haiku-4-5` or `provider/id`) |
 | `reasoning_effort` | string | Thinking/reasoning effort level |
 | `depth` | number | Maximum nesting depth this agent can spawn (0 = no spawns) |
-| `canSpawn` | comma-separated string | Allowlist of agent types this agent may spawn |
+| `canSpawn` | comma-separated string | Spawn allowlist tri-state: missing = unrestricted, blank = spawn none, values = only listed agent types |
 | `skills` | comma-separated string | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
 
 Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`.
@@ -131,11 +141,16 @@ Run tests with `npm test` (vitest).
 
 Every agent has an optional `depth` field. The built-in `default` Root agent uses `depth: 1`; the built-in specialist sub-agents use `depth: 0`. `depth` is the maximum nesting level: depth 0 means no further sub-agents can be spawned, depth 1 allows sub-agents but no grandchildren, etc. The `canSpawn` field further restricts which agent types are allowed.
 
+`canSpawn` has tri-state semantics:
+- **Missing** (`canSpawn` field absent) → unrestricted by name; depth still applies.
+- **Blank** (`canSpawn:` with no value) → spawn no agents.
+- **Comma-separated values** (`canSpawn: explorer, reviewer`) → spawn only those agent types.
+
 ### Prompt template variables
 
 Agent and prompt-part system prompts support 8 required variables: `{{tools}}`, `{{guidelines}}`, `{{context_files}}`, `{{skills}}`, `{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`. Unknown variables throw at render time. Internal tree metadata such as parent IDs and depth is intentionally not available as prompt variables.
 
-Variable substitution is performed by `renderTemplateString(template, values, label)` which replaces `{{variable}}` placeholders against a values map. `renderPromptTemplate(context)` renders the agent's own markdown body. `renderSubagentSystemPrompt(context, promptParts)` renders the agent prompt followed by zero or more resolved prompt-part fragments, each rendered independently and joined with double-newline separators.
+Variable substitution is performed in `prompt-composition.ts` by `renderTemplateString(template, values, label)`, which replaces `{{variable}}` placeholders against a values map. `renderPromptTemplate(context)` renders the agent's own markdown body. `renderSubagentSystemPrompt(context, promptParts)` renders the agent prompt followed by zero or more resolved prompt-part fragments, each rendered independently and joined with double-newline separators.
 
 ### Skill prompt filtering
 
@@ -184,4 +199,4 @@ Sub-agent `AgentSession` objects are disposed after each `Task` call. The on-dis
 3. Prompt-part markdown files can be added to `subagent/prompt-parts/` (bundled), `~/.pi/agent/prompt-parts/` (user), or `.pi/prompt-parts/` (project).
 4. The generic markdown loader (`markdown-definitions.ts`) is shared by both agent and prompt-part discovery. Adding a new kind of markdown definition should reuse this loader.
 5. The extension registers itself via `package.json` → `pi.extensions: ["./subagent/index.ts"]`.
-6. When modifying prompt templates, ensure `REQUIRED_TEMPLATE_VARS` in `index.ts` stays in sync with the variables used in agent and prompt-part markdown.
+6. When modifying prompt templates, ensure `REQUIRED_TEMPLATE_VARS` in `prompt-composition.ts` stays in sync with the variables used in agent and prompt-part markdown.

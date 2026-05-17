@@ -13,6 +13,8 @@ Each part is rendered independently (variable substitution applied separately) a
 
 Prompt parts are applied whenever this extension renders an Agent definition: the configured Root agent, a session-local `/agent` selection, and Task sub-agents.
 
+Agent definition symmetry means prompt-composition symmetry: the same Agent markdown body, prompt variables, skill filtering, explicit `{{context_files}}` placement, and prompt parts render with the same semantics for Root and Task sub-agents. Runtime placement can still differ for model/tool/extension/session behavior.
+
 The Agent definition path is the full prompt contract. Pi's hidden generic suffix and append-system prompt material are not preserved; use prompt parts and explicit `{{context_files}}` placement instead.
 
 Built-in prompt parts:
@@ -49,9 +51,14 @@ Depth controls how many levels of sub-agent spawning are allowed from the Root a
 - **Tree depth** = current position in the agent tree (Root = 0, child = 1, grandchild = 2).
 - **`depth` config** = how many more Task levels this agent's definition permits.
 - **Root depth limit** = the absolute maximum tree depth the Root agent allows.
-- **`canSpawn`** = optional allowlist of agent names this agent may delegate to (`undefined` = unrestricted).
+- **`canSpawn`** = spawn allowlist tri-state: missing = unrestricted by name, blank = spawn none, comma-list = only listed agent names.
 
-A sub-agent with `depth: 0` cannot call Task at all, including `resume`.  New Task calls and resume calls both pass through `DepthPolicy` checks.
+A sub-agent with `depth: 0` cannot call Task at all, including `resume`. New Task calls and resume calls both pass through `DepthPolicy` checks.
+
+`canSpawn` examples:
+- field absent → any agent name may be spawned if depth allows it
+- `canSpawn:` → no agent names may be spawned
+- `canSpawn: explorer, reviewer` → only `explorer` and `reviewer` may be spawned
 
 ## Prompt Parts
 

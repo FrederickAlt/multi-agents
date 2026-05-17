@@ -10,12 +10,14 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Type } from "typebox";
 import { MetadataStore } from "../subagent/metadata.js";
 import {
+	PiAgentSessionFactory,
 	SubagentSessionManager,
 	type SessionSetupContext,
 } from "../subagent/session-manager.js";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import { DefaultResourceLoader, SessionManager, type AgentSession } from "@mariozechner/pi-coding-agent";
 import type { SubagentRecord } from "../subagent/metadata.js";
 import type { AgentConfig } from "../subagent/agents.js";
 
@@ -534,5 +536,62 @@ describe("SubagentSessionManager", () => {
 			expect(values.sort()).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 			expect(results).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 		});
+	});
+});
+
+describe("PiAgentSessionFactory", () => {
+	it("binds sub-agent extensions so session_start registered tools are available", async () => {
+		const tempDir = join(tmpdir(), `pi-agent-factory-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+		const params = Type.Object({});
+		const loader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir: tempDir,
+			extensionFactories: [
+				(pi) => {
+					pi.registerTool({
+						name: "load_time_tool",
+						label: "Load Time Tool",
+						description: "Registered while the extension loads",
+						parameters: params,
+						async execute() {
+							return { content: [{ type: "text", text: "load" }] };
+						},
+					});
+					pi.on("session_start", () => {
+						pi.registerTool({
+							name: "session_start_tool",
+							label: "Session Start Tool",
+							description: "Registered from session_start",
+							parameters: params,
+							async execute() {
+								return { content: [{ type: "text", text: "session" }] };
+							},
+						});
+					});
+				},
+			],
+		});
+		await loader.reload();
+
+		const session = await new PiAgentSessionFactory().create({
+			cwd: tempDir,
+			model: undefined,
+			tools: undefined,
+			resourceLoader: loader,
+			sessionManager: SessionManager.inMemory(tempDir),
+			thinkingLevel: undefined,
+		});
+
+		try {
+			const allToolNames = session.getAllTools().map((tool) => tool.name);
+			const activeToolNames = session.getActiveToolNames();
+			expect(allToolNames).toContain("load_time_tool");
+			expect(allToolNames).toContain("session_start_tool");
+			expect(activeToolNames).toContain("session_start_tool");
+		} finally {
+			session.dispose();
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });

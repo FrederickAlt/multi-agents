@@ -67,7 +67,7 @@ Frontmatter fields:
 | `model` | string | Model override |
 | `reasoning_effort` | string | Thinking/reasoning effort level |
 | `depth` | number | Spawn allowance — how many more Task levels this agent permits |
-| `canSpawn` | comma-separated | Allowlist of agent types this agent may delegate to |
+| `canSpawn` | comma-separated | Spawn allowlist tri-state: missing = unrestricted, blank = spawn none, values = only listed agent types |
 | `skills` | comma-separated | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
 
 Supported prompt variables:
@@ -82,6 +82,11 @@ Supported prompt variables:
 - `{{agent_description}}`
 
 Unknown variables are errors. Internal tree metadata such as parent IDs and depth is not available as prompt variables.
+
+`canSpawn` has tri-state semantics:
+- missing field → unrestricted by name; depth still applies
+- blank field (`canSpawn:`) → spawn no agents
+- comma-separated list (`canSpawn: explorer, reviewer`) → spawn only those agent types
 
 ## Prompt Parts
 
@@ -112,6 +117,8 @@ Prompt parts support the same `{{variables}}` as agent definitions. Each part is
 
 Prompt parts apply whenever this extension renders an Agent definition: the configured Root agent, a session-local `/agent` selection, and Task sub-agents. They are discovered from the agent's effective working directory, so project-specific prompt-parts can extend or override built-in ones.
 
+Agent definition symmetry means prompt-composition symmetry: the same Agent markdown body, prompt variables, skill filtering, explicit `{{context_files}}` placement, and prompt parts are rendered with the same semantics for Root and Task sub-agents. Runtime placement can still differ for model/tool/extension/session concerns.
+
 The Agent definition path is the full prompt contract. Pi's hidden generic suffix and append-system prompt material are not preserved; use prompt parts and explicit `{{context_files}}` placement instead.
 
 Built-in prompt parts (shipped with the extension):
@@ -122,11 +129,13 @@ Built-in prompt parts (shipped with the extension):
 
 ```text
 /agent explorer
+/dump-prompt
+/dump-prompt next
 ```
 
 `/agent` selects the Root agent persona for the current session. Sessions without a selection use the configured `defaultRootAgent`, which defaults to the built-in `default` Agent definition.
 
-Use Pi's built-in system prompt dump to inspect the current system prompt.
+`/dump-prompt` dumps the current rendered multi-agents Root prompt and active tool definitions. `/dump-prompt next` dumps the exact prompt sent on the next provider request.
 
 ## Included Agents
 

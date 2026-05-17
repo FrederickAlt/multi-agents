@@ -5,6 +5,7 @@
  * creates or resumes a real Pi AgentSession stored in normal session storage.
  */
 
+import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -19,195 +20,52 @@ import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
 import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
-import { discoverPromptParts, type PromptPartConfig } from "./prompt-parts.js";
+import { discoverPromptParts } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
 import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
+import {
+	buildPromptPartsFromOptions,
+	renderComposedAgentSystemPrompt,
+	type PromptParts,
+	type RenderContext,
+} from "./prompt-composition.js";
+
+export {
+	buildTemplateValues,
+	renderTemplateString,
+	renderPromptTemplate,
+	renderSubagentSystemPrompt,
+	renderComposedAgentSystemPrompt,
+} from "./prompt-composition.js";
+export type { PromptParts, RenderContext, SystemPromptCompositionOptions } from "./prompt-composition.js";
 
 const DEFAULT_AGENT_SCOPE: AgentScope = "both";
-const REQUIRED_TEMPLATE_VARS = new Set([
-	"tools",
-	"guidelines",
-	"context_files",
-	"skills",
-	"cwd",
-	"date",
-	"agent_name",
-	"agent_description",
-]);
-
-export interface PromptParts {
-	selectedTools?: string[];
-	toolSnippets?: Record<string, string>;
-	promptGuidelines?: string[];
-	contextFiles?: Array<{ path: string; content: string }>;
-	skills?: Array<{ name: string; description?: string; filePath?: string }>;
-	cwd?: string;
-}
-
-export interface RenderContext {
-	agent: AgentConfig;
-	parts: PromptParts;
-}
-
-function today(): string {
-	const now = new Date();
-	const yyyy = now.getFullYear();
-	const mm = String(now.getMonth() + 1).padStart(2, "0");
-	const dd = String(now.getDate()).padStart(2, "0");
-	return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatTools(parts: PromptParts): string {
-	const names = parts.selectedTools ?? [];
-	const snippets = parts.toolSnippets ?? {};
-	const lines = names.filter((name) => snippets[name]).map((name) => `- ${name}: ${snippets[name]}`);
-	return lines.length > 0 ? lines.join("\n") : "(none)";
-}
-
-function formatGuidelines(parts: PromptParts): string {
-	const guidelines = parts.promptGuidelines ?? [];
-	return guidelines.length > 0 ? guidelines.map((g) => `- ${g}`).join("\n") : "(none)";
-}
-
-function formatContextFiles(parts: PromptParts): string {
-	const files = parts.contextFiles ?? [];
-	if (files.length === 0) return "(none)";
-	return files.map((file) => `## ${file.path}\n\n${file.content}`).join("\n\n");
-}
-
-function formatSkills(parts: PromptParts, agentSkills?: string[]): string {
-	const allSkills = parts.skills ?? [];
-	// agentSkills: undefined → all skills; [] → none; ["a","b"] → filter
-	const filtered = agentSkills === undefined
-		? allSkills
-		: agentSkills.length === 0
-			? []
-			: allSkills.filter((s) => agentSkills.includes(s.name));
-	if (filtered.length === 0) return "(none)";
-	return filtered.map((skill) => `- ${skill.name}${skill.description ? `: ${skill.description}` : ""}`).join("\n");
-}
-
-/**
- * Build the template-variable value map from a RenderContext.
- * Extracted so both renderPromptTemplate and renderSubagentSystemPrompt
- * can share the same source of truth.
- */
-export function buildTemplateValues(context: RenderContext): Record<string, string> {
-	return {
-		tools: formatTools(context.parts),
-		guidelines: formatGuidelines(context.parts),
-		context_files: formatContextFiles(context.parts),
-		skills: formatSkills(context.parts, context.agent.skills),
-		cwd: context.parts.cwd ?? "",
-		date: today(),
-		agent_name: context.agent.name,
-		agent_description: context.agent.description,
-	};
-}
-
-/**
- * Render a single template string by replacing {{variable}} placeholders.
- *
- * @param template  The template string containing {{variable}} placeholders.
- * @param values    The resolved values for each variable.
- * @param label     Human-readable label for error messages (e.g. agent name or part name).
- */
-export function renderTemplateString(
-	template: string,
-	values: Record<string, string>,
-	label: string,
-): string {
-	return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, rawName: string) => {
-		if (!REQUIRED_TEMPLATE_VARS.has(rawName)) {
-			throw new Error(`Unknown prompt variable ${match} in ${label}.`);
-		}
-		const value = values[rawName];
-		if (value === undefined) {
-			throw new Error(`Could not render prompt variable ${match} in ${label}.`);
-		}
-		return value;
-	});
-}
-
-/**
- * Render the agent-specific system prompt template.
- *
- * This is the existing single-template renderer, now delegating to
- * {@link renderTemplateString} for the actual variable substitution.
- */
-export function renderPromptTemplate(context: RenderContext): string {
-	const values = buildTemplateValues(context);
-	return renderTemplateString(context.agent.systemPrompt, values, context.agent.name);
-}
-
-/**
- * Render the full sub-agent system prompt by combining the agent's own
- * prompt template with zero or more prompt-part fragments.
- *
- * Each markdown file is rendered separately (variable substitution applied
- * independently) and then joined with double-newline separators.  This
- * ensures each part sees the complete {@link RenderContext} without
- * interference from other parts.
- *
- * @param context     The render context for the sub-agent.
- * @param promptParts Zero or more prompt-part configs to append.
- */
-export function renderSubagentSystemPrompt(
-	context: RenderContext,
-	promptParts: PromptPartConfig[],
-): string {
-	const values = buildTemplateValues(context);
-	const main = renderPromptTemplate(context);
-	const parts = promptParts.map((part) =>
-		renderTemplateString(part.systemPrompt, values, part.name),
-	);
-	return [main, ...parts].join("\n\n");
-}
-
-export interface SystemPromptCompositionOptions {
-	/**
-	 * The chained prompt Pi built before this extension replaces it. Accepted
-	 * for compatibility with existing callers, but intentionally ignored: Agent
-	 * definitions are the full prompt contract.
-	 */
-	baseSystemPrompt?: string;
-	/** Pi append-system prompt material. Intentionally ignored for Agent definitions. */
-	appendSystemPrompt?: string;
-}
-
-/**
- * Render the complete Agent-definition system prompt.
- *
- * Agent definitions are a full prompt contract: the markdown definition plus
- * resolved prompt-part fragments. Pi's default prompt, append-system prompt,
- * and generic context/skills/date suffix are intentionally not preserved here.
- */
-export function renderComposedAgentSystemPrompt(
-	context: RenderContext,
-	promptParts: PromptPartConfig[],
-	_options: SystemPromptCompositionOptions = {},
-): string {
-	return renderSubagentSystemPrompt(context, promptParts);
-}
 
 function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
 	return agents.find((agent) => agent.name === name);
 }
 
-function buildPromptPartsFromOptions(options: any): PromptParts {
-	return {
-		selectedTools: options.selectedTools,
-		toolSnippets: options.toolSnippets,
-		promptGuidelines: options.promptGuidelines,
-		contextFiles: options.contextFiles,
-		skills: options.skills,
-		cwd: options.cwd,
-	};
+function canonicalExistingPath(p: string): string {
+	if (!p || p.startsWith("<")) return p;
+	const resolved = path.resolve(p);
+	try {
+		return existsSync(resolved) ? realpathSync.native(resolved) : resolved;
+	} catch {
+		return resolved;
+	}
 }
 
-function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: any) => any {
+function sameExtensionPath(a: string, b: string): boolean {
+	if (!a || !b) return false;
+	if (a === b) return true;
+	if (a.startsWith("<") || b.startsWith("<")) return false;
+	return canonicalExistingPath(a) === canonicalExistingPath(b);
+}
+
+export function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: any) => any {
+	const canonicalSelfPath = canonicalExistingPath(selfPath);
 	return (base: any) => {
 		const allowed = agent.extensions;
 		const filtered = base.extensions.filter((extension: any) => {
@@ -217,7 +75,13 @@ function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): (base: 
 			// before_agent_start hook that renders agent templates and prompt parts;
 			// filtering it out makes children fall back to Pi's default prompt.
 			if (extensionPath.startsWith("<inline:") || resolvedPath.startsWith("<inline:")) return true;
-			if (extension.resolvedPath === selfPath || extension.path === selfPath) return false;
+			// The parent multi-agents extension is often loaded through a symlink from
+			// ~/.pi/agent/extensions. Compare canonical real paths so it is removed
+			// from child sessions and cannot register a second Root-agent lifecycle.
+			if (
+				sameExtensionPath(extensionPath, canonicalSelfPath) ||
+				sameExtensionPath(resolvedPath, canonicalSelfPath)
+			) return false;
 			if (!allowed || allowed.length === 0) return true;
 			const candidates = [
 				extension.path,
@@ -382,6 +246,9 @@ export function configureTaskToolForRuntime(
 
 export default function (pi: ExtensionAPI) {
 	let store: MetadataStore | undefined;
+	let dumpNextProviderRequest = false;
+	let lastProviderSystemPrompt: string | undefined;
+	let lastRootPromptParts: PromptParts | undefined;
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
 		treeDepth: 0,
@@ -417,6 +284,69 @@ export default function (pi: ExtensionAPI) {
 			selectedAgent,
 			defaultRootAgent: configuredDefaultRootAgent(),
 		}).agent;
+	};
+
+	const formatRootAgentResolutionError = (error: unknown): string => {
+		const message = error instanceof Error ? error.message : String(error);
+		return `Multi-agents configuration error: ${message}`;
+	};
+
+	const activeToolDefinitions = () => {
+		const activeToolNames = new Set(pi.getActiveTools());
+		return pi
+			.getAllTools()
+			.filter((tool) => activeToolNames.has(tool.name))
+			.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters,
+			}));
+	};
+
+	const renderDump = (title: string, systemPrompt: string, note?: string) => [
+		`=== ${title} ===`,
+		"",
+		systemPrompt,
+		...(note ? ["", "=== NOTE ===", "", note] : []),
+		"",
+		"=== TOOLS ===",
+		"",
+		JSON.stringify(activeToolDefinitions(), null, 2),
+	].join("\n");
+
+	const buildFallbackPromptPartsForCurrentRoot = (ctx: { cwd: string }): PromptParts => {
+		let activeTools: string[] = [];
+		let allTools: Array<{ name: string; description?: string }> = [];
+		try {
+			activeTools = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [];
+			allTools = typeof pi.getAllTools === "function" ? pi.getAllTools() : [];
+		} catch {
+			// During early startup the ExtensionAPI may not be bound yet. The exact
+			// provider-bound prompt will still be captured by /dump-prompt next.
+		}
+		return {
+			selectedTools: activeTools,
+			toolSnippets: Object.fromEntries(allTools.map((tool) => [tool.name, tool.description ?? ""])),
+			promptGuidelines: [],
+			contextFiles: loadProjectContextFiles({ cwd: ctx.cwd, agentDir: getAgentDir() }),
+			skills: [],
+			cwd: ctx.cwd,
+		};
+	};
+
+	const buildPromptPartsForCurrentRoot = (ctx: { cwd: string }): PromptParts => {
+		if (lastRootPromptParts?.cwd === ctx.cwd) return lastRootPromptParts;
+		return buildFallbackPromptPartsForCurrentRoot(ctx);
+	};
+
+	const renderCurrentRootPromptForDump = (ctx: { cwd: string; sessionManager: any }): string => {
+		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
+		activeStore.load();
+		const agent = resolveRootAgentForSession(ctx.cwd, activeStore.selectedMainAgent);
+		return renderComposedAgentSystemPrompt({
+			agent,
+			parts: buildPromptPartsForCurrentRoot(ctx),
+		}, discoverPromptParts(ctx.cwd, "both").parts);
 	};
 
 	const makeAgentRuntimeFactory = (
@@ -521,7 +451,22 @@ export default function (pi: ExtensionAPI) {
 		default: DEFAULT_ROOT_AGENT_NAME,
 	});
 
+	pi.on("input", async (_event, ctx) => {
+		const activeStore = store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
+		try {
+			activeStore.load();
+			resolveRootAgentForSession(ctx.cwd, activeStore.selectedMainAgent);
+		} catch (error) {
+			showMessage(ctx, formatRootAgentResolutionError(error), "error");
+			return { action: "handled" as const };
+		}
+		return { action: "continue" as const };
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
+		dumpNextProviderRequest = false;
+		lastProviderSystemPrompt = undefined;
+		lastRootPromptParts = undefined;
 		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
 		mainRuntime.store = activeStore;
 		store = activeStore;
@@ -539,7 +484,14 @@ export default function (pi: ExtensionAPI) {
 		if (typeof flagAgent === "string" && flagAgent.trim()) {
 			activeStore.selectedMainAgent = flagAgent.trim();
 		}
-		const rootAgent = resolveRootAgentForSession(ctx.cwd, activeStore.selectedMainAgent);
+		let rootAgent: AgentConfig;
+		try {
+			rootAgent = resolveRootAgentForSession(ctx.cwd, activeStore.selectedMainAgent);
+		} catch (error) {
+			showMessage(ctx, formatRootAgentResolutionError(error), "error");
+			deactivateTaskTool(pi);
+			return;
+		}
 		mainRuntime.treeDepth = 0;
 		mainRuntime.depthPolicy = selectedRootPolicy(rootAgent);
 
@@ -570,6 +522,7 @@ export default function (pi: ExtensionAPI) {
 		registerTaskTool(pi, mainRuntime, ctx.cwd);
 
 		const pParts = buildPromptPartsFromOptions(event.systemPromptOptions);
+		lastRootPromptParts = pParts;
 		const promptPartDefs = discoverPromptParts(ctx.cwd, "both").parts;
 		const prompt = renderComposedAgentSystemPrompt({
 			agent,
@@ -579,6 +532,42 @@ export default function (pi: ExtensionAPI) {
 			appendSystemPrompt: event.systemPromptOptions.appendSystemPrompt,
 		});
 		return { systemPrompt: prompt };
+	});
+
+	pi.on("before_provider_request", async (_event, ctx) => {
+		const prompt = ctx.getSystemPrompt();
+		lastProviderSystemPrompt = prompt;
+		if (!dumpNextProviderRequest) return;
+
+		dumpNextProviderRequest = false;
+		showMessage(ctx, renderDump("SYSTEM PROMPT SENT TO PROVIDER", prompt), "info");
+	});
+
+	pi.registerCommand("dump-prompt", {
+		description: "Dump system prompt + all tool definitions (including those without promptSnippet)",
+		handler: async (args, ctx) => {
+			const mode = args.trim();
+
+			if (mode === "next") {
+				dumpNextProviderRequest = true;
+				showMessage(
+					ctx,
+					"Will dump the final system prompt on the next provider request. Send a normal prompt to trigger it.",
+					"info",
+				);
+				return;
+			}
+
+			const prompt = lastProviderSystemPrompt ?? renderCurrentRootPromptForDump(ctx);
+			const title = lastProviderSystemPrompt
+				? "LAST SYSTEM PROMPT SENT TO PROVIDER"
+				: "CURRENT MULTI-AGENTS SYSTEM PROMPT";
+			const note = lastProviderSystemPrompt
+				? undefined
+				: "This is the current multi-agents prompt for the selected agent. Per-turn hooks may still change the final provider prompt. Use `/dump-prompt next`, then send a normal prompt, to dump the exact provider-bound prompt.";
+
+			showMessage(ctx, renderDump(title, prompt, note), "info");
+		},
 	});
 
 	pi.registerCommand("agent", {

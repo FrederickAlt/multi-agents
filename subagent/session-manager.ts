@@ -92,6 +92,11 @@ export class PiAgentSessionFactory implements AgentSessionFactory {
 			// auth state, runtime overrides, and dynamically-registered providers.
 			modelRegistry: config.modelRegistry,
 		});
+		// Task sub-agents are not managed by InteractiveMode/PrintMode, so the
+		// usual host-level bind step would otherwise never happen. Bind here so
+		// session_start/resources_discover handlers run and extensions that register
+		// tools lazily (for example package-provided web tools) become available.
+		await session.bindExtensions({});
 		return session;
 	}
 }

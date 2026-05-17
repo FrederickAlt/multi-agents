@@ -14,13 +14,13 @@ import {
 	loadMetadata,
 	saveMetadata,
 	metadataPath,
-	renderPromptTemplate,
-	renderComposedAgentSystemPrompt,
 	getFinalTextFromMessages,
 	checkSpawnAllowed,
 	resolveTaskAgent,
 } from "../subagent/index.js";
-import type { SubagentRecord, RenderContext, PromptParts } from "../subagent/index.js";
+import type { SubagentRecord } from "../subagent/index.js";
+import { renderComposedAgentSystemPrompt, renderPromptTemplate } from "../subagent/prompt-composition.js";
+import type { PromptParts, RenderContext } from "../subagent/prompt-composition.js";
 import type { AgentConfig } from "../subagent/agents.js";
 
 // ---------------------------------------------------------------------------
@@ -536,6 +536,44 @@ describe("renderPromptTemplate", () => {
 		expect(result).toContain("Agent TestAgent");
 		expect(result).not.toContain("APPEND_SYSTEM content");
 		expect(result).not.toContain("Default Pi prompt");
+	});
+
+	it("renders the same Agent-definition prompt semantics for Root and Task sub-agent placements", () => {
+		const agent = {
+			...baseAgent,
+			skills: ["tdd"],
+			systemPrompt: "Agent {{agent_name}}\nTools:\n{{tools}}\nFiles:\n{{context_files}}\nSkills:\n{{skills}}",
+		};
+		const parts = {
+			...baseParts,
+			contextFiles: [{ path: "AGENTS.md", content: "PROJECT CONTEXT" }],
+			skills: [
+				{ name: "tdd", description: "Test-driven development" },
+				{ name: "diagnose", description: "Debugging" },
+			],
+		};
+		const promptParts = [{
+			name: "shared",
+			description: "shared prompt part",
+			systemPrompt: "Shared sees {{agent_description}} and {{skills}}",
+			source: "builtin" as const,
+			filePath: "/tmp/shared.md",
+		}];
+
+		const rootPrompt = renderComposedAgentSystemPrompt({ agent, parts }, promptParts, {
+			baseSystemPrompt: "Root raw/base prompt that must not affect semantics",
+		});
+		const taskPrompt = renderComposedAgentSystemPrompt({ agent, parts }, promptParts, {
+			baseSystemPrompt: "Task raw/base prompt that must not affect semantics",
+			appendSystemPrompt: "Task append-system prompt that must not affect semantics",
+		});
+
+		expect(taskPrompt).toBe(rootPrompt);
+		expect(rootPrompt).toContain("PROJECT CONTEXT");
+		expect(rootPrompt).toContain("- tdd: Test-driven development");
+		expect(rootPrompt).not.toContain("diagnose");
+		expect(rootPrompt).not.toContain("raw/base prompt");
+		expect(rootPrompt).not.toContain("append-system prompt");
 	});
 });
 

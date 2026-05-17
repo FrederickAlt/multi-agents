@@ -4,17 +4,19 @@
  * Tests extension loading, tool registration, command handlers.
  * LLM-dependent tests require API_KEY from env.
  */
-import { existsSync, mkdirSync, rmSync, writeFileSync as wfs } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	AuthStorage,
 	createAgentSession,
 	DefaultResourceLoader,
+	ModelRegistry,
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { getModel } from "@mariozechner/pi-ai";
-import taskExtension, { configureTaskToolForRuntime } from "../subagent/index.js";
+import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
+import taskExtension, { configureTaskToolForRuntime, filterExtensionsForAgent } from "../subagent/index.js";
 import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
 import type { AgentConfig } from "../subagent/agents.js";
 
@@ -247,6 +249,69 @@ describe("extension loading", () => {
 		}, { cwd: tempDir, sessionManager })).rejects.toThrow('Default Root agent "missing-root" was not found');
 	});
 
+	it("blocks a real AgentSession turn when the configured default Root agent is missing", async () => {
+		const faux = registerFauxProvider();
+		faux.setResponses([fauxAssistantMessage("RAW/BASE PROMPT CONTINUED")]);
+		const model = faux.getModel();
+		const authStorage = AuthStorage.inMemory();
+		authStorage.setRuntimeApiKey(model.provider, "faux-key");
+		const modelRegistry = ModelRegistry.inMemory(authStorage);
+		modelRegistry.registerProvider(model.provider, {
+			baseUrl: model.baseUrl,
+			api: faux.api,
+			apiKey: "faux-key",
+			models: faux.models.map((registeredModel) => ({
+				id: registeredModel.id,
+				name: registeredModel.name,
+				api: registeredModel.api,
+				reasoning: registeredModel.reasoning,
+				input: registeredModel.input,
+				cost: registeredModel.cost,
+				contextWindow: registeredModel.contextWindow,
+				maxTokens: registeredModel.maxTokens,
+				baseUrl: registeredModel.baseUrl,
+			})),
+		});
+
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			extensionFactories: [taskExtension],
+		});
+		await resourceLoader.reload();
+		resourceLoader.getExtensions().runtime.flagValues.set("defaultRootAgent", "missing-root");
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(tempDir),
+			resourceLoader,
+		});
+		const notifications: Array<{ message: string; type?: string }> = [];
+
+		try {
+			await session.bindExtensions({
+				uiContext: {
+					notify: (message: string, type?: string) => notifications.push({ message, type }),
+				} as any,
+			});
+			await session.prompt("hello");
+
+			expect(notifications).toContainEqual(expect.objectContaining({
+				message: expect.stringContaining('Default Root agent "missing-root" was not found'),
+				type: "error",
+			}));
+			expect(faux.state.callCount).toBe(0);
+			expect(faux.getPendingResponseCount()).toBe(1);
+			expect(session.messages.some((message) => message.role === "assistant")).toBe(false);
+		} finally {
+			session.dispose();
+			faux.unregister();
+		}
+	});
+
 	it("/agent applies a session-local Root selection without mutating the configured default", async () => {
 		const { pi, handlers, commands, flags } = createFakeExtensionApi();
 		taskExtension(pi);
@@ -435,5 +500,28 @@ describe("extension loading", () => {
 		expect(taskTool).toBeDefined();
 		const enumValues: string[] = taskTool?.parameters?.properties?.subagent_type?.enum ?? [];
 		expect(enumValues).toEqual(["project-child"]);
+	});
+
+	it("filters this extension from sub-agent loaders even when loaded through a symlink", () => {
+		const realDir = join(tempDir, "real-extension");
+		const linkDir = join(tempDir, "linked-extension");
+		makeDir(realDir);
+		writeFile(join(realDir, "index.ts"), "export default function () {}\n");
+		symlinkSync(realDir, linkDir, "dir");
+
+		const realSelfPath = join(realDir, "index.ts");
+		const linkedSelfPath = join(linkDir, "index.ts");
+		const otherExtensionPath = join(tempDir, "other-extension.ts");
+		writeFile(otherExtensionPath, "export default function () {}\n");
+
+		const result = filterExtensionsForAgent(makeAgent("explorer", { depth: 0 }), realSelfPath)({
+			extensions: [
+				{ path: linkedSelfPath, resolvedPath: linkedSelfPath },
+				{ path: "<inline:1>", resolvedPath: "<inline:1>" },
+				{ path: otherExtensionPath, resolvedPath: otherExtensionPath },
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual(["<inline:1>", otherExtensionPath]);
 	});
 });
