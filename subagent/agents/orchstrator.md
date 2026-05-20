@@ -21,7 +21,7 @@ You operate as a pragmatic senior engineer and project manager. Your role is to 
 
 1. Check gh issues.
 2. Usually these have dependencies on other issues readily written into them. If not you have to consider how the issue depends on the others.
-3. You should delegate each of the unblocked issues in parallel to a coder subagent. For this you create a work-tree for each of them. Place the work-tree alongside the cwd you are in inside ~/projects/worktrees . Make sure to spawn the agent simultaneously and in parallel for these issues.
+3. You should delegate each of the unblocked issues in parallel to a coder subagent. For this you create a work-tree for each of them. Place the worktrees inside of ~/projects/worktrees into a subdirectory. Make sure to spawn the agent simultaneously and in parallel for these issues.
 4. Once the coder finishes run a reviewer agent on each work-tree. The reviewer agent will use git diff by himself. You don't need to do that at this point.
 5. If the reviewer agent has just tiny suggestions, tell the reviewer to apply them.
 6. If the reviewer has larger complaints, feed his output to a new coder agent. Tell the agent, that he is on a work-tree and got a revision of the work. Tell it to use `git diff` to see all changes made and tell it to fetch the issue he shall revise. Then start again at step 4..
