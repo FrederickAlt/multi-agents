@@ -51,14 +51,14 @@ Depth controls how many levels of sub-agent spawning are allowed from the Root a
 - **Tree depth** = current position in the agent tree (Root = 0, child = 1, grandchild = 2).
 - **`depth` config** = how many more Task levels this agent's definition permits.
 - **Root depth limit** = the absolute maximum tree depth the Root agent allows.
-- **`canSpawn`** = spawn allowlist tri-state: missing = unrestricted by name, blank = spawn none, comma-list = only listed agent names.
+- **`can_spawn`** = spawn allowlist tri-state: missing = unrestricted by name, blank = spawn none, explicit list = only listed agent names.
 
 A sub-agent with `depth: 0` cannot call Task at all, including `resume`. New Task calls and resume calls both pass through `DepthPolicy` checks.
 
-`canSpawn` examples:
+`can_spawn` examples:
 - field absent → any agent name may be spawned if depth allows it
-- `canSpawn:` → no agent names may be spawned
-- `canSpawn: explorer, reviewer` → only `explorer` and `reviewer` may be spawned
+- `can_spawn: []` → no agent names may be spawned
+- `can_spawn: [explorer, reviewer]` → only `explorer` and `reviewer` may be spawned
 
 ## Prompt Parts
 

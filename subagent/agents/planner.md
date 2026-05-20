@@ -3,6 +3,9 @@ description: Creates implementation plans from context and requirements
 model: deepseek-v4-pro
 reasoning_effort: high
 depth: 0
+prompt_parts:
+  - 010-tools
+  - 020-runtime-context
 ---
 # Core Identity
 

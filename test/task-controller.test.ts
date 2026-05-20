@@ -74,7 +74,7 @@ function fakeDiagnostics(): readonly AgentDiagnostic[] { return []; }
 describe("TaskController.checkSpawnAllowed", () => {
 	it("rejects spawn when depth limit has been reached", () => {
 		const result = TaskController.checkSpawnAllowed(
-			{ depth: 2, rootMaxDepth: 2, canSpawn: undefined },
+			{ depth: 2, rootMaxDepth: 2, can_spawn: undefined },
 			"Explore",
 		);
 		expect(result.allowed).toBe(false);
@@ -84,15 +84,15 @@ describe("TaskController.checkSpawnAllowed", () => {
 
 	it("allows spawn when below depth limit", () => {
 		const result = TaskController.checkSpawnAllowed(
-			{ depth: 1, rootMaxDepth: 2, canSpawn: undefined },
+			{ depth: 1, rootMaxDepth: 2, can_spawn: undefined },
 			"Explore",
 		);
 		expect(result.allowed).toBe(true);
 	});
 
-	it("rejects spawn when agent type is not in canSpawn allowlist", () => {
+	it("rejects spawn when agent type is not in can_spawn allowlist", () => {
 		const result = TaskController.checkSpawnAllowed(
-			{ depth: 0, rootMaxDepth: 2, canSpawn: ["Planner", "Reviewer"] },
+			{ depth: 0, rootMaxDepth: 2, can_spawn: ["Planner", "Reviewer"] },
 			"Explore",
 		);
 		expect(result.allowed).toBe(false);
@@ -100,9 +100,9 @@ describe("TaskController.checkSpawnAllowed", () => {
 		expect(result.error).toContain("only allowed to task Planner, Reviewer");
 	});
 
-	it("allows spawn when canSpawn is undefined (no restriction)", () => {
+	it("allows spawn when can_spawn is undefined (no restriction)", () => {
 		const result = TaskController.checkSpawnAllowed(
-			{ depth: 0, rootMaxDepth: 2, canSpawn: undefined },
+			{ depth: 0, rootMaxDepth: 2, can_spawn: undefined },
 			"Explore",
 		);
 		expect(result.allowed).toBe(true);
@@ -110,7 +110,7 @@ describe("TaskController.checkSpawnAllowed", () => {
 
 	it("rejects spawn when rootMaxDepth is 0 (no spawning allowed at all)", () => {
 		const result = TaskController.checkSpawnAllowed(
-			{ depth: 0, rootMaxDepth: 0, canSpawn: undefined },
+			{ depth: 0, rootMaxDepth: 0, can_spawn: undefined },
 			"Explore",
 		);
 		expect(result.allowed).toBe(false);
@@ -306,7 +306,7 @@ describe("TaskController.execute", () => {
 		// Build fake adapters from the real objects — MetadataStore and
 		// SubagentSessionManager already satisfy their respective interfaces.
 		fakeAgentDiscovery = {
-			discover: vi.fn((_cwd, _scope) => ({
+			discover: vi.fn((_cwd) => ({
 				agents: [makeAgent("explorer")],
 				diagnostics: fakeDiagnostics(),
 			})),
@@ -463,7 +463,7 @@ describe("TaskController.execute", () => {
 				treeDepth: 2,
 				rootDepthLimit: 2,
 				localDepthLimit: 1,
-				canSpawn: undefined,
+				can_spawn: undefined,
 			},
 		};
 		const result = await controller.execute(
@@ -476,14 +476,14 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("root depth limit 2");
 	});
 
-	it("returns error when agent not in canSpawn allowlist", async () => {
+	it("returns error when agent not in can_spawn allowlist", async () => {
 		const runtime: RuntimeContext = {
 			treeDepth: 0,
 			depthPolicy: {
 				treeDepth: 0,
 				rootDepthLimit: 5,
 				localDepthLimit: 5,
-				canSpawn: ["planner", "reviewer"],
+				can_spawn: ["planner", "reviewer"],
 			},
 		};
 		const result = await controller.execute(

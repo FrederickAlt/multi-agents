@@ -36,11 +36,18 @@ Agents are markdown files with YAML frontmatter:
 ```markdown
 ---
 description: Fast codebase exploration
-tools: read, grep, find, ls, bash
-extensions: web
+tools:
+  - read
+  - grep
+  - find
+  - ls
+  - bash
+extensions: []
 model: claude-haiku-4-5
 depth: 0
-canSpawn: planner, reviewer
+can_spawn:
+  - planner
+  - reviewer
 ---
 
 You are an exploration agent.
@@ -67,8 +74,9 @@ Frontmatter fields:
 | `model` | string | Model override |
 | `reasoning_effort` | string | Thinking/reasoning effort level |
 | `depth` | number | Spawn allowance — how many more Task levels this agent permits |
-| `canSpawn` | comma-separated | Spawn allowlist tri-state: missing = unrestricted, blank = spawn none, values = only listed agent types |
-| `skills` | comma-separated | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
+| `can_spawn` | YAML list | Spawn allowlist tri-state: missing = unrestricted, blank = spawn none, values = only listed agent types |
+| `skills` | YAML list | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
+| `prompt_parts` | YAML list | Prompt-part filtering (tri-state: missing=all, blank=none, values=filter) |
 
 Supported prompt variables:
 
@@ -83,10 +91,10 @@ Supported prompt variables:
 
 Unknown variables are errors. Internal tree metadata such as parent IDs and depth is not available as prompt variables.
 
-`canSpawn` has tri-state semantics:
+`can_spawn` has tri-state semantics:
 - missing field → unrestricted by name; depth still applies
-- blank field (`canSpawn:`) → spawn no agents
-- comma-separated list (`canSpawn: explorer, reviewer`) → spawn only those agent types
+- blank field (`can_spawn: []`) → spawn no agents
+- explicit list (`can_spawn: [explorer, reviewer]`) → spawn only those agent types
 
 ## Prompt Parts
 

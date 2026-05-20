@@ -2,10 +2,9 @@
  * Generic markdown definition discovery and loading.
  *
  * This module owns the generic logic for discovering markdown definition
- * files from bundled, user, and project directories. It mirrors the
- * structure of agents.ts but is generalised for any kind of definition
- * that follows the same conventions (YAML frontmatter, filename-stem
- * naming, bundled → user → project precedence).
+ * files from the user-level agent directory (~/.pi/agent/<subdir>).
+ * Bundled and project-level directories are not scanned at runtime.
+ * Definitions follow YAML-frontmatter conventions with filename-stem naming.
  */
 
 import * as fs from "node:fs";
@@ -48,21 +47,8 @@ export interface MarkdownDiagnostic {
 
 /** Options for discoverMarkdownDefinitions. */
 export interface MarkdownDiscoveryOptions {
-	/** Working directory used as anchor for walking up to find a project dir. */
-	cwd: string;
-	/**
-	 * Which non-bundled sources to include.
-	 * - "user":   bundled + user
-	 * - "project": bundled + project
-	 * - "both":   bundled + user + project
-	 */
-	scope: "user" | "project" | "both";
-	/** Path to the directory containing bundled definitions. */
-	bundledDir: string;
 	/** Subdirectory name (relative to the user config dir) for user definitions. */
 	userSubdir: string;
-	/** Subdirectory name used inside .pi/<projectSubdir> for project definitions. */
-	projectSubdir: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +70,9 @@ function isDirectory(p: string): boolean {
  * Walk up from `cwd` looking for a `.pi/<kind>/` directory.
  * Returns the full path to the `.pi/<kind>` directory if found,
  * or `null` if none exists in any ancestor.
+ *
+ * @deprecated Project-level agent discovery is no longer used. Use
+ *   discoverMarkdownDefinitions for user-level (~/.pi/agent/) discovery.
  */
 export function findNearestProjectDir(cwd: string, kind: string): string | null {
 	let currentDir = cwd;
@@ -209,53 +198,22 @@ export function loadDefinitionsFromDir(
 // ---------------------------------------------------------------------------
 
 /**
- * Discover markdown definitions by scanning bundled, user, and project
- * directories according to the provided options.
+ * Discover markdown definitions from ~/.pi/agent/<userSubdir>.
  *
- * Precedence: bundled is the base layer, user definitions override bundled,
- * and project definitions override both.
- *
- * The `scope` option controls which non-bundled sources are included:
- * - "user": bundled + user (user overrides bundled)
- * - "project": bundled + project (project overrides bundled)
- * - "both": bundled + user + project (user overrides bundled, project overrides both)
- *
- * Returns the merged definitions, collected diagnostics, and the resolved
- * project directory (if any).
+ * Only the user-level agent directory is scanned; bundled and project-level
+ * directories are no longer used at runtime.
  */
 export function discoverMarkdownDefinitions(
 	options: MarkdownDiscoveryOptions,
-): { definitions: RawMarkdownDefinition[]; diagnostics: MarkdownDiagnostic[]; projectDir: string | null } {
+): { definitions: RawMarkdownDefinition[]; diagnostics: MarkdownDiagnostic[]; projectDir: null } {
 	const diagnostics: MarkdownDiagnostic[] = [];
 
 	const userDir = path.join(getAgentDir(), options.userSubdir);
-	const projectDir = findNearestProjectDir(options.cwd, options.projectSubdir);
-
-	// Load definitions from each applicable source.
-	const bundledDefinitions = loadDefinitionsFromDir(options.bundledDir, "builtin", diagnostics);
-	const userDefinitions =
-		options.scope === "project"
-			? []
-			: loadDefinitionsFromDir(userDir, "user", diagnostics);
-	const projectDefinitions =
-		options.scope === "user" || !projectDir
-			? []
-			: loadDefinitionsFromDir(projectDir, "project", diagnostics);
-
-	// Merge with precedence: bundled → user → project.
-	const defMap = new Map<string, RawMarkdownDefinition>();
-
-	for (const def of bundledDefinitions) defMap.set(def.name, def);
-	if (options.scope === "both" || options.scope === "user") {
-		for (const def of userDefinitions) defMap.set(def.name, def);
-	}
-	if (options.scope === "both" || options.scope === "project") {
-		for (const def of projectDefinitions) defMap.set(def.name, def);
-	}
+	const definitions = loadDefinitionsFromDir(userDir, "user", diagnostics);
 
 	return {
-		definitions: Array.from(defMap.values()),
+		definitions,
 		diagnostics,
-		projectDir,
+		projectDir: null,
 	};
 }

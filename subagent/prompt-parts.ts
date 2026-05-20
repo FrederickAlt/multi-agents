@@ -6,18 +6,11 @@
  * YAML-frontmatter convention as agent definitions and share the
  * generic markdown-definitions loader.
  *
- * Discovery paths:
- * - bundled:   subagent/prompt-parts/*.md
- * - user:      ~/.pi/agent/prompt-parts/*.md
- * - project:   .pi/prompt-parts/*.md
+ * Discovery path: ~/.pi/agent/prompt-parts/*.md
  */
 
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-	type MarkdownDiagnostic,
-	discoverMarkdownDefinitions,
-} from "./markdown-definitions.js";
+import type { MarkdownDiagnostic } from "./markdown-definitions.js";
+import { discoverMarkdownDefinitions } from "./markdown-definitions.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,44 +32,23 @@ export interface PromptPartConfig {
 export interface PromptPartDiscoveryResult {
 	parts: PromptPartConfig[];
 	diagnostics: readonly MarkdownDiagnostic[];
-	projectDir: string | null;
+	projectDir: null;
 }
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** Path to the bundled prompt-parts directory. */
-const BUNDLED_PROMPT_PARTS_DIR = path.join(
-	path.dirname(fileURLToPath(import.meta.url)),
-	"prompt-parts",
-);
 
 // ---------------------------------------------------------------------------
 // Discovery
 // ---------------------------------------------------------------------------
 
 /**
- * Discover prompt-part definitions by scanning bundled, user, and project
- * directories.
+ * Discover prompt-part definitions from ~/.pi/agent/prompt-parts/.
  *
  * Delegates to the generic markdown-definitions loader, then maps raw
- * definitions to PromptPartConfig. Precedence follows the same rules as
- * agent definitions: bundled → user → project.
- *
- * @param cwd   Working directory used as the anchor for project discovery.
- * @param scope Which non-bundled sources to include.
+ * definitions to PromptPartConfig. Only the user-level directory is scanned;
+ * bundled and project-level directories are no longer used at runtime.
  */
-export function discoverPromptParts(
-	cwd: string,
-	scope: "user" | "project" | "both",
-): PromptPartDiscoveryResult {
+export function discoverPromptParts(): PromptPartDiscoveryResult {
 	const result = discoverMarkdownDefinitions({
-		cwd,
-		scope,
-		bundledDir: BUNDLED_PROMPT_PARTS_DIR,
 		userSubdir: "prompt-parts",
-		projectSubdir: "prompt-parts",
 	});
 
 	return {
@@ -88,6 +60,6 @@ export function discoverPromptParts(
 			filePath: def.filePath,
 		})),
 		diagnostics: result.diagnostics,
-		projectDir: result.projectDir,
+		projectDir: null,
 	};
 }

@@ -3,6 +3,9 @@ description: Fast codebase recon that returns compressed context for handoff to 
 model: deepseek-v4-flash
 reasoning_effort: high
 depth: 0
+prompt_parts:
+  - 010-tools
+  - 020-runtime-context
 ---
 
 You are a file search specialist. You excel at thoroughly navigating and exploring codebases.

@@ -104,20 +104,21 @@ Internally calls `discoverMarkdownDefinitions` and maps `RawMarkdownDefinition` 
 | Field | Type | Description |
 |-------|------|-------------|
 | `description` | string (required) | Short description shown in agent lists |
-| `tools` | comma-separated string | Whitelist of tool names (e.g. `read, grep, bash`) |
-| `extensions` | comma-separated string | Filter for which extensions to load |
+| `tools` | YAML list | Whitelist of tool names (e.g. `[read, grep, bash]`) |
+| `extensions` | YAML list | Filter for which extensions to load |
 | `model` | string | Model override (e.g. `claude-haiku-4-5` or `provider/id`) |
 | `reasoning_effort` | string | Thinking/reasoning effort level |
 | `depth` | number | Maximum nesting depth this agent can spawn (0 = no spawns) |
-| `canSpawn` | comma-separated string | Spawn allowlist tri-state: missing = unrestricted, blank = spawn none, values = only listed agent types |
-| `skills` | comma-separated string | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
+| `can_spawn` | YAML list | Spawn allowlist tri-state: missing = unrestricted, blank = spawn none, values = only listed agent types |
+| `skills` | YAML list | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |
+| `prompt_parts` | YAML list | Prompt-part filtering (tri-state: missing=all, blank=none, values=filter) |
 
 Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`.
 
 ### `subagent/agents/*.md` — Built-in agent definitions
 
-| Agent | Model | Tools | Depth | canSpawn | Purpose |
-|-------|-------|-------|-------|----------|---------|
+| Agent | Model | Tools | Depth | can_spawn | Purpose |
+|-------|-------|-------|-------|-----------|---------|
 | `default` | inherited | All | 1 | — | Default Root coding assistant |
 | `explorer` | deepseek-v4-flash | All | 0 | — | Fast read-only codebase recon, returns structured findings |
 | `planner` | deepseek-v4-pro | All | 0 | — | Read-only implementation planning |
@@ -137,14 +138,14 @@ Run tests with `npm test` (vitest).
 
 ## Key design decisions
 
-### Spawn control via depth and canSpawn
+### Spawn control via depth and can_spawn
 
-Every agent has an optional `depth` field. The built-in `default` Root agent uses `depth: 1`; the built-in specialist sub-agents use `depth: 0`. `depth` is the maximum nesting level: depth 0 means no further sub-agents can be spawned, depth 1 allows sub-agents but no grandchildren, etc. The `canSpawn` field further restricts which agent types are allowed.
+Every agent has an optional `depth` field. The built-in `default` Root agent uses `depth: 1`; the built-in specialist sub-agents use `depth: 0`. `depth` is the maximum nesting level: depth 0 means no further sub-agents can be spawned, depth 1 allows sub-agents but no grandchildren, etc. The `can_spawn` field further restricts which agent types are allowed.
 
-`canSpawn` has tri-state semantics:
-- **Missing** (`canSpawn` field absent) → unrestricted by name; depth still applies.
-- **Blank** (`canSpawn:` with no value) → spawn no agents.
-- **Comma-separated values** (`canSpawn: explorer, reviewer`) → spawn only those agent types.
+`can_spawn` has tri-state semantics:
+- **Missing** (`can_spawn` field absent) → unrestricted by name; depth still applies.
+- **Empty array** (`can_spawn: []`) → spawn no agents.
+- **Explicit list** (`can_spawn: [explorer, reviewer]`) → spawn only those agent types.
 
 ### Prompt template variables
 
@@ -156,8 +157,8 @@ Variable substitution is performed in `prompt-composition.ts` by `renderTemplate
 
 Each agent definition can specify a `skills` frontmatter field with tri-state semantics:
 - **Missing** (`skills` field absent) → all inherited skill prompt content appears in `{{skills}}`
-- **Blank** (`skills:` with no value) → no skill prompt content (agent receives no skill guidance in its prompt)
-- **Comma-separated values** (`skills: tdd, diagnose`) → only matching named skills appear in `{{skills}}`
+- **Empty array** (`skills: []`) → no skill prompt content (agent receives no skill guidance in its prompt)
+- **Explicit list** (`skills: [tdd, diagnose]`) → only matching named skills appear in `{{skills}}`
 
 Skill filtering affects prompt content only. It does not disable runtime skill commands, tools, extensions, or user-invoked skills. The same filtered skill list is visible throughout the render context, including agent definition bodies and prompt-part fragments.
 

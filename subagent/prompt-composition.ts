@@ -112,7 +112,19 @@ export function renderSubagentSystemPrompt(
 ): string {
 	const values = buildTemplateValues(context);
 	const main = renderPromptTemplate(context);
-	const parts = promptParts.map((part) =>
+
+	// Filter prompt parts by the agent's prompt_parts field:
+	// - undefined → all parts included
+	// - [] → no parts included
+	// - ["name1", "name2"] → only matching parts
+	const agentParts = context.agent.prompt_parts;
+	const filteredParts = agentParts === undefined
+		? promptParts
+		: agentParts.length === 0
+			? []
+			: promptParts.filter((part) => agentParts.includes(part.name));
+
+	const parts = filteredParts.map((part) =>
 		renderTemplateString(part.systemPrompt, values, part.name),
 	);
 	return [main, ...parts].join("\n\n");

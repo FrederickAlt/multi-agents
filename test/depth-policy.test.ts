@@ -17,7 +17,7 @@ import type { AgentConfig } from "../subagent/agents.js";
 
 function makeAgent(
 	name: string,
-	overrides: Partial<Pick<AgentConfig, "depth" | "canSpawn">> = {},
+	overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn">> = {},
 ): AgentConfig {
 	return {
 		name,
@@ -42,7 +42,7 @@ describe("checkTaskAllowed", () => {
 		expect(result.allowed).toBe(true);
 	});
 
-	it("default root policy has no canSpawn restriction", () => {
+	it("default root policy has no can_spawn restriction", () => {
 		const policy = defaultRootPolicy();
 		const result = checkTaskAllowed(policy, "any_agent");
 		expect(result.allowed).toBe(true);
@@ -72,16 +72,16 @@ describe("checkTaskAllowed", () => {
 		expect(result.code).toBe("depth_limit");
 	});
 
-	// ---- Selected Root canSpawn ----
+	// ---- Selected Root can_spawn ----
 
-	it("allows tasking when agent type is in canSpawn allowlist", () => {
-		const policy = selectedRootPolicy(makeAgent("root", { depth: 2, canSpawn: ["planner", "explorer"] }));
+	it("allows tasking when agent type is in can_spawn allowlist", () => {
+		const policy = selectedRootPolicy(makeAgent("root", { depth: 2, can_spawn: ["planner", "explorer"] }));
 		const result = checkTaskAllowed(policy, "explorer");
 		expect(result.allowed).toBe(true);
 	});
 
-	it("denies tasking when agent type is not in canSpawn allowlist", () => {
-		const policy = selectedRootPolicy(makeAgent("root", { depth: 2, canSpawn: ["planner"] }));
+	it("denies tasking when agent type is not in can_spawn allowlist", () => {
+		const policy = selectedRootPolicy(makeAgent("root", { depth: 2, can_spawn: ["planner"] }));
 		const result = checkTaskAllowed(policy, "explorer");
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("spawn_not_allowed");
@@ -91,12 +91,12 @@ describe("checkTaskAllowed", () => {
 	// ---- Sub-agent local depth ----
 
 	it("denies tasking when sub-agent has local depth 0", () => {
-		const child = makeAgent("coder", { depth: 0, canSpawn: ["explorer"] });
+		const child = makeAgent("coder", { depth: 0, can_spawn: ["explorer"] });
 		const parentPolicy: DepthPolicyState = {
 			treeDepth: 1,
 			rootDepthLimit: 2,
 			localDepthLimit: 0,
-			canSpawn: child.canSpawn,
+			can_spawn: child.can_spawn,
 		};
 		const result = checkTaskAllowed(parentPolicy, "explorer");
 		expect(result.allowed).toBe(false);
@@ -105,12 +105,12 @@ describe("checkTaskAllowed", () => {
 	});
 
 	it("allows tasking when sub-agent has local depth 1 and root limit allows", () => {
-		const child = makeAgent("coder", { depth: 1, canSpawn: ["explorer"] });
+		const child = makeAgent("coder", { depth: 1, can_spawn: ["explorer"] });
 		const parentPolicy: DepthPolicyState = {
 			treeDepth: 1,
 			rootDepthLimit: 2,
 			localDepthLimit: 1,
-			canSpawn: child.canSpawn,
+			can_spawn: child.can_spawn,
 		};
 		const result = checkTaskAllowed(parentPolicy, "explorer");
 		expect(result.allowed).toBe(true);
@@ -123,7 +123,7 @@ describe("checkTaskAllowed", () => {
 			treeDepth: 2,
 			rootDepthLimit: 2,
 			localDepthLimit: 1,
-			canSpawn: ["scout"],
+			can_spawn: ["scout"],
 		};
 		const result = checkTaskAllowed(policy, "scout");
 		expect(result.allowed).toBe(false);
@@ -135,31 +135,31 @@ describe("checkTaskAllowed", () => {
 			treeDepth: 2,
 			rootDepthLimit: 3,
 			localDepthLimit: 1,
-			canSpawn: ["scout"],
+			can_spawn: ["scout"],
 		};
 		const result = checkTaskAllowed(policy, "scout");
 		expect(result.allowed).toBe(true);
 	});
 
-	// ---- canSpawn edge cases ----
+	// ---- can_spawn edge cases ----
 
-	it("allows tasking any agent when canSpawn is undefined", () => {
+	it("allows tasking any agent when can_spawn is undefined", () => {
 		const policy: DepthPolicyState = {
 			treeDepth: 1,
 			rootDepthLimit: 2,
 			localDepthLimit: 1,
-			canSpawn: undefined,
+			can_spawn: undefined,
 		};
 		const result = checkTaskAllowed(policy, "any_agent");
 		expect(result.allowed).toBe(true);
 	});
 
-	it("denies tasking all agents when canSpawn is empty array", () => {
+	it("denies tasking all agents when can_spawn is empty array", () => {
 		const policy: DepthPolicyState = {
 			treeDepth: 1,
 			rootDepthLimit: 2,
 			localDepthLimit: 1,
-			canSpawn: [],
+			can_spawn: [],
 		};
 		const result = checkTaskAllowed(policy, "explorer");
 		expect(result.allowed).toBe(false);
@@ -178,14 +178,14 @@ describe("childPolicy", () => {
 			treeDepth: 0,
 			rootDepthLimit: 3,
 			localDepthLimit: 3,
-			canSpawn: undefined,
+			can_spawn: undefined,
 		};
 		const child = childPolicy(parent, makeAgent("explorer", { depth: 1 }), 1);
 
 		expect(child.treeDepth).toBe(1);
 		expect(child.rootDepthLimit).toBe(3);
 		expect(child.localDepthLimit).toBe(1);
-		expect(child.canSpawn).toBeUndefined();
+		expect(child.can_spawn).toBeUndefined();
 	});
 
 	it("uses child agent's depth for local depth limit", () => {
@@ -194,11 +194,11 @@ describe("childPolicy", () => {
 		expect(child.localDepthLimit).toBe(0);
 	});
 
-	it("passes through child's canSpawn allowlist", () => {
+	it("passes through child's can_spawn allowlist", () => {
 		const parent = defaultRootPolicy();
-		const childAgent = makeAgent("coder", { depth: 1, canSpawn: ["scout"] });
+		const childAgent = makeAgent("coder", { depth: 1, can_spawn: ["scout"] });
 		const child = childPolicy(parent, childAgent, 1);
-		expect(child.canSpawn).toEqual(["scout"]);
+		expect(child.can_spawn).toEqual(["scout"]);
 	});
 
 	it("calculates tree depth correctly at level 2", () => {
@@ -206,7 +206,7 @@ describe("childPolicy", () => {
 			treeDepth: 1,
 			rootDepthLimit: 3,
 			localDepthLimit: 2,
-			canSpawn: undefined,
+			can_spawn: undefined,
 		};
 		const grandchild = childPolicy(parent, makeAgent("scout", { depth: 1 }), 2);
 		expect(grandchild.treeDepth).toBe(2);

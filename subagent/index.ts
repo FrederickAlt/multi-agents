@@ -19,7 +19,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
-import { type AgentConfig, type AgentScope, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
+import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { discoverPromptParts } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
@@ -40,8 +40,6 @@ export {
 	renderComposedAgentSystemPrompt,
 } from "./prompt-composition.js";
 export type { PromptParts, RenderContext, SystemPromptCompositionOptions } from "./prompt-composition.js";
-
-const DEFAULT_AGENT_SCOPE: AgentScope = "both";
 
 function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
 	return agents.find((agent) => agent.name === name);
@@ -82,7 +80,8 @@ export function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): 
 				sameExtensionPath(extensionPath, canonicalSelfPath) ||
 				sameExtensionPath(resolvedPath, canonicalSelfPath)
 			) return false;
-			if (!allowed || allowed.length === 0) return true;
+			if (!allowed) return true; // undefined → unrestricted
+			if (allowed.length === 0) return false; // [] → none
 			const candidates = [
 				extension.path,
 				extension.resolvedPath,
@@ -159,7 +158,7 @@ export function configureTaskToolForRuntime(
 	cwd: string,
 	runTask: TaskToolRunner,
 ): void {
-	const discovery = discoverAgents(cwd, DEFAULT_AGENT_SCOPE);
+	const discovery = discoverAgents(cwd);
 
 	// Filter to only what THIS agent is allowed to spawn.
 	// DepthPolicy is the single source of truth.
@@ -278,7 +277,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const resolveRootAgentForSession = (cwd: string, selectedAgent?: string): AgentConfig => {
-		const discovery = discoverAgents(cwd, DEFAULT_AGENT_SCOPE);
+		const discovery = discoverAgents(cwd);
 		return resolveRootAgent({
 			agents: discovery.agents,
 			selectedAgent,
@@ -346,7 +345,7 @@ export default function (pi: ExtensionAPI) {
 		return renderComposedAgentSystemPrompt({
 			agent,
 			parts: buildPromptPartsForCurrentRoot(ctx),
-		}, discoverPromptParts(ctx.cwd, "both").parts);
+		}, discoverPromptParts().parts);
 	};
 
 	const makeAgentRuntimeFactory = (
@@ -359,7 +358,7 @@ export default function (pi: ExtensionAPI) {
 			registerTaskTool(subPi, runtime, effectiveCwd);
 
 			// Discover prompt parts for this sub-agent's effective working directory.
-			const promptPartDefs = discoverPromptParts(effectiveCwd, "both").parts;
+			const promptPartDefs = discoverPromptParts().parts;
 
 			subPi.on("before_agent_start", async (event) => {
 				const parts = buildPromptPartsFromOptions(event.systemPromptOptions);
@@ -393,8 +392,8 @@ export default function (pi: ExtensionAPI) {
 		// MetadataStore / SubagentSessionManager already satisfy their
 		// respective adapter interfaces.
 		const agentDiscoveryAdapter: AgentDiscoveryAdapter = {
-			discover(cwd: string, scope: AgentScope) {
-				const registry = new AgentRegistry({ cwd, scope });
+			discover(cwd: string) {
+				const registry = new AgentRegistry({ cwd });
 				registry.discover();
 				return {
 					agents: registry.agents,
@@ -523,7 +522,7 @@ export default function (pi: ExtensionAPI) {
 
 		const pParts = buildPromptPartsFromOptions(event.systemPromptOptions);
 		lastRootPromptParts = pParts;
-		const promptPartDefs = discoverPromptParts(ctx.cwd, "both").parts;
+		const promptPartDefs = discoverPromptParts().parts;
 		const prompt = renderComposedAgentSystemPrompt({
 			agent,
 			parts: pParts,
@@ -573,14 +572,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("agent", {
 		description: "Select or show the current Root agent persona",
 		getArgumentCompletions(prefix) {
-			const discovery = discoverAgents(process.cwd(), DEFAULT_AGENT_SCOPE);
+			const discovery = discoverAgents(process.cwd());
 			return discovery.agents
 				.filter((agent) => agent.name.startsWith(prefix))
 				.map((agent) => ({ value: agent.name, label: agent.name, description: agent.description }));
 		},
 		handler: async (args, ctx) => {
 			const name = args.trim();
-			const discovery = discoverAgents(ctx.cwd, DEFAULT_AGENT_SCOPE);
+			const discovery = discoverAgents(ctx.cwd);
 			if (!name) {
 				const available = formatAgentList(discovery.agents, 30).text;
 				const current = store?.selectedMainAgent ?? configuredDefaultRootAgent();

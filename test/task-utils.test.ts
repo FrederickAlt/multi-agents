@@ -578,6 +578,95 @@ describe("renderPromptTemplate", () => {
 });
 
 // ---------------------------------------------------------------------------
+// renderSubagentSystemPrompt — prompt_parts filtering (tri-state)
+// ---------------------------------------------------------------------------
+
+describe("renderSubagentSystemPrompt prompt_parts filtering", () => {
+	const baseAgent: AgentConfig = {
+		name: "TestAgent",
+		description: "A test agent",
+		systemPrompt: "Agent {{agent_name}}",
+		source: "user",
+		filePath: "/tmp/test.md",
+	};
+
+	const baseParts: PromptParts = {
+		cwd: "/tmp",
+	};
+
+	const promptParts = [
+		{
+			name: "010-tools",
+			description: "Tool info",
+			systemPrompt: "Tools context for {{agent_name}}",
+			source: "user" as const,
+			filePath: "/tmp/010-tools.md",
+		},
+		{
+			name: "020-runtime-context",
+			description: "Runtime context",
+			systemPrompt: "Runtime context for {{agent_name}} in {{cwd}}",
+			source: "user" as const,
+			filePath: "/tmp/020-runtime-context.md",
+		},
+		{
+			name: "030-guidelines",
+			description: "Guidelines",
+			systemPrompt: "Guidelines for {{agent_name}}",
+			source: "user" as const,
+			filePath: "/tmp/030-guidelines.md",
+		},
+	];
+
+	it("includes all prompt parts when agent.prompt_parts is undefined", () => {
+		const agent = { ...baseAgent, prompt_parts: undefined };
+		const ctx: RenderContext = { agent, parts: baseParts };
+		const result = renderComposedAgentSystemPrompt(ctx, promptParts);
+		expect(result).toContain("Tools context for TestAgent");
+		expect(result).toContain("Runtime context for TestAgent in /tmp");
+		expect(result).toContain("Guidelines for TestAgent");
+	});
+
+	it("includes no prompt parts when agent.prompt_parts is empty array", () => {
+		const agent = { ...baseAgent, prompt_parts: [] };
+		const ctx: RenderContext = { agent, parts: baseParts };
+		const result = renderComposedAgentSystemPrompt(ctx, promptParts);
+		expect(result).toContain("Agent TestAgent");
+		expect(result).not.toContain("Tools context");
+		expect(result).not.toContain("Runtime context");
+		expect(result).not.toContain("Guidelines");
+	});
+
+	it("includes only matching prompt parts when agent.prompt_parts is a non-empty list", () => {
+		const agent = { ...baseAgent, prompt_parts: ["010-tools", "020-runtime-context"] };
+		const ctx: RenderContext = { agent, parts: baseParts };
+		const result = renderComposedAgentSystemPrompt(ctx, promptParts);
+		expect(result).toContain("Tools context for TestAgent");
+		expect(result).toContain("Runtime context for TestAgent in /tmp");
+		expect(result).not.toContain("Guidelines");
+	});
+
+	it("includes only a single matching part when prompt_parts filters to one", () => {
+		const agent = { ...baseAgent, prompt_parts: ["030-guidelines"] };
+		const ctx: RenderContext = { agent, parts: baseParts };
+		const result = renderComposedAgentSystemPrompt(ctx, promptParts);
+		expect(result).not.toContain("Tools context");
+		expect(result).not.toContain("Runtime context");
+		expect(result).toContain("Guidelines for TestAgent");
+	});
+
+	it("includes no prompt parts when prompt_parts list has no matches", () => {
+		const agent = { ...baseAgent, prompt_parts: ["non-existent"] };
+		const ctx: RenderContext = { agent, parts: baseParts };
+		const result = renderComposedAgentSystemPrompt(ctx, promptParts);
+		expect(result).toContain("Agent TestAgent");
+		expect(result).not.toContain("Tools context");
+		expect(result).not.toContain("Runtime context");
+		expect(result).not.toContain("Guidelines");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // getFinalTextFromMessages
 // ---------------------------------------------------------------------------
 
@@ -587,45 +676,45 @@ describe("renderPromptTemplate", () => {
 
 describe("checkSpawnAllowed", () => {
 	it("rejects spawn when depth limit has been reached", () => {
-		const result = checkSpawnAllowed({ depth: 2, rootMaxDepth: 2, canSpawn: undefined }, "Explore");
+		const result = checkSpawnAllowed({ depth: 2, rootMaxDepth: 2, can_spawn: undefined }, "Explore");
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("depth_limit");
 		expect(result.error).toContain("root depth limit 2");
 	});
 
 	it("allows spawn when below depth limit", () => {
-		const result = checkSpawnAllowed({ depth: 1, rootMaxDepth: 2, canSpawn: undefined }, "Explore");
+		const result = checkSpawnAllowed({ depth: 1, rootMaxDepth: 2, can_spawn: undefined }, "Explore");
 		expect(result.allowed).toBe(true);
 		expect(result.error).toBeUndefined();
 		expect(result.code).toBeUndefined();
 	});
 
-	it("rejects spawn when agent type is not in canSpawn allowlist", () => {
-		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, canSpawn: ["Planner", "Reviewer"] }, "Explore");
+	it("rejects spawn when agent type is not in can_spawn allowlist", () => {
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, can_spawn: ["Planner", "Reviewer"] }, "Explore");
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("spawn_not_allowed");
 		expect(result.error).toContain("only allowed to task Planner, Reviewer");
 	});
 
-	it("allows spawn when agent type is in canSpawn allowlist", () => {
-		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, canSpawn: ["Planner", "Explore"] }, "Explore");
+	it("allows spawn when agent type is in can_spawn allowlist", () => {
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, can_spawn: ["Planner", "Explore"] }, "Explore");
 		expect(result.allowed).toBe(true);
 	});
 
-	it("allows spawn when canSpawn is undefined (no restriction)", () => {
-		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, canSpawn: undefined }, "Explore");
+	it("allows spawn when can_spawn is undefined (no restriction)", () => {
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 2, can_spawn: undefined }, "Explore");
 		expect(result.allowed).toBe(true);
 	});
 
 	it("rejects spawn when rootMaxDepth is 0 (no spawning allowed at all)", () => {
-		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 0, canSpawn: undefined }, "Explore");
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 0, can_spawn: undefined }, "Explore");
 		expect(result.allowed).toBe(false);
 		expect(result.code).toBe("depth_limit");
 		expect(result.error).toContain("root depth limit 0");
 	});
 
 	it("allows spawn at depth 0 when rootMaxDepth is 1", () => {
-		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 1, canSpawn: undefined }, "Explore");
+		const result = checkSpawnAllowed({ depth: 0, rootMaxDepth: 1, can_spawn: undefined }, "Explore");
 		expect(result.allowed).toBe(true);
 	});
 });

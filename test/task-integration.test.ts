@@ -61,7 +61,7 @@ function makeSessionManager(dir: string, sessionId: string) {
 	};
 }
 
-function makeAgent(name: string, overrides: Partial<Pick<AgentConfig, "depth" | "canSpawn">>): AgentConfig {
+function makeAgent(name: string, overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn">>): AgentConfig {
 	return {
 		name,
 		description: `${name} description`,
@@ -84,10 +84,18 @@ describe("extension loading", () => {
 	let tempDir: string;
 	let agentDir: string;
 
+	let agentDiscoveryDir: string;
+
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `pi-task-ext-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		makeDir(agentDir);
+
+		// Agent discovery now uses only ~/.pi/agent/ paths.
+		// Point PI_CODING_AGENT_DIR to a temp dir with agents/ subdir.
+		agentDiscoveryDir = join(tempDir, "agent-discovery");
+		makeDir(join(agentDiscoveryDir, "agents"));
+		process.env.PI_CODING_AGENT_DIR = agentDiscoveryDir;
 
 		// Redirect in-memory session dirs to tempDir so .task-subagents-*.json
 		// metadata files don't end up in the repo root (SessionManager.inMemory
@@ -102,6 +110,7 @@ describe("extension loading", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		delete process.env.PI_CODING_AGENT_DIR;
 		delete (globalThis as any).__multi_agents_selected_main_agent;
 		if (tempDir && existsSync(tempDir)) {
 			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -172,7 +181,7 @@ describe("extension loading", () => {
 	});
 
 	it("renders the configured default Root agent when the session has no /agent selection", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nProject Default Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nProject Default Root Marker\n`);
 		const { pi, handlers } = createFakeExtensionApi();
 		taskExtension(pi);
 
@@ -196,7 +205,7 @@ describe("extension loading", () => {
 	});
 
 	it("does not preserve hidden Pi prompt material for Root Agent definitions", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nRoot Agent Marker\n`);
+		writeFile(join(agentDiscoveryDir, "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nRoot Agent Marker\n`);
 		const { pi, handlers } = createFakeExtensionApi();
 		taskExtension(pi);
 
@@ -221,7 +230,7 @@ describe("extension loading", () => {
 	});
 
 	it("renders a configured non-default Root agent when the session has no /agent selection", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "customroot.md"), `---\ndescription: Custom Root agent\ndepth: 1\n---\n\nCustom Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "customroot.md"), `---\ndescription: Custom Root agent\ndepth: 1\n---\n\nCustom Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "customroot");
@@ -340,7 +349,7 @@ describe("extension loading", () => {
 	// ------------------------------------------------------------------
 
 	it("hides Task when the resolved Root agent has depth 0", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "leaf-root.md"), `---\ndescription: Leaf Root agent with depth 0\ndepth: 0\n---\n\nLeaf Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "leaf-root.md"), `---\ndescription: Leaf Root agent with depth 0\ndepth: 0\n---\n\nLeaf Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "leaf-root");
@@ -358,9 +367,9 @@ describe("extension loading", () => {
 		expect(taskTool).toBeUndefined();
 	});
 
-	it("hides Task when the resolved Root agent has empty canSpawn", async () => {
-		// Bare `canSpawn:` (null in YAML) or `canSpawn: ""` both produce an empty array → no spawnable agents
-		writeFile(join(tempDir, ".pi", "agents", "restrictive-root.md"), `---\ndescription: Restrictive Root agent\ndepth: 1\ncanSpawn:\n---\n\nRestrictive Root Marker\n`);
+	it("hides Task when the resolved Root agent has empty can_spawn", async () => {
+		// Bare `can_spawn:` (null in YAML) or `can_spawn: ""` both produce an empty array → no spawnable agents
+		writeFile(join(agentDiscoveryDir, "restrictive-root.md"), `---\ndescription: Restrictive Root agent\ndepth: 1\ncan_spawn:\n---\n\nRestrictive Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "restrictive-root");
@@ -377,7 +386,7 @@ describe("extension loading", () => {
 	});
 
 	it("registers Task when the resolved Root agent has spawnable targets", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\n---\n\nSpawning Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\n---\n\nSpawning Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "spawning-root");
@@ -394,7 +403,7 @@ describe("extension loading", () => {
 	});
 
 	it("Task subagent_type schema only offers spawnable agent types", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "filtered-root.md"), `---\ndescription: Filtered Root agent\ndepth: 1\ncanSpawn: explorer\n---\n\nFiltered Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "filtered-root.md"), `---\ndescription: Filtered Root agent\ndepth: 1\ncan_spawn: explorer\n---\n\nFiltered Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "filtered-root");
@@ -416,8 +425,8 @@ describe("extension loading", () => {
 	});
 
 	it("deactivates a stale Task tool when a later Root policy has no spawnable targets", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\ncanSpawn: explorer\n---\n\nSpawning Root Marker\n`);
-		writeFile(join(tempDir, ".pi", "agents", "leaf-root.md"), `---\ndescription: Leaf Root agent\ndepth: 0\n---\n\nLeaf Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\ncan_spawn: explorer\n---\n\nSpawning Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "leaf-root.md"), `---\ndescription: Leaf Root agent\ndepth: 0\n---\n\nLeaf Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 
@@ -441,7 +450,7 @@ describe("extension loading", () => {
 
 	it("does not expose Task for a child agent with depth 0", async () => {
 		const parentPolicy = selectedRootPolicy(makeAgent("root", { depth: 2 }));
-		const childAgent = makeAgent("leaf-child", { depth: 0, canSpawn: ["explorer"] });
+		const childAgent = makeAgent("leaf-child", { depth: 0, can_spawn: ["explorer"] });
 		const runtime = {
 			parentAgentId: "child-id",
 			treeDepth: 1,
@@ -460,7 +469,7 @@ describe("extension loading", () => {
 
 	it("exposes Task for a child agent with allowed targets and filters the enum", async () => {
 		const parentPolicy = selectedRootPolicy(makeAgent("root", { depth: 3 }));
-		const childAgent = makeAgent("delegating-child", { depth: 1, canSpawn: ["explorer", "reviewer"] });
+		const childAgent = makeAgent("delegating-child", { depth: 1, can_spawn: ["explorer", "reviewer"] });
 		const runtime = {
 			parentAgentId: "child-id",
 			treeDepth: 1,
@@ -480,8 +489,8 @@ describe("extension loading", () => {
 	});
 
 	it("registers Task from the project cwd even when the session dir is elsewhere", async () => {
-		writeFile(join(tempDir, ".pi", "agents", "project-root.md"), `---\ndescription: Project Root agent\ndepth: 1\ncanSpawn: project-child\n---\n\nProject Root Marker\n`);
-		writeFile(join(tempDir, ".pi", "agents", "project-child.md"), `---\ndescription: Project-only child agent\ndepth: 0\n---\n\nProject Child Marker\n`);
+		writeFile(join(agentDiscoveryDir, "project-root.md"), `---\ndescription: Project Root agent\ndepth: 1\ncan_spawn: project-child\n---\n\nProject Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "project-child.md"), `---\ndescription: Project-only child agent\ndepth: 0\n---\n\nProject Child Marker\n`);
 		const sessionDir = join(tempDir, "sessions-outside-cwd");
 		makeDir(sessionDir);
 
