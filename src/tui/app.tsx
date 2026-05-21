@@ -24,6 +24,7 @@ export function App() {
 		focusPrevAgent,
 		focusNextField,
 		focusPrevField,
+		focusAgentAt,
 		openOverlay,
 		closeOverlay,
 		instantSaveCheckbox,
@@ -58,8 +59,9 @@ export function App() {
 			agentIndex: state.focus.agentIndex,
 			fieldIndex: state.focus.fieldIndex,
 			fieldName,
+			scrollOffset: state.scrollOffset,
 		};
-	}, [overlay, overlayFocusIndex, state.focus]);
+	}, [overlay, overlayFocusIndex, state.focus, state.scrollOffset]);
 
 	// Wrap overlay navigation
 	const handleOverlayUp = useCallback(() => {
@@ -89,28 +91,29 @@ export function App() {
 		commitOverlay();
 	}, [overlay, overlayFocusIndex, selectDropdown, commitOverlay]);
 
-	// Keyboard hook
-	useKeyboard(
-		{
-			focusNextAgent,
-			focusPrevAgent,
-			focusNextField,
-			focusPrevField,
-			openOverlay,
-			closeOverlay,
-			toggleCheckbox: instantSaveCheckbox,
-			selectDropdown,
-			commitOverlay: () => commitOverlay(),
-			rescan,
-			overlayFocusUp: handleOverlayUp,
-			overlayFocusDown: handleOverlayDown,
-			overlayActivate: handleOverlayEnter,
-		},
-		getKeyboardState,
-	);
+	// Shared actions for keyboard and mouse handlers
+	const actions = {
+		focusNextAgent,
+		focusPrevAgent,
+		focusNextField,
+		focusPrevField,
+		focusAgentAt,
+		openOverlay,
+		closeOverlay,
+		toggleCheckbox: instantSaveCheckbox,
+		selectDropdown,
+		commitOverlay: () => commitOverlay(),
+		rescan,
+		overlayFocusUp: handleOverlayUp,
+		overlayFocusDown: handleOverlayDown,
+		overlayActivate: handleOverlayEnter,
+	};
 
-	// Mouse hook (no-op)
-	useMouse({});
+	// Keyboard hook
+	useKeyboard(actions, getKeyboardState);
+
+	// Mouse hook
+	useMouse(actions, getKeyboardState);
 
 	// Loading state
 	if (loading) {

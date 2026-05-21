@@ -81,6 +81,9 @@ export const FIELDS_ORDER = [
 
 export type FieldName = (typeof FIELDS_ORDER)[number];
 
+/** Width of each agent column in terminal cells (30 content + 2 borders). */
+export const COLUMN_WIDTH = 32;
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -93,6 +96,7 @@ export type ConfigAction =
 	  }
 	| { type: "INIT_ERROR"; error: string }
 	| { type: "FOCUS_AGENT"; direction: "next" | "prev" }
+	| { type: "FOCUS_AGENT_AT"; agentIndex: number }
 	| { type: "FOCUS_FIELD"; direction: "next" | "prev" }
 	| { type: "OPEN_OVERLAY"; agentIndex: number; fieldName: string }
 	| { type: "CLOSE_OVERLAY" }

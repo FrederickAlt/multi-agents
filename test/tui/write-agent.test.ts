@@ -237,6 +237,23 @@ describe("writeFieldToFile", () => {
 			expect(result.error).toBeDefined();
 		});
 
+		it("includes 'read-only' in error for EACCES / EPERM", () => {
+			const p = writeTempFile(
+				["---", "description: test", "---", "", "body"].join("\n"),
+			);
+			// Remove write permission from the file
+			fs.chmodSync(p, 0o444);
+			try {
+				const result = writeFieldToFile(p, "model", "claude");
+				expect(result.success).toBe(false);
+				expect(result.error).toBeDefined();
+				expect(result.error!.toLowerCase()).toMatch(/read.only|readonly/);
+			} finally {
+				// Restore write permission for cleanup
+				fs.chmodSync(p, 0o644);
+			}
+		});
+
 		it("removing a field works even when field had list value", () => {
 			const p = writeTempFile(
 				[

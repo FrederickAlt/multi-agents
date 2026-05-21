@@ -44,6 +44,10 @@ export function useConfig() {
 		await reScan();
 	}, [reScan]);
 
+	// Keep a ref to latest focused agent index for error reporting
+	const focusRef = useRef(state.focus.agentIndex);
+	focusRef.current = state.focus.agentIndex;
+
 	// When rescan completes, update state
 	useEffect(() => {
 		if (initRun.current && rescanRequested.current && !loading && !error) {
@@ -51,6 +55,28 @@ export function useConfig() {
 			dispatch({ type: "RESCAN_COMPLETE", agents, options });
 		}
 	}, [loading, error, agents, options]);
+
+	// When rescan fails, show the error in the status line while keeping the
+	// previous agents/options visible (useOptionDiscovery preserves them).
+	useEffect(() => {
+		if (initRun.current && rescanRequested.current && !loading && error) {
+			rescanRequested.current = false;
+			if (state.agents.length > 0) {
+				const idx = Math.min(focusRef.current, state.agents.length - 1);
+				dispatch({
+					type: "SAVE_COMPLETE",
+					agentIndex: idx,
+					status: {
+						type: "error",
+						message: `Rescan failed: ${error}`,
+						timestamp: Date.now(),
+					},
+				});
+			} else {
+				dispatch({ type: "INIT_ERROR", error: `Rescan failed: ${error}` });
+			}
+		}
+	}, [loading, error, state.agents.length]);
 
 	// Focus navigation
 	const focusNextAgent = useCallback(() => {
@@ -67,6 +93,10 @@ export function useConfig() {
 
 	const focusPrevField = useCallback(() => {
 		dispatch({ type: "FOCUS_FIELD", direction: "prev" });
+	}, []);
+
+	const focusAgentAt = useCallback((index: number) => {
+		dispatch({ type: "FOCUS_AGENT_AT", agentIndex: index });
 	}, []);
 
 	// Overlay management
@@ -251,6 +281,7 @@ export function useConfig() {
 		focusPrevAgent,
 		focusNextField,
 		focusPrevField,
+		focusAgentAt,
 		openOverlay,
 		closeOverlay,
 		instantSaveCheckbox,

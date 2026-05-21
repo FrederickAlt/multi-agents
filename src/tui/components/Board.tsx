@@ -1,13 +1,12 @@
 import React from "react";
 import { Box } from "ink";
 import type { ConfigState } from "../state/types.js";
+import { COLUMN_WIDTH } from "../state/types.js";
 import { AgentColumn } from "./AgentColumn.js";
 
 interface BoardProps {
 	state: ConfigState;
 }
-
-const COLUMN_WIDTH = 32; // 30 + 2 for borders
 
 export function Board({ state }: BoardProps) {
 	if (state.agents.length === 0) return null;

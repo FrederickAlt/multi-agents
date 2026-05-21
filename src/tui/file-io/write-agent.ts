@@ -90,9 +90,13 @@ export function writeFieldToFile(
 		}
 		return { success: true, frontmatter };
 	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		const reason = (code === "EACCES" || code === "EPERM" || code === "EROFS")
+			? `read-only: ${(err as Error).message}`
+			: (err as Error).message;
 		return {
 			success: false,
-			error: `Cannot write file: ${(err as Error).message}`,
+			error: `Cannot write file: ${reason}`,
 		};
 	}
 }

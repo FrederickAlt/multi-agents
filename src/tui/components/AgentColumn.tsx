@@ -24,6 +24,8 @@ export function AgentColumn({
 		return <ErrorColumn agent={agent} isFocused={isFocused} />;
 	}
 
+	const missingDescription = !agent.description || agent.description.trim().length === 0;
+
 	return (
 		<Box
 			flexDirection="column"
@@ -35,11 +37,18 @@ export function AgentColumn({
 			flexShrink={0}
 		>
 			{/* Header */}
-			<Text bold>{agent.name}</Text>
+			<Box flexDirection="row">
+				<Text bold>{agent.name}</Text>
+				{missingDescription && (
+					<Text color="yellow"> ⚠ no description</Text>
+				)}
+			</Box>
 			<Text dimColor>
-				{agent.description.length > 26
-					? agent.description.slice(0, 26) + "..."
-					: agent.description || "(no description)"}
+				{missingDescription
+					? "(no description)"
+					: agent.description.length > 26
+						? agent.description.slice(0, 26) + "..."
+						: agent.description}
 			</Text>
 
 			{/* Spacer */}

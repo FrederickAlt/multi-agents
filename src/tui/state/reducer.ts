@@ -155,6 +155,21 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			};
 		}
 
+		case "FOCUS_AGENT_AT": {
+			const len = state.agents.length;
+			if (len === 0) return state;
+			const newIdx = clamp(action.agentIndex, len);
+			// Auto-scroll
+			let { scrollOffset } = state;
+			if (newIdx < scrollOffset) scrollOffset = newIdx;
+			if (newIdx >= scrollOffset + 1) scrollOffset = newIdx;
+			return {
+				...state,
+				focus: { ...state.focus, agentIndex: newIdx },
+				scrollOffset,
+			};
+		}
+
 		case "FOCUS_FIELD": {
 			const len = FIELDS_ORDER.length;
 			if (len === 0) return state;

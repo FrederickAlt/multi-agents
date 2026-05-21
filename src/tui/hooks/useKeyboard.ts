@@ -6,6 +6,7 @@ export interface KeyboardActions {
 	focusNextField: () => void;
 	focusPrevField: () => void;
 	openOverlay: (agentIndex: number, fieldName: string) => void;
+	focusAgentAt: (index: number) => void;
 	closeOverlay: () => void;
 	toggleCheckbox: (item: string) => void;
 	selectDropdown: (item: string) => void;
@@ -24,6 +25,7 @@ export interface KeyboardState {
 	agentIndex: number;
 	fieldIndex: number;
 	fieldName: string;
+	scrollOffset: number;
 }
 
 /**
