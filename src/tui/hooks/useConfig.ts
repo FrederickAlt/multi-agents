@@ -142,13 +142,12 @@ export function useConfig() {
 			// Re-read the agent to update frontmatter in state
 			const updated = readAgent(agent.filePath);
 			if (updated.frontmatter) {
-				// Re-detect stale items for just this agent
-				// (We'll do a simplified version — just carry over existing stale items)
 				dispatch({
 					type: "UPDATE_AGENT_FRONTMATTER",
 					agentIndex: overlay.agentIndex,
 					frontmatter: updated.frontmatter,
-					staleItems: updated.staleItems,
+					// Preserve existing stale-items; they only refresh on full rescan
+					staleItems: agent.staleItems,
 				});
 			}
 

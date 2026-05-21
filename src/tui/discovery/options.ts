@@ -131,7 +131,7 @@ export function discoverCanSpawn(
 	return entries
 		.filter(
 			(e) =>
-				e.isFile() &&
+				(e.isFile() || e.isSymbolicLink()) &&
 				e.name.endsWith(".md") &&
 				!e.name.startsWith("."),
 		)
@@ -151,7 +151,7 @@ export function discoverAllAgentNames(agentDir: string): string[] {
 	return entries
 		.filter(
 			(e) =>
-				e.isFile() &&
+				(e.isFile() || e.isSymbolicLink()) &&
 				e.name.endsWith(".md") &&
 				!e.name.startsWith("."),
 		)
