@@ -115,15 +115,15 @@ describe("discoverAgents", () => {
 		expect(result.projectAgentsDir).toBeNull();
 	});
 
-	it("parses agent config fields correctly (comma-separated strings)", () => {
+	it("parses agent config fields correctly (YAML arrays)", () => {
 		writeAgent(agentsDir, "FullAgent", "Full featured agent", {
-			tools: "read, bash, edit",
-			extensions: "web, github",
+			tools: ["read", "bash", "edit"],
+			extensions: ["web", "github"],
 			model: "claude-haiku-4-5",
 			reasoning_effort: "high",
 			depth: 2,
-			can_spawn: "explorer, planner",
-			skills: "tdd, diagnose",
+			can_spawn: ["explorer", "planner"],
+			skills: ["tdd", "diagnose"],
 		});
 
 		const result = discoverAgents();
@@ -165,7 +165,7 @@ describe("discoverAgents", () => {
 		// Blank skills: empty array → []
 		writeAgent(agentsDir, "BlankSkills", "Agent with blank skills", { skills: [] });
 		// Comma-separated skills (legacy)
-		writeAgent(agentsDir, "FilteredSkills", "Agent with filtered skills", { skills: "tdd, diagnose" });
+		writeAgent(agentsDir, "FilteredSkills", "Agent with filtered skills", { skills: ["tdd", "diagnose"] });
 
 		const result = discoverAgents();
 
@@ -188,7 +188,7 @@ describe("discoverAgents", () => {
 		// Blank can_spawn: empty array → [] (no spawns)
 		writeAgent(agentsDir, "NoSpawns", "Agent with blank can_spawn", { can_spawn: [] });
 		// Comma-separated can_spawn (legacy)
-		writeAgent(agentsDir, "LimitedSpawns", "Agent with filtered can_spawn", { can_spawn: "explorer, planner" });
+		writeAgent(agentsDir, "LimitedSpawns", "Agent with filtered can_spawn", { can_spawn: ["explorer", "planner"] });
 
 		const result = discoverAgents();
 

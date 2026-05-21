@@ -414,7 +414,7 @@ describe("extension loading", () => {
 	});
 
 	it("Task subagent_type schema only offers spawnable agent types", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "filtered-root.md"), `---\ndescription: Filtered Root agent\ndepth: 1\ncan_spawn: explorer\n---\n\nFiltered Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "agents", "filtered-root.md"), `---\ndescription: Filtered Root agent\ndepth: 1\ncan_spawn:\n  - explorer\n---\n\nFiltered Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "filtered-root");
@@ -436,7 +436,7 @@ describe("extension loading", () => {
 	});
 
 	it("deactivates a stale Task tool when a later Root policy has no spawnable targets", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\ncan_spawn: explorer\n---\n\nSpawning Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\ncan_spawn:\n  - explorer\n---\n\nSpawning Root Marker\n`);
 		writeFile(join(agentDiscoveryDir, "agents", "leaf-root.md"), `---\ndescription: Leaf Root agent\ndepth: 0\n---\n\nLeaf Root Marker\n`);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
@@ -500,7 +500,7 @@ describe("extension loading", () => {
 	});
 
 	it("registers Task from the project cwd even when the session dir is elsewhere", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "project-root.md"), `---\ndescription: Project Root agent\ndepth: 1\ncan_spawn: project-child\n---\n\nProject Root Marker\n`);
+		writeFile(join(agentDiscoveryDir, "agents", "project-root.md"), `---\ndescription: Project Root agent\ndepth: 1\ncan_spawn:\n  - project-child\n---\n\nProject Root Marker\n`);
 		writeFile(join(agentDiscoveryDir, "agents", "project-child.md"), `---\ndescription: Project-only child agent\ndepth: 0\n---\n\nProject Child Marker\n`);
 		const sessionDir = join(tempDir, "sessions-outside-cwd");
 		makeDir(sessionDir);
