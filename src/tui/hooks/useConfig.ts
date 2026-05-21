@@ -5,10 +5,9 @@ import type {
 	DiscoveredOptions,
 	StatusInfo,
 } from "../state/types.js";
-import { configReducer, createInitialState } from "../state/reducer.js";
+import { configReducer, createInitialState, applyToggle, computeCheckboxSaveValue } from "../state/reducer.js";
 import { useOptionDiscovery } from "./useOptionDiscovery.js";
 import { writeFieldToFile } from "../file-io/write-agent.js";
-import { readAgent } from "../file-io/read-agent.js";
 
 /**
  * Central state hook for the Agent Configuration TUI.
@@ -90,37 +89,107 @@ export function useConfig() {
 		dispatch({ type: "SELECT_DROPDOWN", item });
 	}, []);
 
-	// Commit overlay: save to file
-	const commitOverlay = useCallback(async () => {
+	// Immediate save on checkbox toggle: write to file, then update local state.
+	//
+	// TODO: synchronous file I/O on every toggle could cause UI lag on slow
+	// disks.  Consider debouncing or batching writes in the future.
+	//
+	// NOTE: state.overlay / state.agents are captured in the useCallback
+	// closure.  Rapid successive toggles could theoretically see a stale
+	// overlay (before the previous toggle's TOGGLE_CHECKBOX dispatch is
+	// reflected).  In practice synchronous FS writes and React's batching
+	// make this extremely unlikely, but a production fix would use a ref to
+	// track the latest overlay state.
+	const instantSaveCheckbox = useCallback((item: string) => {
 		const overlay = state.overlay;
-		if (!overlay) return;
+		if (!overlay || overlay.type !== "checkbox") return;
 
 		const agent = state.agents[overlay.agentIndex];
 		if (!agent) return;
 
-		let newValue: string[] | string | number | undefined;
+		// Compute the new selection via the shared pure helper
+		const { localSelection: newSelection } = applyToggle(
+			overlay.localSelection,
+			overlay.wasImplicit,
+			overlay.availableItems,
+			item,
+		);
 
-		if (overlay.type === "checkbox") {
-			// Determine whether to write explicit list or remove field
-			if (overlay.wasImplicit && overlay.localSelection.length === overlay.availableItems.length) {
-				// User opened implicit, didn't change anything → keep implicit (undefined)
-				newValue = undefined;
-			} else if (overlay.localSelection.length === overlay.availableItems.length && !overlay.wasImplicit) {
-				// User toggled back to all selected → remove field (become implicit)
-				newValue = undefined;
-			} else {
-				// Write explicit list
-				newValue = overlay.localSelection;
+		// Determine save value using tri-state logic
+		const newValue = computeCheckboxSaveValue(
+			newSelection,
+			overlay.availableItems,
+		);
+
+		// Save to file immediately
+		dispatch({
+			type: "SAVE_COMPLETE",
+			agentIndex: overlay.agentIndex,
+			status: { type: "saving", message: "Saving...", timestamp: Date.now() },
+		});
+
+		const result = writeFieldToFile(
+			agent.filePath,
+			overlay.fieldName,
+			newValue,
+		);
+
+		if (result.success) {
+			// Only update UI state after a successful write — no divergence.
+			// Use result.frontmatter to avoid a separate readAgent re-read.
+			if (result.frontmatter) {
+				dispatch({
+					type: "UPDATE_AGENT_FRONTMATTER",
+					agentIndex: overlay.agentIndex,
+					frontmatter: result.frontmatter,
+					staleItems: agent.staleItems,
+				});
 			}
+
+			toggleCheckbox(item);
+
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: overlay.agentIndex,
+				status: {
+					type: "saved",
+					message: `Saved ${agent.name}.md`,
+					timestamp: Date.now(),
+				},
+			});
 		} else {
-			// Dropdown: always write explicit value
-			newValue = overlay.localSelected;
-			// For depth, convert to number
-			if (overlay.fieldName === "depth") {
-				const parsed = Number(overlay.localSelected);
-				if (!Number.isNaN(parsed)) {
-					newValue = parsed;
-				}
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: overlay.agentIndex,
+				status: {
+					type: "error",
+					message: `Save failed: ${result.error}`,
+					timestamp: Date.now(),
+				},
+			});
+		}
+	}, [state.overlay, state.agents, toggleCheckbox]);
+
+	// Commit overlay: save to file (dropdown) or just close (checkbox)
+	const commitOverlay = useCallback(() => {
+		const overlay = state.overlay;
+		if (!overlay) return;
+
+		// For checkboxes, each toggle already saved — just close the overlay
+		if (overlay.type === "checkbox") {
+			dispatch({ type: "CLOSE_OVERLAY" });
+			return;
+		}
+
+		const agent = state.agents[overlay.agentIndex];
+		if (!agent) return;
+
+		// Dropdown: always write explicit value
+		let newValue: string | number | undefined = overlay.localSelected;
+		if (overlay.fieldName === "depth") {
+			const parsed = Number(overlay.localSelected);
+			if (!Number.isNaN(parsed)) {
+				newValue = parsed;
 			}
 		}
 
@@ -139,13 +208,12 @@ export function useConfig() {
 		);
 
 		if (result.success) {
-			// Re-read the agent to update frontmatter in state
-			const updated = readAgent(agent.filePath);
-			if (updated.frontmatter) {
+			// Use result.frontmatter to avoid a separate readAgent re-read
+			if (result.frontmatter) {
 				dispatch({
 					type: "UPDATE_AGENT_FRONTMATTER",
 					agentIndex: overlay.agentIndex,
-					frontmatter: updated.frontmatter,
+					frontmatter: result.frontmatter,
 					// Preserve existing stale-items; they only refresh on full rescan
 					staleItems: agent.staleItems,
 				});
@@ -185,7 +253,7 @@ export function useConfig() {
 		focusPrevField,
 		openOverlay,
 		closeOverlay,
-		toggleCheckbox,
+		instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay,
 		rescan,

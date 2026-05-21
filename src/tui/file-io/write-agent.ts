@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 
 /**
  * Selective field write-back into an agent .md file.
@@ -79,7 +80,15 @@ export function writeFieldToFile(
 
 	try {
 		fs.writeFileSync(filePath, newContent, "utf-8");
-		return { success: true };
+		// Parse the new content so callers can skip a separate re-read
+		let frontmatter: Record<string, unknown> | undefined;
+		try {
+			const parsed = parseFrontmatter<Record<string, unknown>>(newContent);
+			frontmatter = parsed.frontmatter;
+		} catch {
+			// Parse failure is non-fatal: the write succeeded.
+		}
+		return { success: true, frontmatter };
 	} catch (err) {
 		return {
 			success: false,

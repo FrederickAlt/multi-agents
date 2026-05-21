@@ -50,7 +50,7 @@ export function CheckboxOverlay({ overlay, focusedIndex }: CheckboxOverlayProps)
 			})}
 
 			<Box marginTop={1}>
-				<Text dimColor>Enter: save  Esc: cancel  Space: toggle</Text>
+				<Text dimColor>Enter: close  Esc: close  Space: toggle (saves immediately)</Text>
 			</Box>
 		</Box>
 	);
