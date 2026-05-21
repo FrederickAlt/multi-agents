@@ -96,7 +96,6 @@ export type ConfigAction =
 	| { type: "CLOSE_OVERLAY" }
 	| { type: "TOGGLE_CHECKBOX"; item: string }
 	| { type: "SELECT_DROPDOWN"; item: string }
-	| { type: "COMMIT_OVERLAY" }
 	| {
 			type: "SAVE_COMPLETE";
 			agentIndex: number;

@@ -28,7 +28,6 @@ export function FieldRow({ agent, fieldName, isFocused }: FieldRowProps) {
 			<Text
 				bold={isFocused}
 				color={isFocused ? "cyan" : undefined}
-				backgroundColor={isFocused ? "cyan" : undefined}
 			>
 				{isFocused ? "> " : "  "}
 				{label.padEnd(12)}

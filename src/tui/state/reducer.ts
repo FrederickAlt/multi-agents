@@ -204,12 +204,6 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			};
 		}
 
-		case "COMMIT_OVERLAY": {
-			// The actual save is handled by useConfig hook.
-			// The reducer just marks the overlay as closed (save happens async).
-			return { ...state, overlay: null };
-		}
-
 		case "SAVE_COMPLETE": {
 			const newStatuses = new Map(state.statuses);
 			newStatuses.set(

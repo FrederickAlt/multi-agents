@@ -24,6 +24,7 @@ export function useConfig() {
 	const { options, agents, loading, error, rescan: reScan } = useOptionDiscovery();
 
 	const initRun = useRef(false);
+	const rescanRequested = useRef(false);
 
 	// Initialize state when discovery completes
 	useEffect(() => {
@@ -39,19 +40,16 @@ export function useConfig() {
 
 	// Rescan handler
 	const rescan = useCallback(async () => {
+		rescanRequested.current = true;
 		dispatch({ type: "RESCAN" });
 		await reScan();
 	}, [reScan]);
 
 	// When rescan completes, update state
 	useEffect(() => {
-		if (initRun.current && !loading && !error) {
-			// Check if this is a rescan (not initial load)
-			// We use a simple heuristic: if state already has agents and the new
-			// agents differ, it's a rescan.
-			if (state.agents.length > 0 || agents.length > 0) {
-				dispatch({ type: "RESCAN_COMPLETE", agents, options });
-			}
+		if (initRun.current && rescanRequested.current && !loading && !error) {
+			rescanRequested.current = false;
+			dispatch({ type: "RESCAN_COMPLETE", agents, options });
 		}
 	}, [loading, error, agents, options]);
 
