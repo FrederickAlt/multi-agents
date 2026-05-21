@@ -30,17 +30,20 @@ const API_KEY = hasOpencodeAuth()
 describe.skipIf(!API_KEY)("Task with real LLM (deepseek-v4-flash)", () => {
 	let tempDir: string;
 	let projectDir: string;
-	let piDir: string;
-	let agentsDir: string;
+	let agentDir: string;
 	let session: any;
 	let cleanup: () => void;
 
 	beforeEach(async () => {
 		tempDir = join(tmpdir(), `pi-task-llm-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		projectDir = join(tempDir, "project");
-		piDir = join(projectDir, ".pi");
-		agentsDir = join(piDir, "agents");
-		mkdirSync(agentsDir, { recursive: true });
+		agentDir = join(tempDir, "agent-discovery");
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(join(agentDir, "agents"), { recursive: true });
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+
+		// Seed a default root agent so before_agent_start can resolve the root.
+		writeFileSync(join(agentDir, "agents", "default.md"), `---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`, "utf-8");
 
 		// Write a simple README for the subagent to read
 		writeFileSync(join(projectDir, "README.md"), "# Test Project\n\nThis is a test project for persistent subagents.", "utf-8");
@@ -62,11 +65,12 @@ CRITICAL SAFETY RULES:
 - Do NOT attempt to read files outside the project.
 - Be concise.
 `;
-		writeFileSync(join(agentsDir, "testreader.md"), agentConfig, "utf-8");
+		writeFileSync(join(agentDir, "agents", "testreader.md"), agentConfig, "utf-8");
 	});
 
 	afterEach(() => {
 		if (session) session.dispose();
+		delete process.env.PI_CODING_AGENT_DIR;
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
