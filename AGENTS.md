@@ -200,3 +200,4 @@ Sub-agent `AgentSession` objects are disposed after each `Task` call. The on-dis
 4. The generic markdown loader (`markdown-definitions.ts`) is shared by both agent and prompt-part discovery. Adding a new kind of markdown definition should reuse this loader.
 5. The extension registers itself via `package.json` → `pi.extensions: ["./subagent/index.ts"]`.
 6. When modifying prompt templates, ensure `REQUIRED_TEMPLATE_VARS` in `prompt-composition.ts` stays in sync with the variables used in agent and prompt-part markdown.
+7. **CRITICAL: Never modify agent/prompt-part body content.** Only the user writes prompts. You may edit YAML frontmatter fields (`description`, `tools`, `model`, `depth`, `can_spawn`, `prompt_parts`, `reasoning_effort`, `extensions`) in `subagent/agents/*.md` and `subagent/prompt-parts/*.md`, but the markdown body below the `---` separator is strictly off-limits without explicit user instruction.
