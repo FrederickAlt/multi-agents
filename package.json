@@ -7,15 +7,28 @@
     "test": "vitest --run",
     "test:watch": "vitest"
   },
+  "bin": {
+    "pi-agent-config": "./pi-agent-config.ts"
+  },
   "files": [
     "subagent/**/*",
+    "src/tui/**/*",
+    "pi-agent-config.ts",
     "README.md"
   ],
   "pi": {
-    "extensions": ["./subagent/index.ts"]
+    "extensions": [
+      "./subagent/index.ts"
+    ]
   },
   "devDependencies": {
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.3",
     "typebox": "^1.1.38",
     "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "ink": "^5.2.1",
+    "react": "^19.2.6"
   }
 }

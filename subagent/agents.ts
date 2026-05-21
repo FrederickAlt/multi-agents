@@ -83,10 +83,9 @@ export interface AgentRegistryOptions {
 
 // Helper: parse a checkbox field value to string[] | undefined with tri-state semantics.
 // - undefined → field is missing (unrestricted)
-// - null or empty → empty array (none allowed)
-// - string → comma-separated list (legacy) → split
+// - null or empty array → empty array (none allowed)
 // - array → use directly
-// - any other type (e.g. boolean false from YAML) → empty array
+// - any other type → empty array
 function parseCheckboxField(
 	value: unknown,
 ): string[] | undefined {
@@ -96,10 +95,7 @@ function parseCheckboxField(
 		const items = value.map((v: unknown) => String(v).trim()).filter(Boolean);
 		return items.length > 0 ? items : [];
 	}
-	if (typeof value !== "string") return [];
-	const str = value.trim();
-	if (str.length === 0) return [];
-	return str.split(",").map((s: string) => s.trim()).filter(Boolean);
+	return [];
 }
 
 /**
