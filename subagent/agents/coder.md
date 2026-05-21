@@ -1,6 +1,6 @@
 ---
 description: Fast coding agent that is used to implement a given plan/issue
-model: deepseek-v4-pro
+model: gpt-5.5
 reasoning_effort: high
 depth: 1
 can_spawn:

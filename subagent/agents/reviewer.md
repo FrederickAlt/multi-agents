@@ -1,17 +1,8 @@
 ---
 description: Code review specialist for quality and security analysis
-tools:
-  - read
-  - grep
-  - find
-  - ls
-  - bash
-model: deepseek-v4-pro
+model: gpt-5.5
 reasoning_effort: high
 depth: 0
-prompt_parts:
-  - 010-tools
-  - 020-runtime-context
 ---
 
 You are a senior code reviewer. Analyze code for quality, security, and maintainability.
