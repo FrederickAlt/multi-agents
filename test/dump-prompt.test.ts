@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -43,14 +43,27 @@ function createFakePi() {
 
 describe("integrated dump-prompt command", () => {
 	let tempDir: string;
+	let agentDir: string;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `pi-dump-prompt-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(tempDir, { recursive: true });
+		agentDir = join(tempDir, "agent-discovery");
+		mkdirSync(join(agentDir, "agents"), { recursive: true });
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+
+		// Write the explorer agent matching expected test assertions
+		writeFileSync(join(agentDir, "agents", "explorer.md"), `---
+description: Fast codebase recon
+depth: 1
+---
+
+You are a scout.
+`, "utf-8");
 	});
 
 	afterEach(() => {
 		delete (globalThis as any).__multi_agents_selected_main_agent;
+		delete process.env.PI_CODING_AGENT_DIR;
 		if (tempDir && existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
 	});
 

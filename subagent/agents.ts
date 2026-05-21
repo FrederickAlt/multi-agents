@@ -1,7 +1,7 @@
 /**
  * AgentRegistry for Sub-agent discovery and lookup.
  *
- * Owns cwd-aware discovery, bundled/user/project precedence,
+ * Owns user-level agent discovery from ~/.pi/agent/agents/,
  * validation diagnostics for skipped definitions, lookup by name,
  * and formatted agent lists for user-facing messages.
  *
@@ -13,15 +13,15 @@
  * the existing public API for callers that don't need diagnostics.
  */
 
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
 	type RawMarkdownDefinition,
 	type MarkdownDiagnostic,
 	discoverMarkdownDefinitions,
 } from "./markdown-definitions.js";
 
-export type AgentScope = "user" | "project" | "both";
+/** Source origin of an agent definition.
+ * `"user"` is the only source returned at runtime; `"builtin"` and
+ * `"project"` are reserved for future seeding/registration. */
 export type AgentSource = "builtin" | "user" | "project";
 
 export interface AgentConfig {
@@ -33,7 +33,13 @@ export interface AgentConfig {
 	/** Thinking/reasoning effort level for the model. Maps to ThinkingLevel from pi-ai. */
 	reasoningEffort?: string;
 	depth?: number;
-	canSpawn?: string[];
+	/**
+	 * Spawn allowlist with tri-state semantics.
+	 * - `undefined` (field missing) → unrestricted
+	 * - `[]` (blank value) → no spawnable agents
+	 * - `["agent1", "agent2"]` → only those agent types
+	 */
+	can_spawn?: string[];
 	/**
 	 * Skill prompt filtering with tri-state semantics.
 	 * - `undefined` (field missing) → all inherited skill prompt content
@@ -41,6 +47,13 @@ export interface AgentConfig {
 	 * - `["skill1", "skill2"]` → only matching named skill prompt content
 	 */
 	skills?: string[];
+	/**
+	 * Prompt-part filtering with tri-state semantics.
+	 * - `undefined` (field missing) → all prompt parts included
+	 * - `[]` (blank value) → no prompt parts included
+	 * - `["010-tools", "020-runtime-context"]` → only those named parts
+	 */
+	prompt_parts?: string[];
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -62,59 +75,47 @@ export interface AgentDiagnostic {
 }
 
 export interface AgentRegistryOptions {
-	cwd: string;
-	scope?: AgentScope;
 }
 
 // ---------------------------------------------------------------------------
 // Mapping helpers — RawMarkdownDefinition -> AgentConfig
 // ---------------------------------------------------------------------------
 
-// Path to the bundled agents directory, relative to this source file.
-const BUNDLED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
+// Helper: parse a checkbox field value to string[] | undefined with tri-state semantics.
+// - undefined → field is missing (unrestricted)
+// - null or empty → empty array (none allowed)
+// - string → comma-separated list (legacy) → split
+// - array → use directly
+// - any other type (e.g. boolean false from YAML) → empty array
+function parseCheckboxField(
+	value: unknown,
+): string[] | undefined {
+	if (value === undefined) return undefined;
+	if (value === null) return [];
+	if (Array.isArray(value)) {
+		const items = value.map((v: unknown) => String(v).trim()).filter(Boolean);
+		return items.length > 0 ? items : [];
+	}
+	if (typeof value !== "string") return [];
+	const str = value.trim();
+	if (str.length === 0) return [];
+	return str.split(",").map((s: string) => s.trim()).filter(Boolean);
+}
 
 /**
  * Map a generic RawMarkdownDefinition to an agent-specific AgentConfig.
  *
  * Parses agent-specific frontmatter fields (tools, extensions, model,
- * reasoning_effort, depth, canSpawn, skills) from the raw frontmatter map.
+ * reasoning_effort, depth, can_spawn, skills, prompt_parts) from the raw frontmatter map.
  */
 function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 	const fm = raw.frontmatter;
 
-	const tools = String(fm.tools ?? "")
-		.split(",")
-		.map((t: string) => t.trim())
-		.filter(Boolean);
-	const extensions = String(fm.extensions ?? "")
-		.split(",")
-		.map((t: string) => t.trim())
-		.filter(Boolean);
-
-	// canSpawn: tri-state — undefined when missing (unrestricted), [] when blank (no spawns), string[] when values
-	let canSpawn: string[] | undefined;
-	if (fm.canSpawn === undefined) {
-		canSpawn = undefined; // unrestricted
-	} else if (fm.canSpawn === null || String(fm.canSpawn).trim() === "") {
-		canSpawn = []; // blank → no spawnable agents
-	} else {
-		canSpawn = String(fm.canSpawn)
-			.split(",")
-			.map((t: string) => t.trim())
-			.filter(Boolean);
-	}
-
-	// skills: tri-state — undefined when missing, [] when blank, string[] when values
-	let skills: string[] | undefined;
-	if (fm.skills === undefined || fm.skills === null) {
-		// Null (from bare `skills:` in YAML) is treated as blank → []
-		skills = fm.skills === undefined ? undefined : [];
-	} else {
-		const raw = String(fm.skills).trim();
-		skills = raw.length > 0
-			? raw.split(",").map((s: string) => s.trim()).filter(Boolean)
-			: [];
-	}
+	const tools = parseCheckboxField(fm.tools);
+	const extensions = parseCheckboxField(fm.extensions);
+	const can_spawn = parseCheckboxField(fm.can_spawn);
+	const skills = parseCheckboxField(fm.skills);
+	const prompt_parts = parseCheckboxField(fm.prompt_parts);
 
 	const reasoningEffort = fm.reasoning_effort ? String(fm.reasoning_effort) : undefined;
 	const rawDepth = fm.depth;
@@ -129,12 +130,13 @@ function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 		name: raw.name,
 		description: raw.description,
 		reasoningEffort,
-		tools: tools.length > 0 ? tools : undefined,
-		extensions: extensions.length > 0 ? extensions : undefined,
+		tools,
+		extensions,
 		model: fm.model ? String(fm.model) : undefined,
 		depth: Number.isFinite(depth) ? depth : undefined,
-		canSpawn,
+		can_spawn,
 		skills,
+		prompt_parts,
 		systemPrompt: raw.body,
 		source: raw.source,
 		filePath: raw.filePath,
@@ -153,28 +155,24 @@ function mapToAgentDiagnostic(d: MarkdownDiagnostic): AgentDiagnostic {
 /**
  * Encapsulates Sub-agent discovery and lookup.
  *
- * Create an instance with a cwd and scope, then call .discover() to run
+ * Create an instance, then call .discover() to run
  * discovery. After discovery, inspect .agents, .find(name), .formatList(),
  * and .diagnostics to see why certain definitions were skipped.
  *
  * ```ts
- * const registry = new AgentRegistry({ cwd: process.cwd(), scope: "both" });
+ * const registry = new AgentRegistry();
  * registry.discover();
  * const explorer = registry.find("explorer");
  * console.log(registry.diagnostics); // skipped-file reasons
  * ```
  */
 export class AgentRegistry {
-	private _cwd: string;
-	private _scope: AgentScope;
 	private _agents: AgentConfig[];
 	private _projectAgentsDir: string | null;
 	private _diagnostics: AgentDiagnostic[];
 	private _discovered: boolean;
 
-	constructor(options: AgentRegistryOptions) {
-		this._cwd = options.cwd;
-		this._scope = options.scope ?? "both";
+	constructor(options?: AgentRegistryOptions) {
 		this._agents = [];
 		this._projectAgentsDir = null;
 		this._diagnostics = [];
@@ -188,11 +186,7 @@ export class AgentRegistry {
 	 */
 	discover(): this {
 		const result = discoverMarkdownDefinitions({
-			cwd: this._cwd,
-			scope: this._scope,
-			bundledDir: BUNDLED_DIR,
 			userSubdir: "agents",
-			projectSubdir: "agents",
 		});
 
 		this._agents = result.definitions.map(mapToAgentConfig);
@@ -220,7 +214,8 @@ export class AgentRegistry {
 	}
 
 	/**
-	 * The nearest .pi/agents directory found during discovery, or null.
+	 * Always returns null. Project directory scanning is no longer used;
+	 * agents are discovered from ~/.pi/agent/agents/.
 	 */
 	get projectAgentsDir(): string | null {
 		this._ensureDiscovered();
@@ -243,17 +238,7 @@ export class AgentRegistry {
 		return formatAgentList(this.agents, maxItems);
 	}
 
-	/** Re-discover with a different working directory. */
-	setCwd(cwd: string): void {
-		this._cwd = cwd;
-		this._discovered = false;
-	}
 
-	/** Change the scope for the next discover() call. */
-	setScope(scope: AgentScope): void {
-		this._scope = scope;
-		this._discovered = false;
-	}
 
 	private _ensureDiscovered(): void {
 		if (!this._discovered) {
@@ -275,8 +260,8 @@ export class AgentRegistry {
  * discovery, and returns the result. For access to diagnostics use
  * the AgentRegistry class directly.
  */
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
-	const registry = new AgentRegistry({ cwd, scope });
+export function discoverAgents(): AgentDiscoveryResult {
+	const registry = new AgentRegistry();
 	registry.discover();
 	return { agents: registry.agents, projectAgentsDir: registry.projectAgentsDir };
 }

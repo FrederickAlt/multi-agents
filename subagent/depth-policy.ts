@@ -2,14 +2,14 @@
  * DepthPolicy — centralised spawn-decision logic for the Task tool.
  *
  * One module owns every spawn decision: tree-depth limit, per-agent local
- * depth budget, and canSpawn allowlist.  Error messages are model-readable
+ * depth budget, and can_spawn allowlist.  Error messages are model-readable
  * so the LLM can recover from denials without guessing.
  *
  * Vocabulary:
  * - treeDepth        → current position in the agent tree (Root = 0, child = 1, …)
  * - rootDepthLimit   → max tree depth the Root agent permits
  * - localDepthLimit  → how many levels *this* agent config allows downward
- * - canSpawn         → optional allowlist of agent names this agent may delegate to
+ * - can_spawn        → optional allowlist of agent names this agent may delegate to
  */
 
 import type { AgentConfig } from "./agents.js";
@@ -29,7 +29,7 @@ export interface DepthPolicyState {
 	 */
 	localDepthLimit: number;
 	/** Optional allowlist.  `undefined` = unrestricted. */
-	canSpawn?: readonly string[];
+	can_spawn?: readonly string[];
 }
 
 export type SpawnDecision =
@@ -66,10 +66,10 @@ export function checkTaskAllowed(
 		};
 	}
 
-	// 3. canSpawn allowlist (undefined = unrestricted)
-	if (policy.canSpawn && !policy.canSpawn.includes(targetAgentName)) {
-		const list = policy.canSpawn.length > 0
-			? policy.canSpawn.join(", ")
+	// 3. can_spawn allowlist (undefined = unrestricted)
+	if (policy.can_spawn && !policy.can_spawn.includes(targetAgentName)) {
+		const list = policy.can_spawn.length > 0
+			? policy.can_spawn.join(", ")
 			: "none";
 		return {
 			allowed: false,
@@ -98,7 +98,7 @@ export function defaultRootPolicy(): DepthPolicyState {
 		treeDepth: 0,
 		rootDepthLimit: Number.POSITIVE_INFINITY,
 		localDepthLimit: Number.POSITIVE_INFINITY,
-		canSpawn: undefined,
+		can_spawn: undefined,
 	};
 }
 
@@ -114,7 +114,7 @@ export function selectedRootPolicy(agent: AgentConfig): DepthPolicyState {
 		treeDepth: 0,
 		rootDepthLimit: depth,
 		localDepthLimit: depth,
-		canSpawn: agent.canSpawn,
+		can_spawn: agent.can_spawn,
 	};
 }
 
@@ -136,6 +136,6 @@ export function childPolicy(
 		treeDepth: childTreeDepth,
 		rootDepthLimit: parent.rootDepthLimit,
 		localDepthLimit: childLocalDepth,
-		canSpawn: childAgent.canSpawn,
+		can_spawn: childAgent.can_spawn,
 	};
 }

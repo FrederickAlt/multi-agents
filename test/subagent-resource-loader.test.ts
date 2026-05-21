@@ -24,14 +24,21 @@ describe("Task sub-agent resource loading", () => {
 	let tempDir: string;
 	let projectDir: string;
 	let sessionDir: string;
+	let agentDiscoveryDir: string;
 	let constructedLoaders: Array<{ options: any; reload: () => Promise<void> }>;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `pi-task-resource-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		projectDir = join(tempDir, "project");
 		sessionDir = join(tempDir, "sessions");
+		agentDiscoveryDir = join(tempDir, "agent-discovery");
 		makeDir(projectDir);
 		makeDir(sessionDir);
+		makeDir(join(agentDiscoveryDir, "agents"));
+		process.env.PI_CODING_AGENT_DIR = agentDiscoveryDir;
+
+		// Seed a default root agent so before_agent_start can resolve the root.
+		writeFile(join(agentDiscoveryDir, "agents", "default.md"), `---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`);
 		constructedLoaders = [];
 		vi.resetModules();
 	});
@@ -40,6 +47,7 @@ describe("Task sub-agent resource loading", () => {
 		vi.doUnmock("@mariozechner/pi-coding-agent");
 		vi.restoreAllMocks();
 		vi.resetModules();
+		delete process.env.PI_CODING_AGENT_DIR;
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -47,7 +55,7 @@ describe("Task sub-agent resource loading", () => {
 
 	it("disables native context-file injection while keeping context available to {{context_files}}", async () => {
 		writeFile(join(projectDir, "AGENTS.md"), "PROJECT CONTEXT MARKER");
-		writeFile(join(projectDir, ".pi", "agents", "contextreader.md"), `---
+		writeFile(join(agentDiscoveryDir, "agents", "contextreader.md"), `---
 description: Context reader
 depth: 1
 ---

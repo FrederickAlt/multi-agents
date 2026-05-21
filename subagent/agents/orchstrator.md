@@ -3,6 +3,14 @@ description: Orchestrator agent to manage many sub-agents implementing issues
 model: deepseek-v4-pro
 reasoning_effort: high
 depth: 2
+can_spawn:
+  - coder
+  - explorer
+  - planner
+  - reviewer
+prompt_parts:
+  - 010-tools
+  - 020-runtime-context
 ---
 
 

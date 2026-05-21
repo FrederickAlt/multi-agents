@@ -29,9 +29,9 @@
   limit would allow deeper trees.
 - **can_spawn**: Optional allowlist of Agent definition names this agent may delegate to.
   Missing field = unrestricted by allowlist. A defined array (even empty) acts
-  as an allowlist; an empty array means "spawn none". Avoid: canSpawn.
+  as an allowlist; an empty array means "spawn none".
 - **DepthPolicy**: Centralised module (`subagent/depth-policy.ts`) that owns
-  every spawn decision — tree-depth limit, local depth budget, and canSpawn.
+  every spawn decision — tree-depth limit, local depth budget, and can_spawn.
   Replaces ad-hoc checks scattered across `TaskController` and `index.ts`.
 - **Metadata sidecar**: JSON file (`.task-subagents-<sessionId>.json`) storing
   sub-agent records alongside the root session.

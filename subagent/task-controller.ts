@@ -3,7 +3,7 @@
  *
  * Responsibilities:
  * - Agent discovery and validation (via AgentDiscoveryAdapter)
- * - Spawn permission checks (depth, canSpawn allowlist)
+ * - Spawn permission checks (depth, can_spawn allowlist)
  * - Record allocation (via MetadataAdapter)
  * - Session lifecycle (via SessionAdapter)
  * - Prompt execution and result formatting
@@ -18,7 +18,6 @@ import type { DefaultResourceLoader, Model } from "@mariozechner/pi-coding-agent
 import type {
 	AgentConfig,
 	AgentDiagnostic,
-	AgentScope,
 } from "./agents.js";
 import { formatAgentList } from "./agents.js";
 import {
@@ -38,7 +37,7 @@ import type {
 
 /** What the controller needs from agent discovery. */
 export interface AgentDiscoveryAdapter {
-	discover(cwd: string, scope: AgentScope): {
+	discover(): {
 		agents: AgentConfig[];
 		diagnostics: readonly AgentDiagnostic[];
 	};
@@ -153,7 +152,7 @@ export class TaskController {
 	 * @deprecated Prefer {@link checkTaskAllowed} from depth-policy.js.
 	 */
 	static checkSpawnAllowed(
-		runtime: { depth: number; rootMaxDepth: number; canSpawn: string[] | undefined },
+		runtime: { depth: number; rootMaxDepth: number; can_spawn: string[] | undefined },
 		agentName: string,
 	): { allowed: boolean; error?: string; code?: string } {
 		return checkTaskAllowed(
@@ -161,7 +160,7 @@ export class TaskController {
 				treeDepth: runtime.depth,
 				rootDepthLimit: runtime.rootMaxDepth,
 				localDepthLimit: runtime.rootMaxDepth, // old impl ignores local depth
-				canSpawn: runtime.canSpawn,
+				can_spawn: runtime.can_spawn,
 			},
 			agentName,
 		);
@@ -264,7 +263,7 @@ export class TaskController {
 		let agents: AgentConfig[];
 		const warnings: string[] = [];
 		try {
-			const discovery = agentDiscovery.discover(effectiveCwd, "both" as AgentScope);
+			const discovery = agentDiscovery.discover();
 			agents = discovery.agents;
 
 			for (const d of discovery.diagnostics) {
