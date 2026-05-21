@@ -458,7 +458,7 @@ describe("extension loading", () => {
 		};
 		const { pi } = createFakeExtensionApi({ activeTools: ["read", "Task"] });
 
-		configureTaskToolForRuntime(pi, runtime, tempDir, async () => ({
+		configureTaskToolForRuntime(pi, runtime, async () => ({
 			content: [{ type: "text", text: "unused" }],
 			details: { warnings: [] },
 		}));
@@ -477,7 +477,7 @@ describe("extension loading", () => {
 		};
 		const { pi } = createFakeExtensionApi();
 
-		configureTaskToolForRuntime(pi, runtime, tempDir, async () => ({
+		configureTaskToolForRuntime(pi, runtime, async () => ({
 			content: [{ type: "text", text: "unused" }],
 			details: { warnings: [] },
 		}));

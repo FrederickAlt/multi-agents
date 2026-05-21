@@ -37,7 +37,7 @@ import type {
 
 /** What the controller needs from agent discovery. */
 export interface AgentDiscoveryAdapter {
-	discover(cwd: string): {
+	discover(): {
 		agents: AgentConfig[];
 		diagnostics: readonly AgentDiagnostic[];
 	};
@@ -263,7 +263,7 @@ export class TaskController {
 		let agents: AgentConfig[];
 		const warnings: string[] = [];
 		try {
-			const discovery = agentDiscovery.discover(effectiveCwd);
+			const discovery = agentDiscovery.discover();
 			agents = discovery.agents;
 
 			for (const d of discovery.diagnostics) {

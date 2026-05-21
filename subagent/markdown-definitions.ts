@@ -52,41 +52,6 @@ export interface MarkdownDiscoveryOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Return true if `p` exists and is a directory.
- */
-function isDirectory(p: string): boolean {
-	try {
-		return fs.statSync(p).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Walk up from `cwd` looking for a `.pi/<kind>/` directory.
- * Returns the full path to the `.pi/<kind>` directory if found,
- * or `null` if none exists in any ancestor.
- *
- * @deprecated Project-level agent discovery is no longer used. Use
- *   discoverMarkdownDefinitions for user-level (~/.pi/agent/) discovery.
- */
-export function findNearestProjectDir(cwd: string, kind: string): string | null {
-	let currentDir = cwd;
-	while (true) {
-		const candidate = path.join(currentDir, ".pi", kind);
-		if (isDirectory(candidate)) return candidate;
-
-		const parentDir = path.dirname(currentDir);
-		if (parentDir === currentDir) return null;
-		currentDir = parentDir;
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
 

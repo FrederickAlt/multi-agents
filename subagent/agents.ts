@@ -19,7 +19,6 @@ import {
 	discoverMarkdownDefinitions,
 } from "./markdown-definitions.js";
 
-export type AgentScope = "user" | "project" | "both";
 /** Source origin of an agent definition.
  * `"user"` is the only source returned at runtime; `"builtin"` and
  * `"project"` are reserved for future seeding/registration. */
@@ -76,7 +75,6 @@ export interface AgentDiagnostic {
 }
 
 export interface AgentRegistryOptions {
-	cwd: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,26 +155,24 @@ function mapToAgentDiagnostic(d: MarkdownDiagnostic): AgentDiagnostic {
 /**
  * Encapsulates Sub-agent discovery and lookup.
  *
- * Create an instance with a cwd, then call .discover() to run
+ * Create an instance, then call .discover() to run
  * discovery. After discovery, inspect .agents, .find(name), .formatList(),
  * and .diagnostics to see why certain definitions were skipped.
  *
  * ```ts
- * const registry = new AgentRegistry({ cwd: process.cwd() });
+ * const registry = new AgentRegistry();
  * registry.discover();
  * const explorer = registry.find("explorer");
  * console.log(registry.diagnostics); // skipped-file reasons
  * ```
  */
 export class AgentRegistry {
-	private _cwd: string;
 	private _agents: AgentConfig[];
 	private _projectAgentsDir: string | null;
 	private _diagnostics: AgentDiagnostic[];
 	private _discovered: boolean;
 
-	constructor(options: AgentRegistryOptions) {
-		this._cwd = options.cwd;
+	constructor(options?: AgentRegistryOptions) {
 		this._agents = [];
 		this._projectAgentsDir = null;
 		this._diagnostics = [];
@@ -264,8 +260,8 @@ export class AgentRegistry {
  * discovery, and returns the result. For access to diagnostics use
  * the AgentRegistry class directly.
  */
-export function discoverAgents(cwd: string): AgentDiscoveryResult {
-	const registry = new AgentRegistry({ cwd });
+export function discoverAgents(): AgentDiscoveryResult {
+	const registry = new AgentRegistry();
 	registry.discover();
 	return { agents: registry.agents, projectAgentsDir: registry.projectAgentsDir };
 }

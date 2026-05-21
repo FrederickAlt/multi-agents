@@ -109,7 +109,7 @@ describe("discoverAgents", () => {
 	it("discovers agents from the user agents directory", () => {
 		writeAgent(agentsDir, "CustomExplorer", "Custom exploration agent", { depth: 1, tools: "read, grep" });
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		const names = result.agents.map((a) => a.name);
 		expect(names).toContain("customexplorer");
 		expect(result.projectAgentsDir).toBeNull();
@@ -126,7 +126,7 @@ describe("discoverAgents", () => {
 			skills: "tdd, diagnose",
 		});
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		const agent = result.agents.find((a) => a.name === "fullagent")!;
 		expect(agent).toBeDefined();
 		expect(agent.tools).toEqual(["read", "bash", "edit"]);
@@ -149,7 +149,7 @@ describe("discoverAgents", () => {
 			prompt_parts: ["010-tools", "020-runtime-context"],
 		});
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		const agent = result.agents.find((a) => a.name === "arrayagent")!;
 		expect(agent).toBeDefined();
 		expect(agent.tools).toEqual(["read", "bash", "edit"]);
@@ -167,7 +167,7 @@ describe("discoverAgents", () => {
 		// Comma-separated skills (legacy)
 		writeAgent(agentsDir, "FilteredSkills", "Agent with filtered skills", { skills: "tdd, diagnose" });
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 
 		const noSkills = result.agents.find((a) => a.name === "noskills")!;
 		expect(noSkills).toBeDefined();
@@ -190,7 +190,7 @@ describe("discoverAgents", () => {
 		// Comma-separated can_spawn (legacy)
 		writeAgent(agentsDir, "LimitedSpawns", "Agent with filtered can_spawn", { can_spawn: "explorer, planner" });
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 
 		const unrestricted = result.agents.find((a) => a.name === "unrestricted")!;
 		expect(unrestricted).toBeDefined();
@@ -205,6 +205,20 @@ describe("discoverAgents", () => {
 		expect(limitedSpawns.can_spawn).toEqual(["explorer", "planner"]);
 	});
 
+
+	it("parses can_spawn boolean false as empty array (not as string 'false')", () => {
+		// Write raw YAML with boolean false value - the writeAgent helper always
+		// stringifies values, so writeFileSync directly to get a real YAML boolean.
+		const yaml = `---\ndescription: Agent with boolean can_spawn\ncan_spawn: false\n---\n\nSystem prompt.\n`;
+		writeFileSync(join(agentsDir, "boolcanspawn.md"), yaml, "utf-8");
+
+		const result = discoverAgents();
+		const agent = result.agents.find((a) => a.name === "boolcanspawn")!;
+		expect(agent).toBeDefined();
+		expect(agent.can_spawn).toEqual([]);
+	});
+
+
 	it("parses prompt_parts field with tri-state semantics", () => {
 		// Missing: undefined (all parts)
 		writeAgent(agentsDir, "AllParts", "Agent with no prompt_parts field");
@@ -215,7 +229,7 @@ describe("discoverAgents", () => {
 			prompt_parts: ["010-tools", "020-runtime-context"],
 		});
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 
 		const allParts = result.agents.find((a) => a.name === "allparts")!;
 		expect(allParts).toBeDefined();
@@ -234,7 +248,7 @@ describe("discoverAgents", () => {
 		writeAgent(agentsDir, "DepthNum", "Depth as number", { depth: 3 });
 		writeAgent(agentsDir, "DepthStr", "Depth as string", { depth: "4" });
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		const numAgent = result.agents.find((a) => a.name === "depthnum")!;
 		const strAgent = result.agents.find((a) => a.name === "depthstr")!;
 		expect(numAgent.depth).toBe(3);
@@ -244,7 +258,7 @@ describe("discoverAgents", () => {
 	it("handles empty depth as undefined", () => {
 		writeAgent(agentsDir, "NoDepth", "No depth config", { depth: "" });
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		const agent = result.agents.find((a) => a.name === "nodepth")!;
 		expect(agent.depth).toBeUndefined();
 	});
@@ -255,7 +269,7 @@ describe("discoverAgents", () => {
 		const brokenYaml = `---\ndescription: "Valid agent with broken YAML syntax\ntools: read\n---\n\nSystem prompt here.\n`;
 		writeFileSync(join(agentsDir, "brokenagent.md"), brokenYaml, "utf-8");
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		expect(result.agents.map((a) => a.name)).toContain("goodagent");
 		expect(result.agents.find((a) => a.name === "brokenagent")).toBeUndefined();
 	});
@@ -265,7 +279,7 @@ describe("discoverAgents", () => {
 		const hiddenContent = `---\ndescription: Should be invisible\n---\n\nHidden agent.\n`;
 		writeFileSync(join(agentsDir, ".hidden.md"), hiddenContent, "utf-8");
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		expect(result.agents.map((a) => a.name)).toContain("visible");
 		expect(result.agents.find((a) => a.name === ".hidden")).toBeUndefined();
 	});
@@ -275,13 +289,13 @@ describe("discoverAgents", () => {
 		writeFileSync(join(agentsDir, "notes.txt"), "Just some notes.", "utf-8");
 		writeFileSync(join(agentsDir, "readme.md"), "---\ndescription: Readme description\n---\n\nReadme body.\n", "utf-8");
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		expect(result.agents.find((a) => a.name === "notes")).toBeUndefined();
 		expect(result.agents.map((a) => a.name)).toContain("readme");
 	});
 
 	it("returns null projectAgentsDir (project scanning removed)", () => {
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		expect(result.projectAgentsDir).toBeNull();
 	});
 
@@ -293,7 +307,7 @@ describe("discoverAgents", () => {
 		const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = emptyDir;
 		try {
-			const result = discoverAgents(emptyDir);
+			const result = discoverAgents();
 			expect(result.agents).toEqual([]);
 			expect(result.projectAgentsDir).toBeNull();
 		} finally {
@@ -309,7 +323,7 @@ describe("discoverAgents", () => {
 		const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = noAgentsDir;
 		try {
-			const result = discoverAgents(noAgentsDir);
+			const result = discoverAgents();
 			expect(result.agents).toEqual([]);
 		} finally {
 			process.env.PI_CODING_AGENT_DIR = prevAgentDir;
@@ -369,7 +383,7 @@ describe("AgentRegistry", () => {
 	// -----------------------------------------------------------------------
 
 	it("throws if agents are accessed before discover()", () => {
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		expect(() => registry.agents).toThrow("has not been initialized");
 		expect(() => registry.projectAgentsDir).toThrow("has not been initialized");
 	});
@@ -377,7 +391,7 @@ describe("AgentRegistry", () => {
 	it("discovers agents from the user agents directory", () => {
 		writeAgent(agentsDir, "MyCustomAgent", "Custom agent");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 		const agent = registry.find("mycustomagent");
 		expect(agent).toBeDefined();
@@ -386,20 +400,20 @@ describe("AgentRegistry", () => {
 	});
 
 	it("find() returns undefined for non-existent agent", () => {
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 		expect(registry.find("nonexistent")).toBeUndefined();
 	});
 
 	it("projectAgentsDir always returns null (project scanning removed)", () => {
 		writeAgent(agentsDir, "Agent1", "Test agent");
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 		expect(registry.projectAgentsDir).toBeNull();
 	});
 
 	it("re-discover() re-runs discovery after file changes", () => {
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 		expect(registry.find("newagent")).toBeUndefined();
 
@@ -415,7 +429,7 @@ describe("AgentRegistry", () => {
 	// -----------------------------------------------------------------------
 
 	it("formatList returns 'none' when no agents discovered", () => {
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 		const result = registry.formatList(10);
 		expect(result.text).toBe("none");
@@ -426,7 +440,7 @@ describe("AgentRegistry", () => {
 		for (let i = 0; i < 10; i++) {
 			writeAgent(agentsDir, `Agent${i}`, `Agent ${i} description`);
 		}
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 		const result = registry.formatList(3);
 		expect(result.text.split("; ").length).toBe(3);
@@ -442,7 +456,7 @@ describe("AgentRegistry", () => {
 		const brokenYaml = `---\ndescription: "Valid agent with broken YAML syntax\ntools: read\n---\n\nSystem prompt here.\n`;
 		writeFileSync(join(agentsDir, "brokenagent.md"), brokenYaml, "utf-8");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		expect(registry.find("goodagent")).toBeDefined();
@@ -457,7 +471,7 @@ describe("AgentRegistry", () => {
 		const noDescContent = `---\nname: NoDesc\n---\n\nMissing description.\n`;
 		writeFileSync(join(agentsDir, "nodesc.md"), noDescContent, "utf-8");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		const diag = registry.diagnostics.find((d) => d.filePath.includes("nodesc.md"));
@@ -470,7 +484,7 @@ describe("AgentRegistry", () => {
 		const hiddenContent = `---\ndescription: Hidden agent\n---\n\nHidden body.\n`;
 		writeFileSync(join(agentsDir, ".hidden.md"), hiddenContent, "utf-8");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		const diag = registry.diagnostics.find((d) => d.filePath.endsWith(".hidden.md"));
@@ -485,7 +499,7 @@ describe("AgentRegistry", () => {
 
 		try {
 			fs.chmodSync(agentPath, 0o000);
-			const registry = new AgentRegistry({ cwd: tempDir });
+			const registry = new AgentRegistry();
 			registry.discover();
 
 			const diag = registry.diagnostics.find((d) => d.filePath.includes("locked.md"));
@@ -501,7 +515,7 @@ describe("AgentRegistry", () => {
 		writeFileSync(join(agentsDir, "notes.txt"), "Just some notes.", "utf-8");
 		writeAgent(agentsDir, "RealAgent", "A working agent");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		const txtDiag = registry.diagnostics.find((d) => d.filePath.includes("notes.txt"));
@@ -521,7 +535,7 @@ describe("AgentRegistry", () => {
 		const brokenYaml = `---\ndescription: "unclosed\ntools: read\n---\n\nBroken.\n`;
 		writeFileSync(join(agentsDir, "broken.md"), brokenYaml, "utf-8");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		expect(registry.diagnostics.length).toBeGreaterThanOrEqual(3);
@@ -536,7 +550,7 @@ describe("AgentRegistry", () => {
 		const brokenYaml = `---\ndescription: "unclosed\n---\n`;
 		writeFileSync(join(agentsDir, "broken.md"), brokenYaml, "utf-8");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 		expect(registry.diagnostics.length).toBeGreaterThanOrEqual(1);
 
@@ -548,7 +562,7 @@ describe("AgentRegistry", () => {
 	it("diagnostics are readonly (cannot be mutated from outside)", () => {
 		writeAgent(agentsDir, "GoodAgent", "A working agent");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		const diags: readonly AgentDiagnostic[] = registry.diagnostics;
@@ -563,7 +577,7 @@ describe("AgentRegistry", () => {
 	it("discoverAgents compatibility wrapper still works", () => {
 		writeAgent(agentsDir, "CompatAgent", "Compatibility test agent");
 
-		const result = discoverAgents(tempDir);
+		const result = discoverAgents();
 		const names = result.agents.map((a) => a.name);
 		expect(names).toContain("compatagent");
 		expect(result.projectAgentsDir).toBeNull();
@@ -573,7 +587,7 @@ describe("AgentRegistry", () => {
 		writeAgent(agentsDir, "Alpha", "Alpha agent");
 		writeAgent(agentsDir, "Beta", "Beta agent");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		const registryResult = registry.formatList(10).text;
@@ -584,7 +598,7 @@ describe("AgentRegistry", () => {
 	it("AgentRegistry works without explicit scope (defaults to user discovery)", () => {
 		writeAgent(agentsDir, "ProjectAgent", "Project-specific agent");
 
-		const registry = new AgentRegistry({ cwd: tempDir });
+		const registry = new AgentRegistry();
 		registry.discover();
 
 		expect(registry.find("projectagent")).toBeDefined();
