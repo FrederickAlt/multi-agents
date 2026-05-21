@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { configReducer, createInitialState, resolveCheckboxSelection } from "../../src/tui/state/reducer.js";
+import { configReducer, createInitialState, resolveCheckboxSelection, computeCheckboxSaveValue } from "../../src/tui/state/reducer.js";
 import type { ConfigState, AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
 function makeAgent(overrides: Partial<AgentConfigState> = {}): AgentConfigState {
@@ -233,5 +233,170 @@ describe("resolveCheckboxSelection", () => {
 		const result = resolveCheckboxSelection(["a", "c"], ["a", "b", "c", "d"]);
 		expect(result.localSelection).toEqual(["a", "c"]);
 		expect(result.wasImplicit).toBe(false);
+	});
+});
+
+describe("computeCheckboxSaveValue", () => {
+	it("returns explicit list when subset is selected", () => {
+		const result = computeCheckboxSaveValue(["a", "c"], ["a", "b", "c"]);
+		expect(result).toEqual(["a", "c"]);
+	});
+
+	it("returns undefined when all items are selected (revert to implicit)", () => {
+		const result = computeCheckboxSaveValue(["a", "b", "c"], ["a", "b", "c"]);
+		expect(result).toBeUndefined();
+	});
+
+	it("returns empty array when no items are selected", () => {
+		const result = computeCheckboxSaveValue([], ["a", "b", "c"]);
+		expect(result).toEqual([]);
+	});
+
+	it("returns a copy, not the original array", () => {
+		const input = ["a", "b"];
+		const result = computeCheckboxSaveValue(input, ["a", "b", "c"]);
+		expect(result).toEqual(["a", "b"]);
+		expect(result).not.toBe(input);
+	});
+
+	it("returns undefined when single item matches all available", () => {
+		const result = computeCheckboxSaveValue(["only"], ["only"]);
+		expect(result).toBeUndefined();
+	});
+});
+
+describe("tri-state toggle flow", () => {
+	it("implicit → first toggle makes explicit, writes explicit list", () => {
+		// Open overlay on implicit field (all items checked, wasImplicit=true)
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { description: "test" } })],
+			options: makeOptions(),
+		};
+		const withOverlay = configReducer(state, {
+			type: "OPEN_OVERLAY",
+			agentIndex: 0,
+			fieldName: "tools",
+		});
+		expect(withOverlay.overlay!.wasImplicit).toBe(true);
+		expect(withOverlay.overlay!.localSelection).toEqual(["read", "bash", "write"]);
+
+		// First toggle removes one item and makes explicit
+		const toggled = configReducer(withOverlay, {
+			type: "TOGGLE_CHECKBOX",
+			item: "read",
+		});
+		expect(toggled.overlay!.wasImplicit).toBe(false);
+		expect(toggled.overlay!.localSelection).toEqual(["bash", "write"]);
+
+		// computeCheckboxSaveValue should return explicit list (not all selected)
+		const saveValue = computeCheckboxSaveValue(
+			toggled.overlay!.localSelection,
+			toggled.overlay!.availableItems,
+		);
+		expect(saveValue).toEqual(["bash", "write"]);
+	});
+
+	it("toggling the last checked item off writes empty array", () => {
+		// Start with explicit single item
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { description: "test", tools: ["read"] } })],
+			options: makeOptions(),
+		};
+		const withOverlay = configReducer(state, {
+			type: "OPEN_OVERLAY",
+			agentIndex: 0,
+			fieldName: "tools",
+		});
+		expect(withOverlay.overlay!.localSelection).toEqual(["read"]);
+
+		// Toggle last item off
+		const toggled = configReducer(withOverlay, {
+			type: "TOGGLE_CHECKBOX",
+			item: "read",
+		});
+		expect(toggled.overlay!.localSelection).toEqual([]);
+
+		// Should write [] (empty array), NOT undefined
+		const saveValue = computeCheckboxSaveValue(
+			toggled.overlay!.localSelection,
+			toggled.overlay!.availableItems,
+		);
+		expect(saveValue).toEqual([]);
+	});
+
+	it("toggling all items back on writes undefined (revert to implicit)", () => {
+		// Start with explicit subset
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({
+					frontmatter: { description: "test", tools: ["read", "bash"] },
+				}),
+			],
+			options: makeOptions(),
+		};
+		const withOverlay = configReducer(state, {
+			type: "OPEN_OVERLAY",
+			agentIndex: 0,
+			fieldName: "tools",
+		});
+		expect(withOverlay.overlay!.localSelection).toEqual(["read", "bash"]);
+
+		// Toggle "write" on → now all three are selected
+		const toggled = configReducer(withOverlay, {
+			type: "TOGGLE_CHECKBOX",
+			item: "write",
+		});
+		expect(toggled.overlay!.localSelection).toEqual(["read", "bash", "write"]);
+
+		// All selected → save value should be undefined (remove field)
+		const saveValue = computeCheckboxSaveValue(
+			toggled.overlay!.localSelection,
+			toggled.overlay!.availableItems,
+		);
+		expect(saveValue).toBeUndefined();
+	});
+
+	it("overlay stays open after toggle (TOGGLE_CHECKBOX does not close)", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { description: "test", tools: ["read"] } })],
+			options: makeOptions(),
+		};
+		const withOverlay = configReducer(state, {
+			type: "OPEN_OVERLAY",
+			agentIndex: 0,
+			fieldName: "tools",
+		});
+		expect(withOverlay.overlay).not.toBeNull();
+
+		const toggled = configReducer(withOverlay, {
+			type: "TOGGLE_CHECKBOX",
+			item: "read",
+		});
+		// Overlay should still be open
+		expect(toggled.overlay).not.toBeNull();
+	});
+
+	it("CLOSE_OVERLAY clears overlay (Enter/Escape closes after toggles)", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { description: "test", tools: ["read"] } })],
+			options: makeOptions(),
+		};
+		let s = configReducer(state, {
+			type: "OPEN_OVERLAY",
+			agentIndex: 0,
+			fieldName: "tools",
+		});
+		// Do a toggle (simulating immediate save flow)
+		s = configReducer(s, { type: "TOGGLE_CHECKBOX", item: "read" });
+		expect(s.overlay).not.toBeNull();
+
+		// Close (Enter or Escape)
+		s = configReducer(s, { type: "CLOSE_OVERLAY" });
+		expect(s.overlay).toBeNull();
 	});
 });

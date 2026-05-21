@@ -23,6 +23,57 @@ export function resolveCheckboxSelection(
 	return { localSelection: [...frontmatterValue], wasImplicit: false };
 }
 
+/**
+ * Pure helper: compute new checkbox selection after a toggle.
+ * Returns the new localSelection and whether the field is now explicit.
+ */
+export function applyToggle(
+	localSelection: string[],
+	wasImplicit: boolean,
+	availableItems: string[],
+	item: string,
+): { localSelection: string[]; wasImplicit: boolean } {
+	if (wasImplicit) {
+		// First toggle from implicit: start with all items, remove the toggled one
+		return {
+			localSelection: [...availableItems].filter((i) => i !== item),
+			wasImplicit: false,
+		};
+	}
+	const idx = localSelection.indexOf(item);
+	if (idx >= 0) {
+		return {
+			localSelection: [
+				...localSelection.slice(0, idx),
+				...localSelection.slice(idx + 1),
+			],
+			wasImplicit: false,
+		};
+	}
+	return {
+		localSelection: [...localSelection, item],
+		wasImplicit: false,
+	};
+}
+
+/**
+ * Compute the save value for a checkbox field after toggling.
+ *
+ * Tri-state semantics:
+ * - All items selected → return undefined (remove field, revert to implicit)
+ * - Subset selected → return the explicit list
+ * - No items selected → return [] (explicit empty list)
+ */
+export function computeCheckboxSaveValue(
+	localSelection: string[],
+	availableItems: string[],
+): string[] | undefined {
+	if (localSelection.length === availableItems.length) {
+		return undefined;
+	}
+	return [...localSelection];
+}
+
 /** Build initial empty state. */
 export function createInitialState(): ConfigState {
 	return {
@@ -169,30 +220,15 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 
 		case "TOGGLE_CHECKBOX": {
 			if (!state.overlay || state.overlay.type !== "checkbox") return state;
-			const { localSelection, wasImplicit } = state.overlay;
-			let newSelection: string[];
-			const item = action.item;
-
-			if (wasImplicit) {
-				// First toggle: make explicit with all items checked, then uncheck the toggled one
-				newSelection = [...state.overlay.availableItems].filter(
-					(i) => i !== item,
-				);
-			} else {
-				const idx = localSelection.indexOf(item);
-				if (idx >= 0) {
-					newSelection = [
-						...localSelection.slice(0, idx),
-						...localSelection.slice(idx + 1),
-					];
-				} else {
-					newSelection = [...localSelection, item];
-				}
-			}
-
+			const { localSelection, wasImplicit } = applyToggle(
+				state.overlay.localSelection,
+				state.overlay.wasImplicit,
+				state.overlay.availableItems,
+				action.item,
+			);
 			return {
 				...state,
-				overlay: { ...state.overlay, localSelection: newSelection, wasImplicit: false },
+				overlay: { ...state.overlay, localSelection, wasImplicit },
 			};
 		}
 
