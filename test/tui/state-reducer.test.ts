@@ -23,6 +23,7 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 			{ provider: "anthropic", modelId: "claude", displayName: "claude" },
 			{ provider: "openai", modelId: "gpt5", displayName: "gpt-5" },
 		],
+		defaultModel: "claude",
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: ["other-agent", "coder"],
@@ -398,5 +399,177 @@ describe("tri-state toggle flow", () => {
 		// Close (Enter or Escape)
 		s = configReducer(s, { type: "CLOSE_OVERLAY" });
 		expect(s.overlay).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Dropdown overlay tests
+// ---------------------------------------------------------------------------
+
+describe("OPEN_OVERLAY dropdown", () => {
+	function stateWithAgent(frontmatter: Record<string, unknown> = {}) {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter })],
+			options: makeOptions(),
+		};
+		return state;
+	}
+
+	it("opens model dropdown with current value from frontmatter", () => {
+		const state = stateWithAgent({ model: "gpt-5" });
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		expect(next.overlay!.type).toBe("dropdown");
+		expect(next.overlay!.localSelected).toBe("gpt-5");
+		expect(next.overlay!.wasImplicit).toBe(false);
+		expect(next.overlay!.availableItems).toEqual(["claude", "gpt-5"]);
+	});
+
+	it("opens model dropdown with default from options.defaultModel when field missing", () => {
+		const state = stateWithAgent({ description: "no model" });
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		expect(next.overlay!.type).toBe("dropdown");
+		expect(next.overlay!.localSelected).toBe("claude");
+		expect(next.overlay!.wasImplicit).toBe(true);
+	});
+
+	it("model dropdown falls back to first available when defaultModel is empty", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { description: "test" } })],
+			options: makeOptions({ defaultModel: "" }),
+		};
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		expect(next.overlay!.localSelected).toBe("claude");
+	});
+
+	it("model dropdown shows (none) when no models available", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { description: "test" } })],
+			options: makeOptions({ models: [], defaultModel: "" }),
+		};
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		expect(next.overlay!.localSelected).toBe("(none)");
+		expect(next.overlay!.availableItems).toEqual([]);
+		expect(next.overlay!.wasImplicit).toBe(true);
+	});
+
+	it("opens depth dropdown with default 0 when field missing", () => {
+		const state = stateWithAgent({ description: "no depth" });
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
+		expect(next.overlay!.type).toBe("dropdown");
+		expect(next.overlay!.localSelected).toBe("0");
+		expect(next.overlay!.wasImplicit).toBe(true);
+		expect(next.overlay!.availableItems).toEqual(["0", "1", "2", "3", "4", "5"]);
+	});
+
+	it("opens depth dropdown with current value from frontmatter", () => {
+		const state = stateWithAgent({ depth: 3 });
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
+		expect(next.overlay!.localSelected).toBe("3");
+		expect(next.overlay!.wasImplicit).toBe(false);
+	});
+
+	it("opens reasoning_effort dropdown with default medium when field missing", () => {
+		const state = stateWithAgent({ description: "no reasoning" });
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "reasoning_effort" });
+		expect(next.overlay!.type).toBe("dropdown");
+		expect(next.overlay!.localSelected).toBe("medium");
+		expect(next.overlay!.wasImplicit).toBe(true);
+		expect(next.overlay!.availableItems).toEqual(["low", "medium", "high", "maximum"]);
+	});
+
+	it("opens reasoning_effort dropdown with current value from frontmatter", () => {
+		const state = stateWithAgent({ reasoning_effort: "high" });
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "reasoning_effort" });
+		expect(next.overlay!.localSelected).toBe("high");
+		expect(next.overlay!.wasImplicit).toBe(false);
+	});
+
+	it("rejects OPEN_OVERLAY when agent has error", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ error: "parse error" })],
+			options: makeOptions(),
+		};
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		expect(next.overlay).toBeNull();
+	});
+
+	it("rejects OPEN_OVERLAY when agent index out of bounds", () => {
+		const state = stateWithAgent({ model: "claude" });
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 99, fieldName: "model" });
+		expect(next.overlay).toBeNull();
+	});
+});
+
+describe("SELECT_DROPDOWN", () => {
+	it("updates localSelected", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { model: "claude" } })],
+			options: makeOptions(),
+		};
+		const withOverlay = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		const updated = configReducer(withOverlay, { type: "SELECT_DROPDOWN", item: "gpt-5" });
+		expect(updated.overlay!.localSelected).toBe("gpt-5");
+	});
+
+	it("is a no-op when overlay is not dropdown", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { tools: ["read"] } })],
+			options: makeOptions(),
+		};
+		const withOverlay = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "tools" });
+		const updated = configReducer(withOverlay, { type: "SELECT_DROPDOWN", item: "bash" });
+		// Should be unchanged since overlay is checkbox type
+		expect(updated.overlay!.type).toBe("checkbox");
+	});
+
+	it("is a no-op when no overlay open", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent()],
+			options: makeOptions(),
+		};
+		const updated = configReducer(state, { type: "SELECT_DROPDOWN", item: "claude" });
+		expect(updated.overlay).toBeNull();
+	});
+});
+
+describe("OPEN_OVERLAY validation", () => {
+	it("opens dropdown with correct availableItems for depth (0-5)", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: {} })],
+			options: makeOptions(),
+		};
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
+		expect(next.overlay!.availableItems).toEqual(["0", "1", "2", "3", "4", "5"]);
+	});
+
+	it("opens dropdown with model display names from discovered models", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: {} })],
+			options: makeOptions(),
+		};
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		expect(next.overlay!.availableItems).toEqual(["claude", "gpt-5"]);
+	});
+
+	it("selecting default value still sets wasImplicit to true", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: {} })],
+			options: makeOptions(),
+		};
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
+		// Depth was missing in frontmatter
+		expect(next.overlay!.wasImplicit).toBe(true);
+		// Default value "0" is selected
+		expect(next.overlay!.localSelected).toBe("0");
 	});
 });

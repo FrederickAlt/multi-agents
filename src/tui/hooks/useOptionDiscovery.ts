@@ -26,6 +26,7 @@ export function useOptionDiscovery(): {
 		tools: [],
 		extensions: [],
 		models: [],
+		defaultModel: "",
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: [],
@@ -51,12 +52,13 @@ export function useOptionDiscovery(): {
 					return Array.isArray(t) ? t.map(String) : [];
 				});
 
-			const discoveredModels = await discoverModels(agentDir);
+			const { models: discoveredModels, defaultModelDisplayName } = await discoverModels(agentDir);
 
 			const discovered: DiscoveredOptions = {
 				tools: discoverTools(agentDir, toolLists),
 				extensions: discoverExtensions(agentDir),
 				models: discoveredModels,
+				defaultModel: defaultModelDisplayName,
 				reasoningEfforts: ["low", "medium", "high", "maximum"],
 				depths: [0, 1, 2, 3, 4, 5],
 				canSpawn: allNames,
