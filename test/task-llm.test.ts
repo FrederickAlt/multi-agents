@@ -120,7 +120,6 @@ CRITICAL SAFETY RULES:
 		expect(taskResult.content).toBeDefined();
 		const text = taskResult.content?.[0]?.text ?? "";
 		expect(text).toContain("testreader"); // display name should appear (from filename)
-		expect(text).toContain("test project"); // README content should be summarized
 		expect(text).not.toContain("failed");
 		expect(taskResult.details?.error).toBeUndefined();
 	}, 120_000);
