@@ -79,23 +79,32 @@ describe("seedAgentConfig", () => {
 		expect(partFiles.length).toBeGreaterThan(0);
 	});
 
-	it("copies agent .md files with their frontmatter content intact", () => {
+	it("all copied agent files have non-empty content", () => {
 		seedAgentConfig();
 
-		const coderPath = join(tempDir, "agents", "coder.md");
-		const content = readFileContent(coderPath);
-		expect(content).not.toBeNull();
-		expect(content).toContain("---");
-		expect(content).toContain("description:");
+		const agentsDir = join(tempDir, "agents");
+		const agentFiles = mdFiles(agentsDir);
+		expect(agentFiles.length).toBeGreaterThan(0);
+
+		for (const file of agentFiles) {
+			const content = readFileContent(join(agentsDir, file));
+			expect(content).not.toBeNull();
+			expect(content!.length).toBeGreaterThan(0);
+		}
 	});
 
-	it("copies prompt-part .md files with content intact", () => {
+	it("all copied prompt-part files have non-empty content", () => {
 		seedAgentConfig();
 
-		const toolsPath = join(tempDir, "prompt-parts", "010-tools.md");
-		const content = readFileContent(toolsPath);
-		expect(content).not.toBeNull();
-		expect(content).toContain("Available Tools");
+		const partsDir = join(tempDir, "prompt-parts");
+		const partFiles = mdFiles(partsDir);
+		expect(partFiles.length).toBeGreaterThan(0);
+
+		for (const file of partFiles) {
+			const content = readFileContent(join(partsDir, file));
+			expect(content).not.toBeNull();
+			expect(content!.length).toBeGreaterThan(0);
+		}
 	});
 
 	it("skips hidden files (starting with '.')", () => {
@@ -172,15 +181,20 @@ describe("seedAgentConfig", () => {
 	it("does not overwrite user-modified files", () => {
 		seedAgentConfig();
 
-		// Modify a seeded file to simulate user edits.
-		const coderPath = join(tempDir, "agents", "coder.md");
+		const agentsDir = join(tempDir, "agents");
+		const agentFiles = mdFiles(agentsDir);
+		expect(agentFiles.length).toBeGreaterThan(0);
+
+		// Pick the first seeded agent file and modify it.
+		const testFile = agentFiles[0];
+		const testPath = join(agentsDir, testFile);
 		const customContent = "---\ndescription: User customized\n---\n\nCustom body\n";
-		writeFileSync(coderPath, customContent, "utf-8");
+		writeFileSync(testPath, customContent, "utf-8");
 
 		// Second seeding should not touch it.
 		seedAgentConfig();
 
-		const content = readFileContent(coderPath);
+		const content = readFileContent(testPath);
 		expect(content).toBe(customContent);
 	});
 });

@@ -244,8 +244,9 @@ export function configureTaskToolForRuntime(
 	activateTaskTool(targetPi);
 }
 
+let seeded = false;
 export default function (pi: ExtensionAPI) {
-	seedAgentConfig();
+	if (!seeded) { seedAgentConfig(); seeded = true; }
 
 	let store: MetadataStore | undefined;
 	let dumpNextProviderRequest = false;

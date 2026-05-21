@@ -42,7 +42,7 @@ function seedDirectory(bundledDir: string, targetDir: string): void {
 	for (const entry of entries) {
 		if (!entry.isFile()) continue;
 		if (!entry.name.endsWith(".md")) continue;
-		if (path.basename(entry.name).startsWith(".")) continue;
+		if (entry.name.startsWith(".")) continue;
 
 		const src = path.join(bundledDir, entry.name);
 		try {
