@@ -70,7 +70,10 @@ export function discoverExtensions(agentDir: string): string[] {
  * Discover models using ModelRegistry from @mariozechner/pi-coding-agent.
  * Falls back to built-in models if registry fails or package is unavailable.
  */
-export async function discoverModels(agentDir: string): Promise<ModelOption[]> {
+export async function discoverModels(agentDir: string): Promise<{
+	models: ModelOption[];
+	defaultModelDisplayName: string;
+}> {
 	try {
 		const pcg = await import("@mariozechner/pi-coding-agent");
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,7 +82,8 @@ export async function discoverModels(agentDir: string): Promise<ModelOption[]> {
 		const ModelRegistry = (pcg as any).ModelRegistry;
 
 		if (!AuthStorage || !ModelRegistry) {
-			return getBuiltInModels();
+			const builtin = getBuiltInModels();
+			return { models: builtin, defaultModelDisplayName: builtin[0]?.displayName ?? "" };
 		}
 
 		const authStorage = AuthStorage.create(
@@ -92,14 +96,38 @@ export async function discoverModels(agentDir: string): Promise<ModelOption[]> {
 		registry.refresh();
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return registry.getAll().map((m: any) => ({
+		const allModels: ModelOption[] = registry.getAll().map((m: any) => ({
 			provider: m.provider ?? "",
 			modelId: m.id ?? "",
 			displayName: m.name ?? `${m.provider}/${m.id}`,
 		}));
+
+		// Determine default: first model with configured auth, or first model.
+		// NOTE: "first available model with configured auth" is a heuristic proxy
+		// for Pi's runtime default. It is not guaranteed to match if Pi has
+		// separate default-model configuration outside the auth scope.
+		let defaultModelDisplayName = "";
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const available = (registry as any).getAvailable?.() as any[] | undefined;
+			if (available && available.length > 0) {
+				const firstId: string = available[0].id ?? available[0].modelId;
+				const match = allModels.find(m => m.modelId === firstId);
+				if (match) defaultModelDisplayName = match.displayName;
+			}
+		} catch {
+			// getAvailable may not exist on older registry versions
+		}
+
+		if (!defaultModelDisplayName && allModels.length > 0) {
+			defaultModelDisplayName = allModels[0].displayName;
+		}
+
+		return { models: allModels, defaultModelDisplayName };
 	} catch {
 		// Fall back to built-in models
-		return getBuiltInModels();
+		const builtin = getBuiltInModels();
+		return { models: builtin, defaultModelDisplayName: builtin[0]?.displayName ?? "" };
 	}
 }
 
@@ -220,10 +248,12 @@ export async function discoverAllOptions(
 	agentToolLists: string[][],
 	allAgentNames: string[],
 ): Promise<DiscoveredOptions> {
+	const { models, defaultModelDisplayName } = await discoverModels(agentDir);
 	return {
 		tools: discoverTools(agentDir, agentToolLists),
 		extensions: discoverExtensions(agentDir),
-		models: await discoverModels(agentDir),
+		models,
+		defaultModel: defaultModelDisplayName,
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: allAgentNames,

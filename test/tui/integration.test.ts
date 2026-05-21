@@ -216,6 +216,7 @@ describe("Integration: reducer + state flow", () => {
 			tools: ["read", "bash", "write"],
 			extensions: [],
 			models: [{ provider: "a", modelId: "c", displayName: "claude" }],
+			defaultModel: "claude",
 			reasoningEfforts: ["low", "medium", "high"],
 			depths: [0, 1, 2],
 			canSpawn: ["a2"],

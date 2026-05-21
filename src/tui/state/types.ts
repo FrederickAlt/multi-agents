@@ -36,6 +36,8 @@ export interface DiscoveredOptions {
 	tools: string[];
 	extensions: string[];
 	models: ModelOption[];
+	/** Display name of the runtime default model (first available with auth). */
+	defaultModel: string;
 	reasoningEfforts: string[];
 	depths: number[];
 	canSpawn: string[];

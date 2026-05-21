@@ -31,6 +31,7 @@ export function createInitialState(): ConfigState {
 			tools: [],
 			extensions: [],
 			models: [],
+			defaultModel: "",
 			reasoningEfforts: ["low", "medium", "high", "maximum"],
 			depths: [0, 1, 2, 3, 4, 5],
 			canSpawn: [],
@@ -146,7 +147,8 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					wasImplicit,
 				};
 			} else {
-				const current = currentValue !== undefined ? String(currentValue) : getDefaultValue(action.fieldName, availableItems);
+				const defaultVal = getDefaultValue(action.fieldName, availableItems, state.options.defaultModel);
+				const current = currentValue !== undefined ? String(currentValue) : defaultVal;
 				overlay = {
 					type: "dropdown",
 					agentIndex: action.agentIndex,
@@ -293,8 +295,10 @@ function getAvailableItems(
 function getDefaultValue(
 	fieldName: string,
 	availableItems: string[],
+	defaultModel?: string,
 ): string {
 	if (fieldName === "depth") return "0";
 	if (fieldName === "reasoning_effort") return "medium";
+	if (fieldName === "model") return defaultModel || availableItems[0] || "(none)";
 	return availableItems[0] ?? "";
 }
