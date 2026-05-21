@@ -28,6 +28,10 @@ For each task create a work-tree. Place the worktrees inside of ~/projects/workt
 6. If the reviewer has larger complaints, feed his output to a new coder agent. Tell the agent, that he is on a work-tree and got a revision of the work. Tell it to use `git diff` to see all changes made and tell it to fetch the issue he shall revise. Then start again at step 4..
 7. Run an agent that shall merge everything back to main. Tell it the work trees and issues that have been worked on.
 
+## Gotchas
+
+- Its fundamentally IMPORTANT that you spawn an agent with its cwd set correctly! (i.e. to the worktree he is on)
+
 # Available tools
 
 {{tools}}
