@@ -1,6 +1,6 @@
 ---
 description: Creates implementation plans from context and requirements
-model: deepseek-v4-pro
+model: gpt-5.5
 reasoning_effort: high
 depth: 0
 prompt_parts:
