@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useStdin } from "ink";
 import type { KeyboardActions, KeyboardState } from "./useKeyboard.js";
-import { FIELDS_ORDER, COLUMN_WIDTH } from "../state/types.js";
+import { FIELDS_ORDER, COLUMN_WIDTH, SCROLL_GUTTER_WIDTH } from "../state/types.js";
 
 const HEADER_END_ROW = 4; // name(1) + desc(1) + spacer(1) + border(1) = 4
 const OVERLAY_TOP = 4;
@@ -81,8 +81,9 @@ function handleBoardClick(
 	actions: KeyboardActions,
 ): void {
 	// Determine which column was clicked.
-	// Column 0 starts at terminal x=1, each column is COLUMN_WIDTH wide.
-	const columnIdx = Math.floor((col - 1) / COLUMN_WIDTH);
+	// Column 0 starts after the reserved scroll gutter.
+	if (col <= SCROLL_GUTTER_WIDTH) return;
+	const columnIdx = Math.floor((col - SCROLL_GUTTER_WIDTH - 1) / COLUMN_WIDTH);
 	if (columnIdx < 0) return;
 
 	// Compute global agent index (visible column + scroll offset).

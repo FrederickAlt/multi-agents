@@ -1,4 +1,4 @@
-import { useInput, useApp } from "ink";
+import { useInput, useApp, useStdin } from "ink";
 
 export interface KeyboardActions {
 	focusNextAgent: () => void;
@@ -37,6 +37,8 @@ export function useKeyboard(
 	getState: () => KeyboardState,
 ) {
 	const { exit } = useApp();
+	const { isRawModeSupported } = useStdin();
+	const inputIsActive = Boolean(isRawModeSupported && typeof process.stdin.setRawMode === "function");
 
 	useInput((input, key) => {
 		// Global keys
@@ -108,5 +110,5 @@ export function useKeyboard(
 				return;
 			}
 		}
-	});
+	}, { isActive: inputIsActive });
 }

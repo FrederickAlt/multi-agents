@@ -9,7 +9,7 @@ import {
 	discoverAllAgentNames,
 } from "../discovery/options.js";
 import { scanAgents, detectStaleItems } from "../file-io/read-agent.js";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "../pi-compat.js";
 
 /**
  * Hook that scans ~/.pi/agent/ for all selectable options on mount.

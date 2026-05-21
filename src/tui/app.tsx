@@ -1,14 +1,14 @@
 import React, { useState, useCallback } from "react";
-import { Box } from "ink";
-import { useConfig } from "../hooks/useConfig.js";
-import { useKeyboard } from "../hooks/useKeyboard.js";
-import { useMouse } from "../hooks/useMouse.js";
-import { Board } from "../components/Board.js";
-import { CheckboxOverlay } from "../components/CheckboxOverlay.js";
-import { DropdownOverlay } from "../components/DropdownOverlay.js";
-import { HelpFooter } from "../components/HelpFooter.js";
-import { EmptyState } from "../components/EmptyState.js";
-import { FIELDS_ORDER } from "../state/types.js";
+import { Box, Text } from "ink";
+import { useConfig } from "./hooks/useConfig.js";
+import { useKeyboard } from "./hooks/useKeyboard.js";
+import { useMouse } from "./hooks/useMouse.js";
+import { Board } from "./components/Board.js";
+import { CheckboxOverlay } from "./components/CheckboxOverlay.js";
+import { DropdownOverlay } from "./components/DropdownOverlay.js";
+import { HelpFooter } from "./components/HelpFooter.js";
+import { EmptyState } from "./components/EmptyState.js";
+import { FIELDS_ORDER } from "./state/types.js";
 
 /**
  * Root Ink component — state hub and layout orchestration.
@@ -120,7 +120,7 @@ export function App() {
 		return (
 			<Box flexDirection="column" height="100%">
 				<Box flexGrow={1} justifyContent="center" alignItems="center">
-					<Box>Loading agent definitions...</Box>
+					<Text>Loading agent definitions...</Text>
 				</Box>
 			</Box>
 		);
@@ -132,7 +132,7 @@ export function App() {
 			<Box flexDirection="column" height="100%">
 				<Box flexGrow={1} justifyContent="center" alignItems="center">
 					<Box flexDirection="column">
-						<Box color="red">Error: {state.globalError}</Box>
+						<Text color="red">Error: {state.globalError}</Text>
 					</Box>
 				</Box>
 				<HelpFooter />

@@ -6,6 +6,7 @@ import type {
 	OverlayState,
 } from "./types.js";
 import { FIELDS_ORDER } from "./types.js";
+import { clampScrollOffset } from "../layout.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -144,14 +145,10 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			if (len === 0) return state;
 			const delta = action.direction === "next" ? 1 : -1;
 			const newIdx = clamp(state.focus.agentIndex + delta, len);
-			// Auto-scroll
-			let { scrollOffset } = state;
-			if (newIdx < scrollOffset) scrollOffset = newIdx;
-			if (newIdx >= scrollOffset + 1) scrollOffset = newIdx; // simplistic: always keep focused visible
 			return {
 				...state,
 				focus: { ...state.focus, agentIndex: newIdx },
-				scrollOffset,
+				scrollOffset: clampScrollOffset(state.scrollOffset, newIdx, len),
 			};
 		}
 
@@ -159,14 +156,10 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			const len = state.agents.length;
 			if (len === 0) return state;
 			const newIdx = clamp(action.agentIndex, len);
-			// Auto-scroll
-			let { scrollOffset } = state;
-			if (newIdx < scrollOffset) scrollOffset = newIdx;
-			if (newIdx >= scrollOffset + 1) scrollOffset = newIdx;
 			return {
 				...state,
 				focus: { ...state.focus, agentIndex: newIdx },
-				scrollOffset,
+				scrollOffset: clampScrollOffset(state.scrollOffset, newIdx, len),
 			};
 		}
 

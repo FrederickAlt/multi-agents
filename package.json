@@ -22,13 +22,13 @@
     ]
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
+    "@types/react": "^18.3.29",
     "tsx": "^4.19.3",
     "typebox": "^1.1.38",
     "vitest": "^4.1.5"
   },
   "dependencies": {
     "ink": "^5.2.1",
-    "react": "^19.2.6"
+    "react": "^18.3.1"
   }
 }

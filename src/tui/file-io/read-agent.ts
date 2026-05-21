@@ -1,13 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter } from "../pi-compat.js";
 import type { AgentConfigState } from "../state/types.js";
 
 /**
  * Read and parse a single agent .md file into an AgentConfigState.
  *
- * Uses parseFrontmatter from @mariozechner/pi-coding-agent to parse
- * the YAML frontmatter block. The markdown body is preserved but never
+ * Uses the TUI's standalone frontmatter parser to parse the YAML
+ * frontmatter block. The markdown body is preserved but never
  * modified by the TUI.
  */
 export function readAgent(filePath: string): AgentConfigState {

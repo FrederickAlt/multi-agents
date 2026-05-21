@@ -1,7 +1,8 @@
 import React from "react";
-import { Box } from "ink";
+import { Box, Text } from "ink";
 import type { ConfigState } from "../state/types.js";
-import { COLUMN_WIDTH } from "../state/types.js";
+import { SCROLL_GUTTER_WIDTH } from "../state/types.js";
+import { clampScrollOffset, getMaxVisibleAgents } from "../layout.js";
 import { AgentColumn } from "./AgentColumn.js";
 
 interface BoardProps {
@@ -11,24 +12,12 @@ interface BoardProps {
 export function Board({ state }: BoardProps) {
 	if (state.agents.length === 0) return null;
 
-	// Calculate how many columns fit in the terminal
-	// We assume standard 80-col terminal, but Ink can measure dynamically.
-	// For simplicity, we use the columns from process.stdout if available.
-	const termWidth = process.stdout.columns ?? 80;
-	const maxVisible = Math.max(1, Math.floor(termWidth / COLUMN_WIDTH));
-
-	// Ensure scrollOffset keeps focused agent visible
-	let scrollOffset = state.scrollOffset;
-	if (state.focus.agentIndex < scrollOffset) {
-		scrollOffset = state.focus.agentIndex;
-	} else if (state.focus.agentIndex >= scrollOffset + maxVisible) {
-		scrollOffset = state.focus.agentIndex - maxVisible + 1;
-	}
-
-	// Clamp
-	scrollOffset = Math.max(
-		0,
-		Math.min(scrollOffset, state.agents.length - maxVisible),
+	const maxVisible = getMaxVisibleAgents();
+	const scrollOffset = clampScrollOffset(
+		state.scrollOffset,
+		state.focus.agentIndex,
+		state.agents.length,
+		maxVisible,
 	);
 
 	const visibleAgents = state.agents.slice(
@@ -38,11 +27,9 @@ export function Board({ state }: BoardProps) {
 
 	return (
 		<Box flexDirection="row" overflow="hidden" height="100%">
-			{scrollOffset > 0 && (
-				<Box width={3} justifyContent="center" alignItems="center">
-					{/* Left scroll indicator */}
-				</Box>
-			)}
+			<Box width={SCROLL_GUTTER_WIDTH} justifyContent="center" alignItems="center">
+				{scrollOffset > 0 && <Text dimColor>‹</Text>}
+			</Box>
 			{visibleAgents.map((agent, i) => {
 				const globalIdx = scrollOffset + i;
 				return (

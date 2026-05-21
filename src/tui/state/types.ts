@@ -84,6 +84,9 @@ export type FieldName = (typeof FIELDS_ORDER)[number];
 /** Width of each agent column in terminal cells (30 content + 2 borders). */
 export const COLUMN_WIDTH = 32;
 
+/** Reserved left gutter for horizontal scroll indication. */
+export const SCROLL_GUTTER_WIDTH = 3;
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------

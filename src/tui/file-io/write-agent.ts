@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter } from "../pi-compat.js";
 
 /**
  * Selective field write-back into an agent .md file.
