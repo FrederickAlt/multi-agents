@@ -19,6 +19,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { MetadataStore, type MetadataFile, type SubagentRecord } from "./metadata.js";
+import { seedAgentConfig } from "./seeding.js";
 import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { discoverPromptParts } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
@@ -244,6 +245,8 @@ export function configureTaskToolForRuntime(
 }
 
 export default function (pi: ExtensionAPI) {
+	seedAgentConfig();
+
 	let store: MetadataStore | undefined;
 	let dumpNextProviderRequest = false;
 	let lastProviderSystemPrompt: string | undefined;
