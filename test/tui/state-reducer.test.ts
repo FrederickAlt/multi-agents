@@ -748,6 +748,66 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(1);
 	});
 
+	it("FOCUS_OPTION_ITEM wraps from last visible can_spawn item", () => {
+		const options = makeOptions({
+			canSpawn: ["peer", "self-agent", "advisor"],
+		});
+		const agent = makeAgent({
+			name: "self-agent",
+			frontmatter: { can_spawn: ["peer", "advisor"] },
+		});
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [agent],
+			options,
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 1 },
+		};
+
+		const visibleItems = getOptionColumnItems(agent, options, "can_spawn", agent.name);
+		expect(visibleItems).toEqual(["peer", "advisor"]);
+		expect(visibleItems).toHaveLength(2);
+
+		const next = configReducer(state, {
+			type: "FOCUS_OPTION_ITEM",
+			direction: "next",
+		});
+		const nextFocusedItem = visibleItems[next.focus.optionItemIndex];
+		expect(next.focus.optionItemIndex).toBe(0);
+		expect(nextFocusedItem).toBe("peer");
+	});
+
+	it("UPDATE_AGENT_FRONTMATTER preserves can_spawn focus using filtered visible items", () => {
+		const options = makeOptions({
+			canSpawn: ["peer", "self-agent", "advisor"],
+		});
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({
+					name: "self-agent",
+					frontmatter: { can_spawn: ["peer", "advisor"] },
+				}),
+			],
+			options,
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 1 },
+		};
+
+		const next = configReducer(state, {
+			type: "UPDATE_AGENT_FRONTMATTER",
+			agentIndex: 0,
+			frontmatter: { can_spawn: ["peer", "advisor"] },
+			staleItems: {},
+		});
+
+		const nextVisibleItems = getOptionColumnItems(next.agents[0], options, "can_spawn", "self-agent");
+		expect(nextVisibleItems).toEqual(["peer", "advisor"]);
+		expect(next.focus.optionItemIndex).toBe(1);
+		const focusedItem = nextVisibleItems[next.focus.optionItemIndex];
+		expect(focusedItem).toBe("advisor");
+	});
+
 	it("horizontally scrolls option columns when terminal width only fits one column", () => {
 		setTerminalColumns(24);
 		const state: ConfigState = {

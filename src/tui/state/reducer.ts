@@ -282,7 +282,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			if (!isOptionColumnField(fieldName)) {
 				return state;
 			}
-			const items = getOptionColumnItems(agent, state.options, fieldName);
+			const items = getOptionColumnItems(agent, state.options, fieldName, agent.name);
 			if (items.length === 0) return state;
 			const delta = action.direction === "next" ? 1 : -1;
 			return {
