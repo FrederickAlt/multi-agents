@@ -86,8 +86,8 @@ export function OptionColumn({
 	const visibleItemCount = Math.max(1, maxVisibleItems);
 	const filterValue = filterText?.trim() ?? "";
 	const showFilterBar = isFocused && filterValue.length > 0;
-	const reservedLines = (showFilterBar ? 1 : 0) + (fieldName === "model" ? 1 : 0);
 	const pinnedStatus = fieldName === "model" ? getModelPinnedStatus(items) : undefined;
+	const reservedLines = (showFilterBar ? 1 : 0) + (pinnedStatus ? 1 : 0);
 	const scrollableItems = pinnedStatus ? items.slice(1) : items;
 	const visibleItemWindow = Math.max(0, visibleItemCount - reservedLines);
 	const focusedInScrollable = pinnedStatus && focusedItemIndex > 0

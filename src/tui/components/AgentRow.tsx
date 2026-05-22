@@ -85,7 +85,7 @@ export function AgentRow({
 		const focusedFieldName = getFieldName(focusedField);
 		const isFocusedFieldInline = isOptionColumnField(focusedFieldName);
 		const focusedFieldHint = isFocusedFieldInline ? (
-			<Text dimColor>↑/↓ fields · h/l columns · j/k items · Enter/Space open/edit</Text>
+			<Text dimColor>←/→ columns · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse</Text>
 		) : (
 			<Text dimColor>
 				Focus: {INLINE_FIELD_LABELS[focusedFieldName] ?? focusedFieldName} = {
