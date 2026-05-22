@@ -433,6 +433,23 @@ describe("TaskController.execute", () => {
 		expect(disposeSpy).toHaveBeenCalled();
 	});
 
+	it("cleans up runtime timeout timer on success", async () => {
+		vi.useFakeTimers();
+
+		try {
+			mockSession.messages = [
+				{ role: "assistant", content: [{ type: "text", text: "done" }] },
+			];
+
+			const result = await controller.execute(makeParams(), makeContext());
+
+			expect(result.details.error).toBeUndefined();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// ---- Agent type validation ----
 
 	it("returns error when agent type does not exist", async () => {
@@ -512,12 +529,21 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("Use resume:");
 	});
 
-	it("still disposes the session when prompt throws", async () => {
-		mockSession.prompt = vi.fn().mockRejectedValue(new Error("bang"));
+	it("cleans up resources when session.prompt rejects", async () => {
+		vi.useFakeTimers();
 
-		await controller.execute(makeParams(), makeContext());
+		try {
+			mockSession.prompt = vi.fn().mockRejectedValue(new Error("bang"));
 
-		expect(disposeSpy).toHaveBeenCalled();
+			const result = await controller.execute(makeParams(), makeContext());
+
+			expect(result.details.error).toBe("bang");
+			expect(disposeSpy).toHaveBeenCalled();
+			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("handles non-Error throwables gracefully", async () => {
@@ -526,6 +552,46 @@ describe("TaskController.execute", () => {
 		const result = await controller.execute(makeParams(), makeContext());
 
 		expect(result.details.error).toBe("string error");
+	});
+
+	it("cleans up resources when session.prompt throws synchronously", async () => {
+		vi.useFakeTimers();
+
+		try {
+			mockSession.prompt = vi.fn(() => {
+				throw new Error("sync prompt failure");
+			});
+
+			const result = await controller.execute(makeParams(), makeContext());
+
+			expect(result.details.error).toBe("sync prompt failure");
+			expect(disposeSpy).toHaveBeenCalled();
+			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("cleans up resources when session.prompt returns thenable with throwing then", async () => {
+		vi.useFakeTimers();
+
+		try {
+			mockSession.prompt = vi.fn(() => ({
+				then() {
+					throw new Error("bad then");
+				},
+			}));
+
+			const result = await controller.execute(makeParams(), makeContext());
+
+			expect(result.details.error).toBe("bad then");
+			expect(disposeSpy).toHaveBeenCalled();
+			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("times out long-running task execution and still disposes the session", async () => {
@@ -549,27 +615,45 @@ describe("TaskController.execute", () => {
 		}
 	});
 
-	it("returns a non-timeout failure when signal aborts while prompt is pending", async () => {
+	it("returns a non-timeout failure when signal aborts after prompt starts", async () => {
 		vi.useFakeTimers();
+		const addEventListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
+		const removeEventListenerSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener");
 
 		try {
-			mockSession.prompt = vi.fn(() => new Promise(() => {}));
+			let continuePrompt!: () => void;
+			let promptSettled = false;
+			const promptStarted = new Promise<void>((resolve) => {
+				continuePrompt = resolve;
+			});
+			mockSession.prompt = vi.fn(() => {
+				continuePrompt();
+				return new Promise(() => {
+					/* prompt intentionally never resolves or rejects */
+				}).finally(() => {
+					promptSettled = true;
+				});
+			});
 			const ac = new AbortController();
 
 			const resultPromise = controller.execute(makeParams(), makeContext({ signal: ac.signal }));
-			await Promise.resolve();
+			await promptStarted;
+			expect(mockSession.prompt).toHaveBeenCalledTimes(1);
+
 			ac.abort();
 
 			const result = await resultPromise;
 			expect(result.details.error).toBe("Task execution was aborted.");
-			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toContain("failed");
-			expect(text).toContain("aborted");
 			expect(mockSession.abort).toHaveBeenCalledTimes(1);
+			expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
+			expect(removeEventListenerSpy).toHaveBeenCalledTimes(1);
 			expect(disposeSpy).toHaveBeenCalled();
 			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
 			expect(vi.getTimerCount()).toBe(0);
+			expect(promptSettled).toBe(false);
 		} finally {
+			addEventListenerSpy.mockRestore();
+			removeEventListenerSpy.mockRestore();
 			vi.useRealTimers();
 		}
 	});
@@ -598,6 +682,79 @@ describe("TaskController.execute", () => {
 			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
 			expect(vi.getTimerCount()).toBe(0);
 		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("removes abort listener on successful execution", async () => {
+		const addEventListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
+		const removeEventListenerSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener");
+		vi.useFakeTimers();
+
+		try {
+			mockSession.messages = [
+				{ role: "assistant", content: [{ type: "text", text: "done" }] },
+			];
+			const ac = new AbortController();
+
+			const result = await controller.execute(
+				makeParams(),
+				makeContext({ signal: ac.signal }),
+			);
+
+			expect(result.details.error).toBeUndefined();
+			expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
+			expect(removeEventListenerSpy).toHaveBeenCalledTimes(1);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			addEventListenerSpy.mockRestore();
+			removeEventListenerSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("removes abort listener when prompt execution fails", async () => {
+		const addEventListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
+		const removeEventListenerSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener");
+		vi.useFakeTimers();
+
+		try {
+			mockSession.prompt = vi.fn().mockRejectedValue(new Error("failure"));
+			const ac = new AbortController();
+
+			const result = await controller.execute(makeParams(), makeContext({ signal: ac.signal }));
+
+			expect(result.details.error).toBe("failure");
+			expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
+			expect(removeEventListenerSpy).toHaveBeenCalledTimes(1);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			addEventListenerSpy.mockRestore();
+			removeEventListenerSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("removes abort listener on timeout", async () => {
+		const addEventListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
+		const removeEventListenerSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener");
+		vi.useFakeTimers();
+
+		try {
+			mockSession.prompt = vi.fn(() => new Promise(() => {}));
+			const ac = new AbortController();
+
+			const resultPromise = controller.execute(makeParams(), makeContext({ signal: ac.signal }));
+			await vi.advanceTimersByTimeAsync(DEFAULT_TASK_RUNTIME_TIMEOUT_MS);
+			const result = await resultPromise;
+
+			expect(result.details.error).toBe(TASK_RUNTIME_TIMEOUT_ERROR_CODE);
+			expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
+			expect(removeEventListenerSpy).toHaveBeenCalledTimes(1);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			addEventListenerSpy.mockRestore();
+			removeEventListenerSpy.mockRestore();
 			vi.useRealTimers();
 		}
 	});
