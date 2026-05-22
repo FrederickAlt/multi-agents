@@ -111,6 +111,100 @@ describe("AsyncAgentNotifier", () => {
 		});
 	});
 
+	describe("turn-boundary reminder policy", () => {
+		it("emits the first completion notification at the next boundary", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("abc123");
+
+			const msg = n.takeNotificationForTurnBoundary();
+			expect(msg).toContain("abc123");
+			expect(msg).not.toContain("Reminder");
+		});
+
+		it("reminds after five turns with no new completion", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("abc123");
+			expect(n.takeNotificationForTurnBoundary()).toContain("abc123");
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			}
+
+			const reminder = n.takeNotificationForTurnBoundary();
+			expect(reminder).toContain("Reminder");
+			expect(reminder).toContain("abc123");
+		});
+
+		it("does not spam duplicate reminders before the threshold", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("abc123");
+			expect(n.takeNotificationForTurnBoundary()).not.toBeNull();
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			}
+		});
+
+		it("resets the reminder counter when a new completion arrives", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("first");
+			expect(n.takeNotificationForTurnBoundary()).toContain("first");
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			}
+
+			n.markCompleted("second");
+			const fresh = n.takeNotificationForTurnBoundary();
+			expect(fresh).toContain("first");
+			expect(fresh).toContain("second");
+			expect(fresh).not.toContain("Reminder");
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			}
+			expect(n.takeNotificationForTurnBoundary()).toContain("Reminder");
+		});
+
+		it("removes consumed agents from future reminders", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("keep");
+			n.markCompleted("done");
+			expect(n.takeNotificationForTurnBoundary()).toContain("done");
+			n.consume(["done"]);
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			}
+
+			const reminder = n.takeNotificationForTurnBoundary();
+			expect(reminder).toContain("keep");
+			expect(reminder).not.toContain("done");
+		});
+
+		it("is a no-op at turn boundaries when empty", () => {
+			const n = new AsyncAgentNotifier();
+			expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			expect(n.takeNotificationForTurnBoundary()).toBeNull();
+		});
+
+		it("includes multiple unconsumed agents in reminder content", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("aaa");
+			n.markCompleted("bbb");
+			expect(n.takeNotificationForTurnBoundary()).not.toBeNull();
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			}
+
+			const reminder = n.takeNotificationForTurnBoundary();
+			expect(reminder).toContain("Reminder");
+			expect(reminder).toContain("aaa");
+			expect(reminder).toContain("bbb");
+		});
+	});
+
 	describe("notification message content", () => {
 		it("includes all unconsumed IDs in the message", () => {
 			const n = new AsyncAgentNotifier();

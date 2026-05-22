@@ -368,6 +368,13 @@ let _sessionManager: SubagentSessionManager | undefined;
 // Module-level notifier singleton — injected at turn boundaries.
 const _asyncAgentNotifier = new AsyncAgentNotifier();
 
+export const __testing = {
+	asyncAgentNotifier: _asyncAgentNotifier,
+	resetAsyncAgentNotifier(): void {
+		_asyncAgentNotifier.clear();
+	},
+};
+
 function getOrCreateSessionManager(): SubagentSessionManager {
 	if (!_sessionManager) {
 		_sessionManager = new SubagentSessionManager(
@@ -578,7 +585,7 @@ export default function (pi: ExtensionAPI) {
 		default: DEFAULT_ROOT_AGENT_NAME,
 	});
 
-	pi.on("input", async (_event, ctx) => {
+	pi.on("input", async (event, ctx) => {
 		const activeStore = store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
 		try {
 			activeStore.load();
@@ -587,6 +594,18 @@ export default function (pi: ExtensionAPI) {
 			showMessage(ctx, formatRootAgentResolutionError(error), "error");
 			return { action: "handled" as const };
 		}
+
+		if (event.source !== "extension" && _asyncAgentNotifier.hasPendingCompletion()) {
+			const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+			if (notification) {
+				return {
+					action: "transform" as const,
+					text: `${notification}\n\n${event.text}`,
+					images: event.images,
+				};
+			}
+		}
+
 		return { action: "continue" as const };
 	});
 
@@ -628,12 +647,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// Inject async-agent completion notifications at turn boundaries.
-	// At each turn_end we check for unconsumed completed async agents and
-	// queue a consolidated [System] notification for delivery at the
-	// start of the next turn via deliverAs: "nextTurn".
+	// The notifier owns first-notification and reminder cadence; this hook only
+	// delivers whichever consolidated message is currently due.
 	pi.on("turn_end", () => {
-		if (!_asyncAgentNotifier.hasUnconsumed()) return;
-		const notification = _asyncAgentNotifier.buildNotification();
+		const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
 		if (notification) {
 			pi.sendMessage(
 				{
@@ -649,7 +666,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (event, ctx) => {
 		_sessionManager?.disposeAll();
 		_sessionManager = undefined;
-		_asyncAgentNotifier.consume([..._asyncAgentNotifier.getUnconsumed()]);
+		_asyncAgentNotifier.clear();
 		if (event.reason === "new") {
 			store?.cleanup();
 			store = undefined;
