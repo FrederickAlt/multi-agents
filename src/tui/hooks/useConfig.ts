@@ -8,6 +8,7 @@ import type {
 import { configReducer, createInitialState, applyToggle, computeCheckboxSaveValue } from "../state/reducer.js";
 import { useOptionDiscovery } from "./useOptionDiscovery.js";
 import { writeFieldToFile } from "../file-io/write-agent.js";
+import { modelDisplayNameToCanonicalRef } from "../discovery/options.js";
 
 /**
  * Central state hook for the Agent Configuration TUI.
@@ -221,6 +222,14 @@ export function useConfig() {
 			if (!Number.isNaN(parsed)) {
 				newValue = parsed;
 			}
+		}
+		if (overlay.fieldName === "model") {
+			// Map display name to canonical runtime reference
+			const ref = modelDisplayNameToCanonicalRef(
+				overlay.localSelected,
+				state.options.models,
+			);
+			if (ref) newValue = ref;
 		}
 
 		// Dispatch saving status

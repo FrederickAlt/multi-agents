@@ -49,6 +49,12 @@ export interface ModelOption {
 	provider: string;
 	modelId: string;
 	displayName: string;
+	/**
+	 * Canonical runtime reference string:
+	 * - bare modelId when it uniquely identifies one Pi model across providers
+	 * - "provider/modelId" when modelId is ambiguous across providers
+	 */
+	canonicalRef: string;
 }
 
 export interface StatusInfo {

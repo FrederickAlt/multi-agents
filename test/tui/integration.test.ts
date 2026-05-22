@@ -215,7 +215,7 @@ describe("Integration: reducer + state flow", () => {
 		const options: DiscoveredOptions = {
 			tools: ["read", "bash", "write"],
 			extensions: [],
-			models: [{ provider: "a", modelId: "c", displayName: "claude" }],
+			models: [{ provider: "a", modelId: "c", displayName: "claude", canonicalRef: "c" }],
 			defaultModel: "claude",
 			reasoningEfforts: ["low", "medium", "high"],
 			depths: [0, 1, 2],
