@@ -6,7 +6,7 @@ import type {
 	OverlayState,
 } from "./types.js";
 import { FIELDS_ORDER } from "./types.js";
-import { clampScrollOffset } from "../layout.js";
+import { clampVerticalScrollOffset } from "../layout.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -91,6 +91,7 @@ export function createInitialState(): ConfigState {
 			promptParts: [],
 		},
 		focus: { agentIndex: 0, fieldIndex: 0 },
+		expandedAgentIndex: null,
 		overlay: null,
 		statuses: new Map(),
 		scrollOffset: 0,
@@ -129,6 +130,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				agents: action.agents,
 				options: action.options,
 				globalError: null,
+				expandedAgentIndex: null,
 				focus: {
 					agentIndex: clamp(state.focus.agentIndex, action.agents.length),
 					fieldIndex: clamp(state.focus.fieldIndex, FIELDS_ORDER.length),
@@ -148,7 +150,12 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				focus: { ...state.focus, agentIndex: newIdx },
-				scrollOffset: clampScrollOffset(state.scrollOffset, newIdx, len),
+				scrollOffset: clampVerticalScrollOffset(
+					state.scrollOffset,
+					newIdx,
+					len,
+					state.expandedAgentIndex,
+				),
 			};
 		}
 
@@ -159,7 +166,12 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				focus: { ...state.focus, agentIndex: newIdx },
-				scrollOffset: clampScrollOffset(state.scrollOffset, newIdx, len),
+				scrollOffset: clampVerticalScrollOffset(
+					state.scrollOffset,
+					newIdx,
+					len,
+					state.expandedAgentIndex,
+				),
 			};
 		}
 
@@ -279,6 +291,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				agents: action.agents,
 				options: action.options,
 				globalError: null,
+				expandedAgentIndex: null,
 				focus: {
 					agentIndex: clamp(state.focus.agentIndex, len),
 					fieldIndex: clamp(state.focus.fieldIndex, FIELDS_ORDER.length),
@@ -287,7 +300,25 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		}
 
 		case "SCROLL": {
-			return { ...state };
+			const len = state.agents.length;
+			if (len === 0) return state;
+			const delta = action.direction === "down" ? 1 : -1;
+			const newOffset = Math.max(0, Math.min(state.scrollOffset + delta, len - 1));
+			return { ...state, scrollOffset: newOffset };
+		}
+
+		case "EXPAND": {
+			const idx = state.focus.agentIndex;
+			if (idx >= state.agents.length || state.agents.length === 0) return state;
+			return {
+				...state,
+				expandedAgentIndex: idx,
+				focus: { agentIndex: idx, fieldIndex: 0 },
+			};
+		}
+
+		case "COLLAPSE": {
+			return { ...state, expandedAgentIndex: null };
 		}
 
 		default:

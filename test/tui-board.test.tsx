@@ -32,6 +32,7 @@ function state(overrides: Partial<ConfigState> = {}): ConfigState {
 		agents: [agent("default"), agent("explorer"), agent("coder")],
 		options,
 		focus: { agentIndex: 0, fieldIndex: 0 },
+		expandedAgentIndex: null,
 		overlay: null,
 		statuses: new Map(),
 		scrollOffset: 0,
@@ -45,13 +46,19 @@ function renderedChildren(element: React.ReactElement): React.ReactNode[] {
 }
 
 describe("Board", () => {
-	it("keeps the left gutter stable before and after horizontal scrolling", () => {
-		const initial = Board({ state: state() }) as React.ReactElement;
-		const scrolled = Board({
-			state: state({ focus: { agentIndex: 1, fieldIndex: 0 }, scrollOffset: 1 }),
-		}) as React.ReactElement;
+	it("renders AgentRow components for all visible agents in vertical layout", () => {
+		const result = Board({ state: state() }) as React.ReactElement;
+		const children = renderedChildren(result);
+		// The scroll indicators appear above/below the agent rows when scrolling.
+		// With 0 scroll offset and all agents visible, no indicators.
+		// AgentRow components have AgentRow as their type (function component).
+		const agentNames = children
+			.map((c: any) => c?.props?.agent?.name)
+			.filter(Boolean);
+		expect(agentNames).toEqual(["default", "explorer", "coder"]);
+	});
 
-		expect(renderedChildren(initial)[0]).toMatchObject({ props: { width: 3 } });
-		expect(renderedChildren(scrolled)[0]).toMatchObject({ props: { width: 3 } });
+	it("returns null when there are no agents", () => {
+		expect(Board({ state: state({ agents: [] }) })).toBeNull();
 	});
 });

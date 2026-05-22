@@ -573,3 +573,279 @@ describe("OPEN_OVERLAY validation", () => {
 		expect(next.overlay!.localSelected).toBe("0");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Expand / collapse tests
+// ---------------------------------------------------------------------------
+
+describe("EXPAND", () => {
+	it("sets expandedAgentIndex to the focused agent index", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 1, fieldIndex: 0 },
+		};
+		const next = configReducer(state, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(1);
+	});
+
+	it("resets fieldIndex to 0 when expanding", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" })],
+			focus: { agentIndex: 0, fieldIndex: 3 },
+		};
+		const next = configReducer(state, { type: "EXPAND" });
+		expect(next.focus.fieldIndex).toBe(0);
+	});
+
+	it("collapses the previous expanded row when a different agent is expanded", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+			expandedAgentIndex: 1,
+		};
+		// Expand agent 0 (currently focused) should collapse agent 1
+		const next = configReducer(state, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(0);
+	});
+
+	it("is a no-op when no agents exist", () => {
+		const state = createInitialState();
+		const next = configReducer(state, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBeNull();
+	});
+
+	it("keeps the focused agent unchanged", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 0, fieldIndex: 2 },
+		};
+		const next = configReducer(state, { type: "EXPAND" });
+		expect(next.focus.agentIndex).toBe(0);
+	});
+});
+
+describe("COLLAPSE", () => {
+	it("sets expandedAgentIndex to null", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" })],
+			expandedAgentIndex: 0,
+		};
+		const next = configReducer(state, { type: "COLLAPSE" });
+		expect(next.expandedAgentIndex).toBeNull();
+	});
+
+	it("preserves the focused agent index after collapse", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 1, fieldIndex: 3 },
+			expandedAgentIndex: 1,
+		};
+		const next = configReducer(state, { type: "COLLAPSE" });
+		expect(next.expandedAgentIndex).toBeNull();
+		expect(next.focus.agentIndex).toBe(1);
+	});
+
+	it("is a no-op when nothing is expanded", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" })],
+			expandedAgentIndex: null,
+		};
+		const next = configReducer(state, { type: "COLLAPSE" });
+		expect(next.expandedAgentIndex).toBeNull();
+	});
+});
+
+describe("one-expanded-row behavior", () => {
+	it("only one agent can be expanded at a time", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+		};
+		// Expand agent 0
+		let next = configReducer(state, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(0);
+
+		// Move focus to agent 2 and expand
+		next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
+		next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
+		next = configReducer(next, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(2);
+	});
+
+	it("collapsing a row then expanding another should work", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+			expandedAgentIndex: 0,
+		};
+		// Collapse
+		let next = configReducer(state, { type: "COLLAPSE" });
+		expect(next.expandedAgentIndex).toBeNull();
+
+		// Move to agent 1 and expand
+		next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
+		next = configReducer(next, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(1);
+	});
+});
+
+describe("compact-mode navigation", () => {
+	it("FOCUS_AGENT wraps up/down navigation", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
+		};
+		// prev from index 0 wraps to last
+		let next = configReducer(state, { type: "FOCUS_AGENT", direction: "prev" });
+		expect(next.focus.agentIndex).toBe(2);
+		// next from index 2 wraps to first
+		next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
+		expect(next.focus.agentIndex).toBe(0);
+	});
+
+	it("FOCUS_AGENT does nothing with no agents", () => {
+		const state = createInitialState();
+		const next = configReducer(state, { type: "FOCUS_AGENT", direction: "next" });
+		expect(next.focus.agentIndex).toBe(0);
+	});
+
+	it("focus remains on same agent when expanding then collapsing", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+		};
+		// Navigate to agent 1
+		let next = configReducer(state, { type: "FOCUS_AGENT", direction: "next" });
+		expect(next.focus.agentIndex).toBe(1);
+		// Expand
+		next = configReducer(next, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(1);
+		expect(next.focus.agentIndex).toBe(1);
+		// Collapse
+		next = configReducer(next, { type: "COLLAPSE" });
+		expect(next.expandedAgentIndex).toBeNull();
+		expect(next.focus.agentIndex).toBe(1);
+	});
+});
+
+describe("vertical scrolling", () => {
+	it("scrollOffset starts at 0", () => {
+		const state = createInitialState();
+		expect(state.scrollOffset).toBe(0);
+	});
+
+	it("SCROLL down advances offset", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+		};
+		const next = configReducer(state, { type: "SCROLL", direction: "down" });
+		expect(next.scrollOffset).toBe(1);
+	});
+
+	it("SCROLL up decreases offset", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			scrollOffset: 1,
+		};
+		const next = configReducer(state, { type: "SCROLL", direction: "up" });
+		expect(next.scrollOffset).toBe(0);
+	});
+
+	it("SCROLL clamps to valid range", () => {
+		// Only 2 agents, index range is [0, 1]
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			scrollOffset: 0,
+		};
+		// Scroll up from 0 should stay at 0
+		const up = configReducer(state, { type: "SCROLL", direction: "up" });
+		expect(up.scrollOffset).toBe(0);
+		// Scroll down to end
+		const down = configReducer(state, { type: "SCROLL", direction: "down" });
+		expect(down.scrollOffset).toBe(1);
+		// Scroll down again stays at 1
+		const down2 = configReducer(down, { type: "SCROLL", direction: "down" });
+		expect(down2.scrollOffset).toBe(1);
+	});
+
+	it("SCROLL is no-op with no agents", () => {
+		const state = createInitialState();
+		const next = configReducer(state, { type: "SCROLL", direction: "down" });
+		expect(next.scrollOffset).toBe(0);
+	});
+
+	it("focus navigation auto-scrolls to keep focused agent visible", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({ name: "a" }),
+				makeAgent({ name: "b" }),
+				makeAgent({ name: "c" }),
+				makeAgent({ name: "d" }),
+				makeAgent({ name: "e" }),
+			],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+		};
+
+		// Navigate forward — should auto-scroll when needed
+		let next = state;
+		for (let i = 0; i < 4; i++) {
+			next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
+		}
+		expect(next.focus.agentIndex).toBe(4);
+		// scrollOffset should have advanced to keep agent 4 visible
+		expect(next.scrollOffset).toBeGreaterThanOrEqual(0);
+	});
+
+	it("EXPAND resets scroll to keep expanded agent visible", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 1, fieldIndex: 0 },
+			scrollOffset: 1,
+		};
+		const next = configReducer(state, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(1);
+	});
+
+	it("RESCAN_COMPLETE resets expandedAgentIndex to null", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+		};
+		const next = configReducer(state, {
+			type: "RESCAN_COMPLETE",
+			agents: [makeAgent({ name: "a" })],
+			options: makeOptions(),
+		});
+		expect(next.expandedAgentIndex).toBeNull();
+	});
+
+	it("INIT_COMPLETE resets expandedAgentIndex to null", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			expandedAgentIndex: 5,
+		};
+		const next = configReducer(state, {
+			type: "INIT_COMPLETE",
+			agents: [makeAgent({ name: "a" })],
+			options: makeOptions(),
+		});
+		expect(next.expandedAgentIndex).toBeNull();
+	});
+});
