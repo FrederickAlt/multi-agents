@@ -1,10 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { configReducer, createInitialState, resolveCheckboxSelection, computeCheckboxSaveValue } from "../../src/tui/state/reducer.js";
+import { getOptionColumnItems } from "../../src/tui/state/option-columns.js";
 import type { ConfigState, AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
 const originalRowsDescriptor = Object.getOwnPropertyDescriptor(
 	process.stdout,
 	"rows",
+);
+const originalColumnsDescriptor = Object.getOwnPropertyDescriptor(
+	process.stdout,
+	"columns",
 );
 
 function setTerminalRows(rows: number): void {
@@ -14,11 +19,23 @@ function setTerminalRows(rows: number): void {
 	});
 }
 
+function setTerminalColumns(columns: number): void {
+	Object.defineProperty(process.stdout, "columns", {
+		value: columns,
+		configurable: true,
+	});
+}
+
 afterEach(() => {
 	if (originalRowsDescriptor) {
 		Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
 	} else {
 		delete (process.stdout as { rows?: number }).rows;
+	}
+	if (originalColumnsDescriptor) {
+		Object.defineProperty(process.stdout, "columns", originalColumnsDescriptor);
+	} else {
+		delete (process.stdout as { columns?: number }).columns;
 	}
 });
 
@@ -595,6 +612,116 @@ describe("OPEN_OVERLAY validation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Inline Option column tests
+// ---------------------------------------------------------------------------
+
+describe("inline Option columns", () => {
+	it("EXPAND focuses the selected item in the first single-select option column", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "high", depth: 2 } })],
+			options: makeOptions(),
+		};
+
+		const next = configReducer(state, { type: "EXPAND" });
+
+		expect(next.expandedAgentIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(0);
+		expect(next.focus.optionItemIndex).toBe(2);
+	});
+
+	it("FOCUS_FIELD moves left and right through option columns", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+		};
+
+		let next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
+		expect(next.focus.fieldIndex).toBe(1);
+		expect(next.focus.optionItemIndex).toBe(3);
+
+		next = configReducer(next, { type: "FOCUS_FIELD", direction: "prev" });
+		expect(next.focus.fieldIndex).toBe(0);
+		expect(next.focus.optionItemIndex).toBe(1);
+	});
+
+	it("FOCUS_OPTION_ITEM moves up and down within the focused option column", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium" } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 1 },
+		};
+
+		let next = configReducer(state, { type: "FOCUS_OPTION_ITEM", direction: "next" });
+		expect(next.focus.optionItemIndex).toBe(2);
+
+		next = configReducer(next, { type: "FOCUS_OPTION_ITEM", direction: "prev" });
+		expect(next.focus.optionItemIndex).toBe(1);
+	});
+
+	it("horizontally scrolls option columns when terminal width only fits one column", () => {
+		setTerminalColumns(24);
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { depth: 2 } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+		};
+
+		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
+
+		expect(next.focus.fieldIndex).toBe(1);
+		expect(next.optionColumnScrollOffset).toBe(1);
+	});
+
+	it("realigns focused item after a stale custom value is replaced", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "ultra" } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 1 },
+		};
+
+		const next = configReducer(state, {
+			type: "UPDATE_AGENT_FRONTMATTER",
+			agentIndex: 0,
+			frontmatter: { reasoning_effort: "low" },
+			staleItems: {},
+		});
+
+		expect(next.focus.optionItemIndex).toBe(0);
+	});
+
+	it("keeps stale custom single-select values visible without changing frontmatter", () => {
+		const agent = makeAgent({
+			frontmatter: { reasoning_effort: "ultra", depth: 9 },
+		});
+		const options = makeOptions();
+
+		expect(getOptionColumnItems(agent, options, "reasoning_effort")).toEqual([
+			"ultra",
+			"low",
+			"medium",
+			"high",
+			"maximum",
+		]);
+
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [agent],
+			options,
+		};
+		const next = configReducer(state, { type: "INIT_COMPLETE", agents: [agent], options });
+		expect(next.agents[0].frontmatter).toEqual({ reasoning_effort: "ultra", depth: 9 });
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Expand / collapse tests
 // ---------------------------------------------------------------------------
 
@@ -603,7 +730,7 @@ describe("EXPAND", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 1, fieldIndex: 0 },
+			focus: { agentIndex: 1, fieldIndex: 0, optionItemIndex: 0 },
 		};
 		const next = configReducer(state, { type: "EXPAND" });
 		expect(next.expandedAgentIndex).toBe(1);
@@ -613,7 +740,7 @@ describe("EXPAND", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" })],
-			focus: { agentIndex: 0, fieldIndex: 3 },
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
 		};
 		const next = configReducer(state, { type: "EXPAND" });
 		expect(next.focus.fieldIndex).toBe(0);
@@ -623,7 +750,7 @@ describe("EXPAND", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 			expandedAgentIndex: 1,
 		};
 		// Expand agent 0 (currently focused) should collapse agent 1
@@ -641,7 +768,7 @@ describe("EXPAND", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 0, fieldIndex: 2 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 0 },
 		};
 		const next = configReducer(state, { type: "EXPAND" });
 		expect(next.focus.agentIndex).toBe(0);
@@ -663,7 +790,7 @@ describe("COLLAPSE", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 1, fieldIndex: 3 },
+			focus: { agentIndex: 1, fieldIndex: 3, optionItemIndex: 0 },
 			expandedAgentIndex: 1,
 		};
 		const next = configReducer(state, { type: "COLLAPSE" });
@@ -687,7 +814,7 @@ describe("one-expanded-row behavior", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		};
 		// Expand agent 0
 		let next = configReducer(state, { type: "EXPAND" });
@@ -704,7 +831,7 @@ describe("one-expanded-row behavior", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 			expandedAgentIndex: 0,
 		};
 		// Collapse
@@ -742,7 +869,7 @@ describe("compact-mode navigation", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		};
 		// Navigate to agent 1
 		let next = configReducer(state, { type: "FOCUS_AGENT", direction: "next" });
@@ -818,7 +945,7 @@ describe("vertical scrolling", () => {
 				makeAgent({ name: "d" }),
 				makeAgent({ name: "e" }),
 			],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		};
 
 		// Navigate forward — all 5 agents (15 lines) fit in 24, so no scroll needed.
@@ -842,7 +969,7 @@ describe("vertical scrolling", () => {
 				makeAgent({ name: "d" }),
 				makeAgent({ name: "e" }),
 			],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		};
 
 		// Navigate to agent 4 — should trigger scroll
@@ -859,7 +986,7 @@ describe("vertical scrolling", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 1, fieldIndex: 0 },
+			focus: { agentIndex: 1, fieldIndex: 0, optionItemIndex: 0 },
 			scrollOffset: 1,
 		};
 		const next = configReducer(state, { type: "EXPAND" });
@@ -904,7 +1031,7 @@ describe("focus collapses expanded row", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
-			focus: { agentIndex: 0, fieldIndex: 2 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 0 },
 			expandedAgentIndex: 0,
 		};
 		const next = configReducer(state, { type: "FOCUS_AGENT", direction: "next" });
@@ -916,7 +1043,7 @@ describe("focus collapses expanded row", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
-			focus: { agentIndex: 2, fieldIndex: 0 },
+			focus: { agentIndex: 2, fieldIndex: 0, optionItemIndex: 0 },
 			expandedAgentIndex: 0,
 		};
 		// prev from 2 → 1 (not expanded, collapse)
@@ -931,7 +1058,7 @@ describe("focus collapses expanded row", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
-			focus: { agentIndex: 0, fieldIndex: 3 },
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
 			expandedAgentIndex: 0,
 		};
 		const next = configReducer(state, { type: "FOCUS_AGENT_AT", agentIndex: 2 });
@@ -943,7 +1070,7 @@ describe("focus collapses expanded row", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 0, fieldIndex: 2 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 0 },
 			expandedAgentIndex: 0,
 		};
 		const next = configReducer(state, { type: "FOCUS_AGENT_AT", agentIndex: 0 });
@@ -955,7 +1082,7 @@ describe("focus collapses expanded row", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 			expandedAgentIndex: null,
 		};
 		const next = configReducer(state, { type: "FOCUS_AGENT", direction: "next" });
@@ -968,7 +1095,7 @@ describe("focus collapses expanded row", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
-			focus: { agentIndex: 0, fieldIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		};
 		let next = configReducer(state, { type: "EXPAND" });
 		expect(next.expandedAgentIndex).toBe(0);

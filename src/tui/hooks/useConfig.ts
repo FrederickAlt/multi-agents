@@ -9,6 +9,12 @@ import { configReducer, createInitialState, applyToggle, computeCheckboxSaveValu
 import { useOptionDiscovery } from "./useOptionDiscovery.js";
 import { writeFieldToFile } from "../file-io/write-agent.js";
 import { modelDisplayNameToCanonicalRef } from "../discovery/options.js";
+import {
+	getFocusedOptionColumnField,
+	getOptionColumnCurrentValue,
+	getOptionColumnItems,
+	getOptionColumnSaveValue,
+} from "../state/option-columns.js";
 
 /**
  * Central state hook for the Agent Configuration TUI.
@@ -94,6 +100,14 @@ export function useConfig() {
 
 	const focusPrevField = useCallback(() => {
 		dispatch({ type: "FOCUS_FIELD", direction: "prev" });
+	}, []);
+
+	const focusNextOptionItem = useCallback(() => {
+		dispatch({ type: "FOCUS_OPTION_ITEM", direction: "next" });
+	}, []);
+
+	const focusPrevOptionItem = useCallback(() => {
+		dispatch({ type: "FOCUS_OPTION_ITEM", direction: "prev" });
 	}, []);
 
 	const expand = useCallback(() => {
@@ -209,6 +223,61 @@ export function useConfig() {
 		}
 	}, [state.overlay, state.agents, toggleCheckbox]);
 
+	const selectFocusedOption = useCallback(() => {
+		const agent = state.agents[state.focus.agentIndex];
+		if (!agent || agent.error) return;
+
+		const fieldName = getFocusedOptionColumnField(state.focus.fieldIndex);
+		const items = getOptionColumnItems(agent, state.options, fieldName);
+		const item = items[state.focus.optionItemIndex];
+		if (item === undefined) return;
+
+		const currentValue = getOptionColumnCurrentValue(agent, fieldName);
+		const nextValue = getOptionColumnSaveValue(fieldName, item);
+		if (currentValue !== undefined && String(currentValue) === String(nextValue)) {
+			return;
+		}
+
+		dispatch({
+			type: "SAVE_COMPLETE",
+			agentIndex: state.focus.agentIndex,
+			status: { type: "saving", message: "Saving...", timestamp: Date.now() },
+		});
+
+		const result = writeFieldToFile(agent.filePath, fieldName, nextValue);
+
+		if (result.success) {
+			if (result.frontmatter) {
+				dispatch({
+					type: "UPDATE_AGENT_FRONTMATTER",
+					agentIndex: state.focus.agentIndex,
+					frontmatter: result.frontmatter,
+					staleItems: agent.staleItems,
+				});
+			}
+
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: state.focus.agentIndex,
+				status: {
+					type: "saved",
+					message: `Saved ${agent.name}.md`,
+					timestamp: Date.now(),
+				},
+			});
+		} else {
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: state.focus.agentIndex,
+				status: {
+					type: "error",
+					message: `Save failed: ${result.error}`,
+					timestamp: Date.now(),
+				},
+			});
+		}
+	}, [state.agents, state.focus, state.options]);
+
 	// Commit overlay: save to file (dropdown) or just close (checkbox)
 	const commitOverlay = useCallback(() => {
 		const overlay = state.overlay;
@@ -312,6 +381,8 @@ export function useConfig() {
 		focusPrevAgent,
 		focusNextField,
 		focusPrevField,
+		focusNextOptionItem,
+		focusPrevOptionItem,
 		focusAgentAt,
 		expand,
 		collapse,
@@ -320,6 +391,7 @@ export function useConfig() {
 		instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay,
+		selectFocusedOption,
 		rescan,
 	};
 }

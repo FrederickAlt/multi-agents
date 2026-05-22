@@ -5,12 +5,15 @@ export interface KeyboardActions {
 	focusPrevAgent: () => void;
 	focusNextField: () => void;
 	focusPrevField: () => void;
+	focusNextOptionItem: () => void;
+	focusPrevOptionItem: () => void;
 	openOverlay: (agentIndex: number, fieldName: string) => void;
 	focusAgentAt: (index: number) => void;
 	closeOverlay: () => void;
 	toggleCheckbox: (item: string) => void;
 	selectDropdown: (item: string) => void;
 	commitOverlay: () => void;
+	selectFocusedOption: () => void;
 	rescan: () => void;
 	expand: () => void;
 	collapse: () => void;
@@ -89,33 +92,36 @@ export function useKeyboard(
 		} else {
 			// Main board keyboard handling (vertical layout)
 			if (state.isExpanded) {
-				// Expanded mode: Up/Down navigate fields, Escape collapses
 				if (key.escape) {
 					actions.collapse();
 					return;
 				}
 
-				if (key.upArrow || input === "k") {
+				if (key.leftArrow || input === "h") {
 					actions.focusPrevField();
 					return;
 				}
 
-				if (key.downArrow || input === "j") {
+				if (key.rightArrow || input === "l") {
 					actions.focusNextField();
 					return;
 				}
 
-				if (key.return) {
-					actions.openOverlay(state.agentIndex, state.fieldName);
+				if (key.upArrow || input === "k") {
+					actions.focusPrevOptionItem();
 					return;
 				}
 
-				if (input === " ") {
-					actions.openOverlay(state.agentIndex, state.fieldName);
+				if (key.downArrow || input === "j") {
+					actions.focusNextOptionItem();
 					return;
 				}
 
-				// Left/Right are no-ops in expanded mode
+				if (key.return || input === " ") {
+					actions.selectFocusedOption();
+					return;
+				}
+
 				return;
 			} else {
 				// Compact mode: Up/Down navigate agents, Enter/Space expands,

@@ -8,7 +8,7 @@ import { CheckboxOverlay } from "./components/CheckboxOverlay.js";
 import { DropdownOverlay } from "./components/DropdownOverlay.js";
 import { HelpFooter } from "./components/HelpFooter.js";
 import { EmptyState } from "./components/EmptyState.js";
-import { FIELDS_ORDER } from "./state/types.js";
+import { getFocusedOptionColumnField } from "./state/option-columns.js";
 
 /**
  * Root Ink component — state hub and layout orchestration.
@@ -24,6 +24,8 @@ export function App() {
 		focusPrevAgent,
 		focusNextField,
 		focusPrevField,
+		focusNextOptionItem,
+		focusPrevOptionItem,
 		focusAgentAt,
 		expand,
 		collapse,
@@ -32,6 +34,7 @@ export function App() {
 		instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay,
+		selectFocusedOption,
 		rescan,
 	} = useConfig();
 
@@ -49,9 +52,7 @@ export function App() {
 
 	// Build keyboard state getter for useKeyboard
 	const getKeyboardState = useCallback(() => {
-		const fieldName = state.focus.fieldIndex < FIELDS_ORDER.length
-			? FIELDS_ORDER[state.focus.fieldIndex]
-			: FIELDS_ORDER[0];
+		const fieldName = getFocusedOptionColumnField(state.focus.fieldIndex);
 
 		return {
 			isOverlayOpen: overlay !== null,
@@ -108,7 +109,10 @@ export function App() {
 		toggleCheckbox: instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay: () => commitOverlay(),
+		selectFocusedOption,
 		rescan,
+		focusNextOptionItem,
+		focusPrevOptionItem,
 		overlayFocusUp: handleOverlayUp,
 		overlayFocusDown: handleOverlayDown,
 		overlayActivate: handleOverlayEnter,

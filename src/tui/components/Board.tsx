@@ -61,6 +61,9 @@ export function Board({ state }: BoardProps) {
 						isFocused={state.focus.agentIndex === globalIdx}
 						isExpanded={isExpanded}
 						focusedField={isExpanded ? state.focus.fieldIndex : -1}
+						focusedOptionItem={isExpanded ? state.focus.optionItemIndex : -1}
+						optionColumnScrollOffset={state.optionColumnScrollOffset}
+						options={state.options}
 						status={state.statuses.get(agent.filePath)}
 					/>
 				);

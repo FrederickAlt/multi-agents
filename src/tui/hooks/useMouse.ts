@@ -1,10 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useStdin } from "ink";
 import type { KeyboardActions, KeyboardState } from "./useKeyboard.js";
-import { FIELDS_ORDER, COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "../state/types.js";
-
-/** First row index where content starts in expanded mode (after border + header + spacer). */
-const EXPANDED_FIELD_START_ROW = 4;
+import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "../state/types.js";
 
 /** SGR mouse sequence regex: \x1b[<Cb;Cx;CyM (press) or m (release) */
 const MOUSE_SGR_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/;
@@ -86,9 +83,6 @@ function handleBoardClick(
 	// For compact rows (3 lines), agent 0 spans rows 1-3, agent 1 spans 4-6, etc.
 	// For expanded rows (10 lines), the expanded agent spans 10 rows.
 
-	// If clicking in an expanded agent's field area, try to open that field.
-	// Otherwise, just focus the agent the row belongs to.
-
 	// Approximate: no scroll indicators at top.
 	let rowCursor = 1; // first border line
 
@@ -102,14 +96,6 @@ function handleBoardClick(
 			// Found the agent
 			actions.focusAgentAt(i);
 
-			if (isExpanded) {
-				// Check if click is on a field row
-				const fieldOffset = row - rowCursor - EXPANDED_FIELD_START_ROW;
-				if (fieldOffset >= 0 && fieldOffset < FIELDS_ORDER.length) {
-					const fieldName = FIELDS_ORDER[fieldOffset];
-					actions.openOverlay(i, fieldName);
-				}
-			}
 			return;
 		}
 		rowCursor += height;

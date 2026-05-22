@@ -32,11 +32,12 @@ function state(): ConfigState {
 	return {
 		agents: [agent("default"), agent("explorer"), agent("planner"), agent("coder")],
 		options,
-		focus: { agentIndex: 0, fieldIndex: 0 },
+		focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		expandedAgentIndex: null,
 		overlay: null,
 		statuses: new Map(),
 		scrollOffset: 0,
+		optionColumnScrollOffset: 0,
 		globalError: null,
 	};
 }

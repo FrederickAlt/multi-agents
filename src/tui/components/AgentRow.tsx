@@ -1,8 +1,13 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { AgentConfigState, StatusInfo } from "../state/types.js";
-import { FIELDS_ORDER } from "../state/types.js";
-import { FieldRow } from "./FieldRow.js";
+import type { AgentConfigState, DiscoveredOptions, StatusInfo } from "../state/types.js";
+import { OPTION_COLUMN_FIELDS } from "../state/types.js";
+import { getMaxVisibleOptionColumns } from "../layout.js";
+import {
+	getOptionColumnItems,
+	getOptionColumnSelectedValue,
+} from "../state/option-columns.js";
+import { OptionColumn } from "./OptionColumn.js";
 import { StatusLine } from "./StatusLine.js";
 import { ErrorColumn } from "./ErrorColumn.js";
 
@@ -11,6 +16,9 @@ interface AgentRowProps {
 	isFocused: boolean;
 	isExpanded: boolean;
 	focusedField: number;
+	focusedOptionItem: number;
+	optionColumnScrollOffset: number;
+	options: DiscoveredOptions;
 	status: StatusInfo | undefined;
 }
 
@@ -19,6 +27,9 @@ export function AgentRow({
 	isFocused,
 	isExpanded,
 	focusedField,
+	focusedOptionItem,
+	optionColumnScrollOffset,
+	options,
 	status,
 }: AgentRowProps) {
 	if (agent.error) {
@@ -33,7 +44,14 @@ export function AgentRow({
 			: agent.description;
 
 	if (isExpanded) {
-		// Expanded row: 10 lines total
+		const visibleCount = getMaxVisibleOptionColumns(undefined, OPTION_COLUMN_FIELDS.length);
+		const visibleFields = OPTION_COLUMN_FIELDS.slice(
+			optionColumnScrollOffset,
+			optionColumnScrollOffset + visibleCount,
+		);
+		const hasMoreLeft = optionColumnScrollOffset > 0;
+		const hasMoreRight = optionColumnScrollOffset + visibleFields.length < OPTION_COLUMN_FIELDS.length;
+
 		return (
 			<Box
 				flexDirection="column"
@@ -43,28 +61,37 @@ export function AgentRow({
 				height={10}
 				flexShrink={0}
 			>
-				{/* Header */}
 				<Box flexDirection="row">
 					<Text bold>{agent.name}</Text>
+					<Text dimColor> — {descText}</Text>
 					{missingDescription && (
 						<Text color="yellow"> ⚠ no description</Text>
 					)}
 				</Box>
-				<Text dimColor>{descText}</Text>
-
-				{/* Spacer */}
-				<Box height={1} />
-
-				{/* Field rows */}
-				{FIELDS_ORDER.map((fieldName, idx) => (
-					<Box key={fieldName} height={1}>
-						<FieldRow
-							agent={agent}
-							fieldName={fieldName}
-							isFocused={isFocused && focusedField === idx}
-						/>
-					</Box>
-				))}
+				<Box flexDirection="row">
+					{status ? (
+						<StatusLine status={status} />
+					) : (
+						<Text dimColor>←/→ columns · ↑/↓ items · Enter/Space select</Text>
+					)}
+				</Box>
+				<Box flexDirection="row" height={6} overflow="hidden">
+					{hasMoreLeft && <Text dimColor>◀ </Text>}
+					{visibleFields.map((fieldName) => {
+						const globalIndex = OPTION_COLUMN_FIELDS.indexOf(fieldName);
+						return (
+							<OptionColumn
+								key={fieldName}
+								fieldName={fieldName}
+								items={getOptionColumnItems(agent, options, fieldName)}
+								selectedValue={getOptionColumnSelectedValue(agent, fieldName)}
+								focusedItemIndex={focusedOptionItem}
+								isFocused={isFocused && focusedField === globalIndex}
+							/>
+						);
+					})}
+					{hasMoreRight && <Text dimColor> ▶</Text>}
+				</Box>
 			</Box>
 		);
 	}

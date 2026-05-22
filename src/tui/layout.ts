@@ -1,4 +1,4 @@
-import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "./state/types.js";
+import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT, OPTION_COLUMN_WIDTH } from "./state/types.js";
 
 /** Height of a single agent row given the expansion state. */
 export function getAgentRowHeight(
@@ -35,6 +35,33 @@ export function getMaxVisibleAgents(
  * Clamp the scroll offset so the focused agent stays visible,
  * accounting for the expanded row if present.
  */
+export function getMaxVisibleOptionColumns(
+	termWidth: number = process.stdout.columns ?? 80,
+	columnCount = 1,
+): number {
+	const availableWidth = Math.max(1, termWidth - 4);
+	return Math.max(1, Math.min(columnCount, Math.floor(availableWidth / OPTION_COLUMN_WIDTH)));
+}
+
+export function clampHorizontalScrollOffset(
+	scrollOffset: number,
+	focusedColumnIndex: number,
+	columnCount: number,
+	termWidth: number = process.stdout.columns ?? 80,
+): number {
+	if (columnCount === 0) return 0;
+	const visibleCount = getMaxVisibleOptionColumns(termWidth, columnCount);
+	let nextOffset = Math.max(0, Math.min(scrollOffset, columnCount - 1));
+
+	if (focusedColumnIndex < nextOffset) {
+		nextOffset = focusedColumnIndex;
+	} else if (focusedColumnIndex >= nextOffset + visibleCount) {
+		nextOffset = focusedColumnIndex - visibleCount + 1;
+	}
+
+	return Math.max(0, Math.min(nextOffset, Math.max(0, columnCount - visibleCount)));
+}
+
 export function clampVerticalScrollOffset(
 	scrollOffset: number,
 	focusedAgentIndex: number,

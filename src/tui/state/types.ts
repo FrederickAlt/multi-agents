@@ -14,7 +14,8 @@ export interface AgentConfigState {
 
 export interface FocusState {
 	agentIndex: number;
-	fieldIndex: number; // index into FIELDS_ORDER
+	fieldIndex: number; // index into OPTION_COLUMN_FIELDS while expanded
+	optionItemIndex: number; // index into the focused inline Option column
 }
 
 export interface OverlayState {
@@ -71,6 +72,7 @@ export interface ConfigState {
 	overlay: OverlayState | null;
 	statuses: Map<string, StatusInfo>; // keyed by filePath
 	scrollOffset: number; // vertical scroll (index of first visible agent)
+	optionColumnScrollOffset: number; // horizontal scroll (index of first visible Option column)
 	globalError: string | null;
 }
 
@@ -88,6 +90,11 @@ export const FIELDS_ORDER = [
 
 export type FieldName = (typeof FIELDS_ORDER)[number];
 
+export const OPTION_COLUMN_FIELDS = ["reasoning_effort", "depth"] as const;
+export type OptionColumnFieldName = (typeof OPTION_COLUMN_FIELDS)[number];
+
+export const OPTION_COLUMN_WIDTH = 22;
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -102,6 +109,7 @@ export type ConfigAction =
 	| { type: "FOCUS_AGENT"; direction: "next" | "prev" }
 	| { type: "FOCUS_AGENT_AT"; agentIndex: number }
 	| { type: "FOCUS_FIELD"; direction: "next" | "prev" }
+	| { type: "FOCUS_OPTION_ITEM"; direction: "next" | "prev" }
 	| { type: "OPEN_OVERLAY"; agentIndex: number; fieldName: string }
 	| { type: "CLOSE_OVERLAY" }
 	| { type: "TOGGLE_CHECKBOX"; item: string }

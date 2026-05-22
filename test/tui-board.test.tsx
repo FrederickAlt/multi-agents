@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, expect, it } from "vitest";
 import { Board } from "../src/tui/components/Board.js";
+import { AgentRow } from "../src/tui/components/AgentRow.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../src/tui/state/types.js";
 
 const options: DiscoveredOptions = {
@@ -31,11 +32,12 @@ function state(overrides: Partial<ConfigState> = {}): ConfigState {
 	return {
 		agents: [agent("default"), agent("explorer"), agent("coder")],
 		options,
-		focus: { agentIndex: 0, fieldIndex: 0 },
+		focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		expandedAgentIndex: null,
 		overlay: null,
 		statuses: new Map(),
 		scrollOffset: 0,
+		optionColumnScrollOffset: 0,
 		globalError: null,
 		...overrides,
 	};
@@ -43,6 +45,19 @@ function state(overrides: Partial<ConfigState> = {}): ConfigState {
 
 function renderedChildren(element: React.ReactElement): React.ReactNode[] {
 	return React.Children.toArray(element.props.children);
+}
+
+function collectText(node: React.ReactNode): string {
+	if (node === null || node === undefined || typeof node === "boolean") return "";
+	if (typeof node === "string" || typeof node === "number") return String(node);
+	if (Array.isArray(node)) return node.map(collectText).join("");
+	if (React.isValidElement(node)) {
+		if (typeof node.type === "function") {
+			return collectText((node.type as (props: any) => React.ReactNode)(node.props));
+		}
+		return collectText(node.props.children);
+	}
+	return "";
 }
 
 describe("Board", () => {
@@ -75,7 +90,7 @@ describe("Board", () => {
 			// Without protection, the trim loop would pop the focused agent.
 			// With protections, the focused agent stays.
 			const s = state({
-				focus: { agentIndex: 0, fieldIndex: 0 },
+				focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 				scrollOffset: 0,
 			});
 			const result = Board({ state: s }) as React.ReactElement;
@@ -96,6 +111,45 @@ describe("Board", () => {
 		}
 	});
 
+	it("passes inline Option column focus and horizontal scroll state to expanded rows", () => {
+		const s = state({
+			focus: { agentIndex: 0, fieldIndex: 1, optionItemIndex: 3 },
+			expandedAgentIndex: 0,
+			optionColumnScrollOffset: 1,
+		});
+
+		const result = Board({ state: s }) as React.ReactElement;
+		const row = renderedChildren(result).find((c: any) => c?.props?.agent?.name === "default") as React.ReactElement;
+
+		expect(row.props.focusedField).toBe(1);
+		expect(row.props.focusedOptionItem).toBe(3);
+		expect(row.props.optionColumnScrollOffset).toBe(1);
+	});
+
+	it("expanded AgentRow renders save status and scrolled Option columns", () => {
+		const result = AgentRow({
+			agent: agent("default"),
+			isFocused: true,
+			isExpanded: true,
+			focusedField: 1,
+			focusedOptionItem: 2,
+			optionColumnScrollOffset: 1,
+			options: {
+				...options,
+				reasoningEfforts: ["low", "medium", "high"],
+				depths: [0, 1, 2],
+			},
+			status: { type: "saved", message: "Saved default.md", timestamp: 1 },
+		}) as React.ReactElement;
+		const children = renderedChildren(result);
+
+		const text = collectText(result);
+		expect(text).toContain("Saved default.md");
+		expect(text).toContain("depth");
+		expect(text).not.toContain("reasoning");
+		expect(children.length).toBeGreaterThan(0);
+	});
+
 	it("never trims the expanded agent when scroll indicators overflow", () => {
 		const origRows = (process.stdout as { rows?: number }).rows;
 		Object.defineProperty(process.stdout, "rows", {
@@ -106,7 +160,7 @@ describe("Board", () => {
 			// 10 rows: expanded agent 0 (10 lines) + more-below indicator (1)
 			// = 11 > 10 — trim would pop the expanded agent without protection.
 			const s = state({
-				focus: { agentIndex: 0, fieldIndex: 0 },
+				focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 				expandedAgentIndex: 0,
 				scrollOffset: 0,
 			});
