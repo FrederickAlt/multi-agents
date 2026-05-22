@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { DiscoveredOptions, AgentConfigState } from "../state/types.js";
 import {
 	discoverTools,
@@ -22,6 +22,9 @@ export function useOptionDiscovery(): {
 	error: string | null;
 	rescan: () => Promise<void>;
 } {
+	const latestRequestId = useRef(0);
+	const isMounted = useRef(true);
+
 	const [options, setOptions] = useState<DiscoveredOptions>({
 		tools: [],
 		extensions: [],
@@ -42,6 +45,10 @@ export function useOptionDiscovery(): {
 	const [error, setError] = useState<string | null>(null);
 
 	const scan = async () => {
+		const requestId = ++latestRequestId.current;
+		const isCurrentRequest = () =>
+			isMounted.current && requestId === latestRequestId.current;
+
 		setLoading(true);
 		setError(null);
 		try {
@@ -82,6 +89,10 @@ export function useOptionDiscovery(): {
 				discovered.promptParts,
 			);
 
+			if (!isCurrentRequest()) {
+				return;
+			}
+
 			setAgents(scanned);
 			setOptions(discovered);
 			setLoading(false);
@@ -94,6 +105,9 @@ export function useOptionDiscovery(): {
 					status,
 					error: modelError,
 				} = await discoverModels(agentDir);
+				if (!isCurrentRequest()) {
+					return;
+				}
 				setOptions((prev) => ({
 					...prev,
 					models: discoveredModels,
@@ -104,6 +118,9 @@ export function useOptionDiscovery(): {
 					},
 				}));
 			} catch (modelErr) {
+				if (!isCurrentRequest()) {
+					return;
+				}
 				setOptions((prev) => ({
 					...prev,
 					modelDiscovery: {
@@ -113,14 +130,21 @@ export function useOptionDiscovery(): {
 				}));
 			}
 		} catch (err) {
+			if (!isCurrentRequest()) {
+				return;
+			}
 			setError((err as Error).message);
 			setLoading(false);
 		}
 	};
 
 	useEffect(() => {
+		isMounted.current = true;
 		scan();
-	}, []);
 
+		return () => {
+			isMounted.current = false;
+		};
+	}, []);
 	return { options, agents, loading, error, rescan: scan };
 }

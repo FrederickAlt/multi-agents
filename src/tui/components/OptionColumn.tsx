@@ -90,13 +90,16 @@ export function OptionColumn({
 	const effectiveMaxVisibleItems = Math.max(1, visibleItemCount - reservedLines);
 	const pinnedStatus = fieldName === "model" ? getModelPinnedStatus(items) : undefined;
 	const scrollableItems = pinnedStatus ? items.slice(1) : items;
+	const scrollableItemCount = pinnedStatus
+		? Math.max(0, visibleItemCount - 1)
+		: visibleItemCount;
 	const focusedInScrollable = pinnedStatus && focusedItemIndex > 0
 		? focusedItemIndex - 1
 		: Math.max(0, focusedItemIndex);
 	const { start, end } = getVisibleRange(
 		scrollableItems.length,
 		focusedInScrollable,
-		effectiveMaxVisibleItems,
+		scrollableItemCount,
 	);
 	const visibleItems = scrollableItems.slice(start, end);
 

@@ -336,7 +336,7 @@ describe("Board", () => {
 		expect((text.match(/filter:/g) ?? []).length).toBe(1);
 	});
 
-	it("pins degraded model status outside the scroll window", () => {
+	it("pins degraded model status while respecting the scroll budget", () => {
 		const result = OptionColumn({
 			fieldName: "model",
 			items: [
@@ -345,8 +345,9 @@ describe("Board", () => {
 				"model-beta",
 				"model-gamma",
 				"model-delta",
+				"model-epsilon",
 			],
-			selectedValue: "model-delta",
+			selectedValue: "model-beta",
 			focusedItemIndex: 4,
 			isFocused: true,
 			maxVisibleItems: 3,
@@ -354,8 +355,8 @@ describe("Board", () => {
 		const text = collectText(result);
 
 		expect(text).toContain(MODEL_OPTION_DEGRADED_STATUS);
+		expect(text).not.toContain("model-gamma");
 		expect(text).toContain("model-delta");
-		expect(text).not.toContain("model-alpha");
 	});
 
 	it("never trims the expanded agent when scroll indicators overflow", () => {
