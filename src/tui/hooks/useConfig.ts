@@ -1,19 +1,25 @@
 import { useReducer, useCallback, useEffect, useRef } from "react";
 import type {
-	ConfigState,
 	AgentConfigState,
 	DiscoveredOptions,
-	StatusInfo,
+	OptionColumnFieldName,
 } from "../state/types.js";
-import { configReducer, createInitialState, applyToggle, computeCheckboxSaveValue } from "../state/reducer.js";
+import {
+	configReducer,
+	createInitialState,
+	applyToggle,
+	computeCheckboxSaveValue,
+	resolveCheckboxSelection,
+} from "../state/reducer.js";
 import { useOptionDiscovery } from "./useOptionDiscovery.js";
 import { writeFieldToFile } from "../file-io/write-agent.js";
 import { modelDisplayNameToCanonicalRef } from "../discovery/options.js";
 import {
 	getFieldName,
+	getOptionColumnAvailableItems,
 	getOptionColumnCurrentValue,
-	getOptionColumnItems,
 	getOptionColumnSaveValue,
+	isCheckboxOptionColumnField,
 	isOptionColumnField,
 } from "../state/option-columns.js";
 
@@ -26,6 +32,34 @@ import {
  * - Overlay commit → selective file write-back
  * - Rescan support
  */
+export function computeInlineCheckboxSaveValue(
+	options: DiscoveredOptions,
+	agent: AgentConfigState,
+	fieldName: string,
+	item: string,
+): string[] | undefined {
+	const availableItems = getOptionColumnAvailableItems(
+		options,
+		fieldName as OptionColumnFieldName,
+		agent.name,
+	);
+	const currentValue = agent.frontmatter?.[fieldName];
+	const rawSelection = Array.isArray(currentValue)
+		? currentValue.map((value) => String(value))
+		: undefined;
+	const { localSelection, wasImplicit } = resolveCheckboxSelection(
+		rawSelection,
+		availableItems,
+	);
+	const { localSelection: newSelection } = applyToggle(
+		localSelection,
+		wasImplicit,
+		availableItems,
+		item,
+	);
+	return computeCheckboxSaveValue(newSelection, availableItems);
+}
+
 export function useConfig() {
 	const [state, dispatch] = useReducer(configReducer, createInitialState());
 	const { options, agents, loading, error, rescan: reScan } = useOptionDiscovery();
@@ -143,10 +177,54 @@ export function useConfig() {
 		dispatch({ type: "SELECT_DROPDOWN", item });
 	}, []);
 
+	const saveFieldValue = useCallback((
+		agent: AgentConfigState,
+		agentIndex: number,
+		fieldName: string,
+		newValue: string[] | string | number | undefined,
+	) => {
+		dispatch({
+			type: "SAVE_COMPLETE",
+			agentIndex,
+			status: { type: "saving", message: "Saving...", timestamp: Date.now() },
+		});
+
+		const result = writeFieldToFile(agent.filePath, fieldName, newValue);
+
+		if (result.success) {
+			if (result.frontmatter) {
+				dispatch({
+					type: "UPDATE_AGENT_FRONTMATTER",
+					agentIndex,
+					frontmatter: result.frontmatter,
+					staleItems: agent.staleItems,
+				});
+			}
+
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex,
+				status: {
+					type: "saved",
+					message: `Saved ${agent.name}.md`,
+					timestamp: Date.now(),
+				},
+			});
+			return;
+		}
+
+		dispatch({
+			type: "SAVE_COMPLETE",
+			agentIndex,
+			status: {
+				type: "error",
+				message: `Save failed: ${result.error}`,
+				timestamp: Date.now(),
+			},
+		});
+	}, []);
+
 	// Immediate save on checkbox toggle: write to file, then update local state.
-	//
-	// TODO: synchronous file I/O on every toggle could cause UI lag on slow
-	// disks.  Consider debouncing or batching writes in the future.
 	//
 	// NOTE: state.overlay / state.agents are captured in the useCallback
 	// closure.  Rapid successive toggles could theoretically see a stale
@@ -231,9 +309,20 @@ export function useConfig() {
 		const fieldName = getFieldName(state.focus.fieldIndex);
 		if (!isOptionColumnField(fieldName)) return;
 
-		const items = getOptionColumnItems(agent, state.options, fieldName);
+		const items = getOptionColumnItems(agent, state.options, fieldName, agent.name);
 		const item = items[state.focus.optionItemIndex];
 		if (item === undefined) return;
+
+		if (isCheckboxOptionColumnField(fieldName)) {
+			const nextValue = computeInlineCheckboxSaveValue(
+				state.options,
+				agent,
+				fieldName,
+				item,
+			);
+			saveFieldValue(agent, state.focus.agentIndex, fieldName, nextValue);
+			return;
+		}
 
 		const currentValue = getOptionColumnCurrentValue(agent, fieldName);
 		const nextValue = getOptionColumnSaveValue(fieldName, item);
@@ -241,45 +330,8 @@ export function useConfig() {
 			return;
 		}
 
-		dispatch({
-			type: "SAVE_COMPLETE",
-			agentIndex: state.focus.agentIndex,
-			status: { type: "saving", message: "Saving...", timestamp: Date.now() },
-		});
-
-		const result = writeFieldToFile(agent.filePath, fieldName, nextValue);
-
-		if (result.success) {
-			if (result.frontmatter) {
-				dispatch({
-					type: "UPDATE_AGENT_FRONTMATTER",
-					agentIndex: state.focus.agentIndex,
-					frontmatter: result.frontmatter,
-					staleItems: agent.staleItems,
-				});
-			}
-
-			dispatch({
-				type: "SAVE_COMPLETE",
-				agentIndex: state.focus.agentIndex,
-				status: {
-					type: "saved",
-					message: `Saved ${agent.name}.md`,
-					timestamp: Date.now(),
-				},
-			});
-		} else {
-			dispatch({
-				type: "SAVE_COMPLETE",
-				agentIndex: state.focus.agentIndex,
-				status: {
-					type: "error",
-					message: `Save failed: ${result.error}`,
-					timestamp: Date.now(),
-				},
-			});
-		}
-	}, [state.agents, state.focus, state.options]);
+		saveFieldValue(agent, state.focus.agentIndex, fieldName, nextValue);
+	}, [state.agents, state.focus, state.options, saveFieldValue]);
 
 	// Commit overlay: save to file (dropdown) or just close (checkbox)
 	const commitOverlay = useCallback(() => {
@@ -375,7 +427,7 @@ export function useConfig() {
 
 		// Close overlay
 		dispatch({ type: "CLOSE_OVERLAY" });
-	}, [state.overlay, state.agents]);
+	}, [state.overlay, state.agents, state.options.models]);
 
 	return {
 		state,

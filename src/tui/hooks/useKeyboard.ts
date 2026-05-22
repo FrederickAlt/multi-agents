@@ -1,4 +1,5 @@
 import { useInput, useApp, useStdin } from "ink";
+import { isOptionColumnField } from "../state/option-columns.js";
 
 export interface KeyboardActions {
 	focusNextAgent: () => void;
@@ -35,7 +36,7 @@ export interface KeyboardState {
 }
 
 export function isInlineEditableField(fieldName: string): boolean {
-	return fieldName === "reasoning_effort" || fieldName === "depth";
+	return isOptionColumnField(fieldName);
 }
 
 export function handleExpandedEnterOrSpace(

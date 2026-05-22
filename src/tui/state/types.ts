@@ -90,7 +90,15 @@ export const FIELDS_ORDER = [
 
 export type FieldName = (typeof FIELDS_ORDER)[number];
 
-export const OPTION_COLUMN_FIELDS = ["reasoning_effort", "depth"] as const;
+export const OPTION_COLUMN_FIELDS = [
+	"tools",
+	"extensions",
+	"reasoning_effort",
+	"depth",
+	"can_spawn",
+	"skills",
+	"prompt_parts",
+] as const;
 export type OptionColumnFieldName = (typeof OPTION_COLUMN_FIELDS)[number];
 
 export const OPTION_COLUMN_WIDTH = 22;

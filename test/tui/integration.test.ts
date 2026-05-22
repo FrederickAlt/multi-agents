@@ -301,7 +301,7 @@ describe("Integration: inline write-only and non-inline overlay flows", () => {
 
 		expect(state.expandedAgentIndex).toBe(0);
 		expect(state.focus.fieldIndex).toBe(3);
-		expect(state.focus.optionItemIndex).toBe(2);
+		expect(state.focus.optionItemIndex).toBe(0);
 
 		const updated = readAgent(filePath);
 		expect(updated.frontmatter?.reasoning_effort).toBe("high");

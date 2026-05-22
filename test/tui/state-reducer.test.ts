@@ -280,6 +280,14 @@ describe("computeCheckboxSaveValue", () => {
 		expect(result).toEqual(["a", "c"]);
 	});
 
+	it("does not return implicit-all when stale/extra values are present", () => {
+		const result = computeCheckboxSaveValue(
+			["read", "deleted_tool"],
+			["read", "bash", "write"],
+		);
+		expect(result).toEqual(["read", "deleted_tool"]);
+	});
+
 	it("returns undefined when all items are selected (revert to implicit)", () => {
 		const result = computeCheckboxSaveValue(["a", "b", "c"], ["a", "b", "c"]);
 		expect(result).toBeUndefined();
@@ -333,6 +341,39 @@ describe("tri-state toggle flow", () => {
 			toggled.overlay!.availableItems,
 		);
 		expect(saveValue).toEqual(["bash", "write"]);
+	});
+
+	it("preserves stale checkbox entries as explicit after toggling", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({
+					frontmatter: {
+						description: "test",
+						tools: ["read", "deleted_tool"],
+					},
+				}),
+			],
+			options: makeOptions(),
+		};
+		const withOverlay = configReducer(state, {
+			type: "OPEN_OVERLAY",
+			agentIndex: 0,
+			fieldName: "tools",
+		});
+		expect(withOverlay.overlay!.localSelection).toEqual(["read", "deleted_tool"]);
+
+		const toggled = configReducer(withOverlay, {
+			type: "TOGGLE_CHECKBOX",
+			item: "bash",
+		});
+		expect(toggled.overlay!.localSelection).toEqual(["read", "deleted_tool", "bash"]);
+
+		const saveValue = computeCheckboxSaveValue(
+			toggled.overlay!.localSelection,
+			toggled.overlay!.availableItems,
+		);
+		expect(saveValue).toEqual(["read", "deleted_tool", "bash"]);
 	});
 
 	it("toggling the last checked item off writes empty array", () => {
@@ -664,6 +705,49 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(1);
 	});
 
+	it("FOCUS_OPTION_ITEM works for checkbox fields", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { tools: ["read", "bash"] } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 1 },
+		};
+
+		let next = configReducer(state, { type: "FOCUS_OPTION_ITEM", direction: "next" });
+		expect(next.focus.optionItemIndex).toBe(2);
+
+		next = configReducer(next, { type: "FOCUS_OPTION_ITEM", direction: "prev" });
+		expect(next.focus.optionItemIndex).toBe(1);
+	});
+
+	it("excludes current agent from inline can_spawn options", () => {
+		const options = makeOptions({
+			canSpawn: ["peer", "self-agent", "advisor"],
+		});
+		const agent = makeAgent({ name: "self-agent", frontmatter: {} });
+
+		expect(getOptionColumnItems(agent, options, "can_spawn", "self-agent")).toEqual([
+			"peer",
+			"advisor",
+		]);
+	});
+
+	it("focus movement on can_spawn ignores self", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "self-agent", frontmatter: {} })],
+			options: makeOptions({
+				canSpawn: ["peer", "self-agent", "advisor"],
+			}),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 0 },
+		};
+
+		const next = configReducer(state, { type: "FOCUS_OPTION_ITEM", direction: "next" });
+		expect(next.focus.optionItemIndex).toBe(1);
+	});
+
 	it("horizontally scrolls option columns when terminal width only fits one column", () => {
 		setTerminalColumns(24);
 		const state: ConfigState = {
@@ -677,7 +761,7 @@ describe("inline Option columns", () => {
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
 
 		expect(next.focus.fieldIndex).toBe(4);
-		expect(next.optionColumnScrollOffset).toBe(1);
+		expect(next.optionColumnScrollOffset).toBe(3);
 	});
 
 	it("realigns focused item after a stale custom value is replaced", () => {
@@ -696,21 +780,22 @@ describe("inline Option columns", () => {
 			staleItems: {},
 		});
 
-		expect(next.focus.optionItemIndex).toBe(2);
+		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
-	it("keeps stale custom single-select values visible without changing frontmatter", () => {
+	it("keeps stale custom checkbox values visible without changing frontmatter", () => {
 		const agent = makeAgent({
-			frontmatter: { reasoning_effort: "ultra", depth: 9 },
+			frontmatter: {
+				tools: ["read", "deleted_tool"],
+			},
 		});
 		const options = makeOptions();
 
-		expect(getOptionColumnItems(agent, options, "reasoning_effort")).toEqual([
-			"ultra",
-			"low",
-			"medium",
-			"high",
-			"maximum",
+		expect(getOptionColumnItems(agent, options, "tools")).toEqual([
+			"read",
+			"deleted_tool",
+			"bash",
+			"write",
 		]);
 
 		const state: ConfigState = {
@@ -719,7 +804,27 @@ describe("inline Option columns", () => {
 			options,
 		};
 		const next = configReducer(state, { type: "INIT_COMPLETE", agents: [agent], options });
-		expect(next.agents[0].frontmatter).toEqual({ reasoning_effort: "ultra", depth: 9 });
+		expect(next.agents[0].frontmatter).toEqual({ tools: ["read", "deleted_tool"] });
+	});
+
+	it("keeps expanded row state after updating checkbox frontmatter", () => {
+		const options = makeOptions();
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { tools: ["read", "bash"] } })],
+			options,
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 2 },
+		};
+		const next = configReducer(state, {
+			type: "UPDATE_AGENT_FRONTMATTER",
+			agentIndex: 0,
+			frontmatter: { tools: ["read", "bash"] },
+			staleItems: {},
+		});
+		expect(next.expandedAgentIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(0);
+		expect(next.focus.optionItemIndex).toBe(2);
 	});
 });
 

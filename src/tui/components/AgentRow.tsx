@@ -5,9 +5,10 @@ import { OPTION_COLUMN_FIELDS } from "../state/types.js";
 import { getMaxVisibleOptionColumns } from "../layout.js";
 import {
 	getFieldName,
+	isCheckboxOptionColumnField,
 	isOptionColumnField,
 	getOptionColumnItems,
-	getOptionColumnSelectedValue,
+	getOptionColumnSelectedValues,
 } from "../state/option-columns.js";
 import { OptionColumn } from "./OptionColumn.js";
 import { StatusLine } from "./StatusLine.js";
@@ -123,14 +124,23 @@ export function AgentRow({
 				<Box flexDirection="row" height={6} overflow="hidden">
 					{hasMoreLeft && <Text dimColor>◀ </Text>}
 					{visibleFields.map((fieldName) => {
+						const isInlineCheckbox = isCheckboxOptionColumnField(fieldName);
+						const selectedValues = getOptionColumnSelectedValues(
+							agent,
+							options,
+							fieldName,
+							agent.name,
+						);
 						return (
 							<OptionColumn
 								key={fieldName}
 								fieldName={fieldName}
-								items={getOptionColumnItems(agent, options, fieldName)}
-								selectedValue={getOptionColumnSelectedValue(agent, fieldName)}
+								items={getOptionColumnItems(agent, options, fieldName, agent.name)}
+								selectedValues={selectedValues}
 								focusedItemIndex={focusedOptionItem}
 								isFocused={isFocused && getFieldName(focusedField) === fieldName}
+								isCheckbox={isInlineCheckbox}
+								staleItems={agent.staleItems[fieldName] ?? []}
 								maxVisibleItems={MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW}
 							/>
 						);

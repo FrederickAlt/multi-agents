@@ -5,13 +5,20 @@ import { OPTION_COLUMN_WIDTH } from "../state/types.js";
 interface OptionColumnProps {
 	fieldName: string;
 	items: string[];
-	selectedValue: string;
+	selectedValues: string[];
 	focusedItemIndex: number;
 	isFocused: boolean;
+	isCheckbox?: boolean;
+	staleItems?: string[];
 	maxVisibleItems?: number;
 }
 
 const FIELD_LABELS: Record<string, string> = {
+	tools: "tools",
+	extensions: "extensions",
+	can_spawn: "can_spawn",
+	skills: "skills",
+	prompt_parts: "prompt_parts",
 	reasoning_effort: "reasoning",
 	depth: "depth",
 };
@@ -45,12 +52,16 @@ function getVisibleRange(
 export function OptionColumn({
 	fieldName,
 	items,
-	selectedValue,
+	selectedValues,
 	focusedItemIndex,
 	isFocused,
+	isCheckbox = false,
+	staleItems = [],
 	maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
 }: OptionColumnProps) {
 	const label = FIELD_LABELS[fieldName] ?? fieldName;
+	const selectedSet = new Set(selectedValues);
+	const staleSet = new Set(staleItems);
 	const visibleItemCount = Math.max(1, maxVisibleItems);
 	const { start, end } = getVisibleRange(
 		items.length,
@@ -71,15 +82,18 @@ export function OptionColumn({
 			<Text bold color={isFocused ? "cyan" : undefined}>{label}</Text>
 			{visibleItems.map((item, index) => {
 				const absoluteIndex = start + index;
-				const selected = item === selectedValue;
-				const focused = isFocused && absoluteIndex === focusedItemIndex;
+				const isFocusedItem = isFocused && absoluteIndex === focusedItemIndex;
+				const isSelected = selectedSet.has(item);
+				const isMissing = staleSet.has(item);
+				const mark = isCheckbox ? (isSelected ? "☑" : "☐") : (isSelected ? "●" : "○");
 				return (
 					<Text
 						key={`${fieldName}-${item}`}
-						color={focused ? "cyan" : selected ? "green" : undefined}
-						bold={focused}
+						color={isFocusedItem ? "cyan" : isSelected ? "green" : undefined}
+						bold={isFocusedItem}
 					>
-						{focused ? ">" : " "} {selected ? "●" : "○"} {item}
+						{isFocusedItem ? ">" : " "} {mark} {item}
+						{isMissing ? " (missing)" : ""}
 					</Text>
 				);
 			})}

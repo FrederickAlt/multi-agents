@@ -77,7 +77,12 @@ export function computeCheckboxSaveValue(
 	localSelection: string[],
 	availableItems: string[],
 ): string[] | undefined {
-	if (localSelection.length === availableItems.length) {
+	const selectedSet = new Set(localSelection.map(String));
+	const availableSet = new Set(availableItems.map(String));
+	if (
+		selectedSet.size === availableSet.size
+		&& [...selectedSet].every((item) => availableSet.has(item))
+	) {
 		return undefined;
 	}
 	return [...localSelection];
@@ -128,13 +133,19 @@ function getFocusedOptionItemIndex(
 	agent: AgentConfigState | undefined,
 	options: DiscoveredOptions,
 	fieldIndex: number,
+	focusedItemValue?: string,
 ): number {
 	if (!agent) return 0;
 	const fieldName = getFieldName(fieldIndex);
 	if (!isOptionColumnField(fieldName)) return 0;
-	return getOptionColumnItemIndex(agent, options, fieldName);
+	return getOptionColumnItemIndex(
+		agent,
+		options,
+		fieldName,
+		focusedItemValue,
+		agent.name,
+	);
 }
-
 function syncOptionColumnScrollOffset(
 	scrollOffset: number,
 	fieldIndex: number,
@@ -376,6 +387,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		}
 
 		case "UPDATE_AGENT_FRONTMATTER": {
+			const previousAgent = state.agents[action.agentIndex];
 			const agents = [...state.agents];
 			const agent = { ...agents[action.agentIndex] };
 			agent.frontmatter = action.frontmatter;
@@ -387,6 +399,10 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				state.focus.agentIndex === action.agentIndex
 			) {
 				const fieldName = getFieldName(state.focus.fieldIndex);
+				const previousItems = previousAgent && isOptionColumnField(fieldName)
+					? getOptionColumnItems(previousAgent, state.options, fieldName, previousAgent.name)
+					: [];
+				const focusedItem = previousItems[state.focus.optionItemIndex];
 				return {
 					...state,
 					agents,
@@ -396,6 +412,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 							agent,
 							state.options,
 							state.focus.fieldIndex,
+							focusedItem,
 						),
 					},
 				};

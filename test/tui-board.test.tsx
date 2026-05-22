@@ -132,7 +132,7 @@ describe("Board", () => {
 			agent: agent("default"),
 			isFocused: true,
 			isExpanded: true,
-			focusedField: 1,
+			focusedField: 3,
 			focusedOptionItem: 2,
 			optionColumnScrollOffset: 1,
 			options: {
@@ -146,8 +146,8 @@ describe("Board", () => {
 
 		const text = collectText(result);
 		expect(text).toContain("Saved default.md");
+		expect(text).toContain("reasoning");
 		expect(text).toContain("depth");
-		expect(text).not.toContain("reasoning");
 		expect(children.length).toBeGreaterThan(0);
 	});
 
@@ -207,6 +207,35 @@ describe("Board", () => {
 		expect(text).toContain("Press Enter/Space to edit");
 	});
 
+	it("marks stale inline checkbox entries as missing", () => {
+		const staleAgent = {
+			...agent("default"),
+			frontmatter: {
+				tools: ["read", "deleted_tool"],
+			},
+			staleItems: {
+				tools: ["deleted_tool"],
+			},
+		};
+		const result = AgentRow({
+			agent: staleAgent,
+			isFocused: true,
+			isExpanded: true,
+			focusedField: 0,
+			focusedOptionItem: 1,
+			optionColumnScrollOffset: 0,
+			options: {
+				...options,
+				tools: ["read", "bash", "write"],
+			},
+			status: undefined,
+		}) as React.ReactElement;
+
+		const text = collectText(result);
+		expect(text).toContain("deleted_tool");
+		expect(text).toContain("(missing)");
+	});
+
 	it("keeps the focused last option item visible in expanded AgentRow rendering", () => {
 		const s = state({
 			focus: {
@@ -215,6 +244,7 @@ describe("Board", () => {
 				optionItemIndex: 10,
 			},
 			expandedAgentIndex: 0,
+			optionColumnScrollOffset: 3,
 			options: {
 				...options,
 				reasoningEfforts: ["low", "medium", "high", "maximum"],
@@ -236,7 +266,7 @@ describe("Board", () => {
 		const result = OptionColumn({
 			fieldName: "depth",
 			items: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
-			selectedValue: "0",
+			selectedValues: ["0"],
 			focusedItemIndex: 8,
 			isFocused: true,
 			maxVisibleItems: 5,
