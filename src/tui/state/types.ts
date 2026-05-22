@@ -67,9 +67,10 @@ export interface ConfigState {
 	agents: AgentConfigState[];
 	options: DiscoveredOptions;
 	focus: FocusState;
+	expandedAgentIndex: number | null; // null = compact mode; index = which agent is expanded
 	overlay: OverlayState | null;
 	statuses: Map<string, StatusInfo>; // keyed by filePath
-	scrollOffset: number;
+	scrollOffset: number; // vertical scroll (index of first visible agent)
 	globalError: string | null;
 }
 
@@ -86,12 +87,6 @@ export const FIELDS_ORDER = [
 ] as const;
 
 export type FieldName = (typeof FIELDS_ORDER)[number];
-
-/** Width of each agent column in terminal cells (30 content + 2 borders). */
-export const COLUMN_WIDTH = 32;
-
-/** Reserved left gutter for horizontal scroll indication. */
-export const SCROLL_GUTTER_WIDTH = 3;
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -128,4 +123,12 @@ export type ConfigAction =
 			agents: AgentConfigState[];
 			options: DiscoveredOptions;
 	  }
-	| { type: "SCROLL"; direction: "left" | "right" };
+	| { type: "SCROLL"; direction: "up" | "down" }
+	| { type: "EXPAND" }
+	| { type: "COLLAPSE" };
+
+/** Height of a compact agent row in terminal lines. */
+export const COMPACT_ROW_HEIGHT = 3;
+
+/** Height of an expanded agent row in terminal lines. */
+export const EXPANDED_ROW_HEIGHT = 10;

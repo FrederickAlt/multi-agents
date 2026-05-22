@@ -25,6 +25,8 @@ export function App() {
 		focusNextField,
 		focusPrevField,
 		focusAgentAt,
+		expand,
+		collapse,
 		openOverlay,
 		closeOverlay,
 		instantSaveCheckbox,
@@ -53,6 +55,7 @@ export function App() {
 
 		return {
 			isOverlayOpen: overlay !== null,
+			isExpanded: state.expandedAgentIndex !== null,
 			overlayType: overlay?.type ?? null,
 			overlayItems: overlay?.availableItems ?? [],
 			overlayFocusedIndex: overlayFocusIndex,
@@ -61,7 +64,7 @@ export function App() {
 			fieldName,
 			scrollOffset: state.scrollOffset,
 		};
-	}, [overlay, overlayFocusIndex, state.focus, state.scrollOffset]);
+	}, [overlay, overlayFocusIndex, state.focus, state.scrollOffset, state.expandedAgentIndex]);
 
 	// Wrap overlay navigation
 	const handleOverlayUp = useCallback(() => {
@@ -98,6 +101,8 @@ export function App() {
 		focusNextField,
 		focusPrevField,
 		focusAgentAt,
+		expand,
+		collapse,
 		openOverlay,
 		closeOverlay,
 		toggleCheckbox: instantSaveCheckbox,

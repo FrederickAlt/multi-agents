@@ -12,6 +12,8 @@ export interface KeyboardActions {
 	selectDropdown: (item: string) => void;
 	commitOverlay: () => void;
 	rescan: () => void;
+	expand: () => void;
+	collapse: () => void;
 	overlayFocusUp: () => void;
 	overlayFocusDown: () => void;
 	overlayActivate: () => void;
@@ -19,6 +21,7 @@ export interface KeyboardActions {
 
 export interface KeyboardState {
 	isOverlayOpen: boolean;
+	isExpanded: boolean;
 	overlayType: "checkbox" | "dropdown" | null;
 	overlayItems: string[];
 	overlayFocusedIndex: number;
@@ -55,7 +58,7 @@ export function useKeyboard(
 		const state = getState();
 
 		if (state.isOverlayOpen) {
-			// Overlay keyboard handling
+			// Overlay keyboard handling (unchanged from horizontal layout)
 			if (key.escape) {
 				actions.closeOverlay();
 				return;
@@ -84,29 +87,55 @@ export function useKeyboard(
 				return;
 			}
 		} else {
-			// Main board keyboard handling
-			if (key.leftArrow || input === "h") {
-				actions.focusPrevAgent();
-				return;
-			}
+			// Main board keyboard handling (vertical layout)
+			if (state.isExpanded) {
+				// Expanded mode: Up/Down navigate fields, Escape collapses
+				if (key.escape) {
+					actions.collapse();
+					return;
+				}
 
-			if (key.rightArrow || input === "l") {
-				actions.focusNextAgent();
-				return;
-			}
+				if (key.upArrow || input === "k") {
+					actions.focusPrevField();
+					return;
+				}
 
-			if (key.upArrow || input === "k") {
-				actions.focusPrevField();
-				return;
-			}
+				if (key.downArrow || input === "j") {
+					actions.focusNextField();
+					return;
+				}
 
-			if (key.downArrow || input === "j") {
-				actions.focusNextField();
-				return;
-			}
+				if (key.return) {
+					actions.openOverlay(state.agentIndex, state.fieldName);
+					return;
+				}
 
-			if (key.return) {
-				actions.openOverlay(state.agentIndex, state.fieldName);
+				if (input === " ") {
+					actions.openOverlay(state.agentIndex, state.fieldName);
+					return;
+				}
+
+				// Left/Right are no-ops in expanded mode
+				return;
+			} else {
+				// Compact mode: Up/Down navigate agents, Enter/Space expands,
+				// Left/Right are no-ops
+				if (key.upArrow || input === "k") {
+					actions.focusPrevAgent();
+					return;
+				}
+
+				if (key.downArrow || input === "j") {
+					actions.focusNextAgent();
+					return;
+				}
+
+				if (key.return || input === " ") {
+					actions.expand();
+					return;
+				}
+
+				// Left/Right are no-ops in compact mode
 				return;
 			}
 		}

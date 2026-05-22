@@ -96,6 +96,14 @@ export function useConfig() {
 		dispatch({ type: "FOCUS_FIELD", direction: "prev" });
 	}, []);
 
+	const expand = useCallback(() => {
+		dispatch({ type: "EXPAND" });
+	}, []);
+
+	const collapse = useCallback(() => {
+		dispatch({ type: "COLLAPSE" });
+	}, []);
+
 	const focusAgentAt = useCallback((index: number) => {
 		dispatch({ type: "FOCUS_AGENT_AT", agentIndex: index });
 	}, []);
@@ -305,6 +313,8 @@ export function useConfig() {
 		focusNextField,
 		focusPrevField,
 		focusAgentAt,
+		expand,
+		collapse,
 		openOverlay,
 		closeOverlay,
 		instantSaveCheckbox,

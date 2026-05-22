@@ -1,11 +1,10 @@
 import { useEffect, useRef } from "react";
 import { useStdin } from "ink";
 import type { KeyboardActions, KeyboardState } from "./useKeyboard.js";
-import { FIELDS_ORDER, COLUMN_WIDTH, SCROLL_GUTTER_WIDTH } from "../state/types.js";
+import { FIELDS_ORDER, COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "../state/types.js";
 
-const HEADER_END_ROW = 4; // name(1) + desc(1) + spacer(1) + border(1) = 4
-const OVERLAY_TOP = 4;
-const OVERLAY_LEFT = 10;
+/** First row index where content starts in expanded mode (after border + header + spacer). */
+const EXPANDED_FIELD_START_ROW = 4;
 
 /** SGR mouse sequence regex: \x1b[<Cb;Cx;CyM (press) or m (release) */
 const MOUSE_SGR_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/;
@@ -63,7 +62,7 @@ export function useMouse(
 			if (state.isOverlayOpen) {
 				handleOverlayClick(col, row, state, act);
 			} else {
-				handleBoardClick(col, row, state, act);
+				handleBoardClick(row, state, act);
 			}
 		};
 
@@ -75,47 +74,47 @@ export function useMouse(
 }
 
 function handleBoardClick(
-	col: number,
 	row: number,
 	state: KeyboardState,
 	actions: KeyboardActions,
 ): void {
-	// Determine which column was clicked.
-	// Column 0 starts after the reserved scroll gutter.
-	if (col <= SCROLL_GUTTER_WIDTH) return;
-	const columnIdx = Math.floor((col - SCROLL_GUTTER_WIDTH - 1) / COLUMN_WIDTH);
-	if (columnIdx < 0) return;
+	// Rows are counted from top of board area.
+	// We don't know the exact scroll position from mouse context alone,
+	// so we focus the row that was clicked (assuming no scrolling,
+	// or minimal). The reducer will clamp.
+	// Row 1 is the first border line of the first visible agent.
+	// For compact rows (3 lines), agent 0 spans rows 1-3, agent 1 spans 4-6, etc.
+	// For expanded rows (10 lines), the expanded agent spans 10 rows.
 
-	// Compute global agent index (visible column + scroll offset).
-	const globalAgentIdx = state.scrollOffset + columnIdx;
+	// If clicking in an expanded agent's field area, try to open that field.
+	// Otherwise, just focus the agent the row belongs to.
 
-	// Click within the header area (name, description, spacer + border)?
-	const isHeader = row <= HEADER_END_ROW;
+	// Approximate: no scroll indicators at top.
+	let rowCursor = 1; // first border line
 
-	// Focus the clicked agent directly (single dispatch, no loop).
-	actions.focusAgentAt(globalAgentIdx);
+	// Walk through agents, computing which one was clicked
+	// We need to figure out which agent was clicked based on row position.
+	// This is approximate since we don't track the exact scroll/more-above state.
+	for (let i = state.scrollOffset; ; i++) {
+		const isExpanded = state.isExpanded && i === state.agentIndex;
+		const height = isExpanded ? EXPANDED_ROW_HEIGHT : COMPACT_ROW_HEIGHT;
+		if (row >= rowCursor && row < rowCursor + height) {
+			// Found the agent
+			actions.focusAgentAt(i);
 
-	if (isHeader) return;
-
-	// Field click: determine field index from row position
-	// After the border (row 1) and header rows (2-4), fields start at row 5
-	const fieldIdx = row - HEADER_END_ROW - 1;
-	if (fieldIdx < 0 || fieldIdx >= FIELDS_ORDER.length) return;
-
-	const fieldName = FIELDS_ORDER[fieldIdx];
-
-	// Focus the field via relative moves
-	const fieldDelta = fieldIdx - state.fieldIndex;
-	for (let i = 0; i < Math.abs(fieldDelta); i++) {
-		if (fieldDelta > 0) {
-			actions.focusNextField();
-		} else {
-			actions.focusPrevField();
+			if (isExpanded) {
+				// Check if click is on a field row
+				const fieldOffset = row - rowCursor - EXPANDED_FIELD_START_ROW;
+				if (fieldOffset >= 0 && fieldOffset < FIELDS_ORDER.length) {
+					const fieldName = FIELDS_ORDER[fieldOffset];
+					actions.openOverlay(i, fieldName);
+				}
+			}
+			return;
 		}
+		rowCursor += height;
+		if (rowCursor > (process.stdout.rows ?? 24)) break;
 	}
-
-	// Open overlay for the clicked agent/field using global index.
-	actions.openOverlay(globalAgentIdx, fieldName);
 }
 
 function handleOverlayClick(
@@ -124,6 +123,9 @@ function handleOverlayClick(
 	state: KeyboardState,
 	actions: KeyboardActions,
 ): void {
+	const OVERLAY_TOP = 4;
+	const OVERLAY_LEFT = 10;
+
 	// Check if click is within the overlay bounding box
 	if (col < OVERLAY_LEFT || col > OVERLAY_LEFT + 40) return;
 	if (row < OVERLAY_TOP + 1 || row > OVERLAY_TOP + 20) return;

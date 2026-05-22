@@ -5,7 +5,7 @@ export function HelpFooter() {
 	return (
 		<Box flexDirection="row" justifyContent="center" paddingX={1}>
 			<Text dimColor>
-				←→ nav | ↑↓ field | Enter edit | Esc close | Space toggle | r rescan | q quit | Click: select
+				↑↓ nav agents | Enter/Space expand | Esc collapse | r rescan | q quit
 			</Text>
 		</Box>
 	);
