@@ -9,7 +9,8 @@ import {
 interface OptionColumnProps {
 	fieldName: string;
 	items: string[];
-	selectedValues: string[];
+	selectedValues?: string[];
+	selectedValue?: string;
 	focusedItemIndex: number;
 	isFocused: boolean;
 	isCheckbox?: boolean;
@@ -67,6 +68,7 @@ export function OptionColumn({
 	fieldName,
 	items,
 	selectedValues,
+	selectedValue: selectedValueProp,
 	focusedItemIndex,
 	isFocused,
 	isCheckbox = false,
@@ -74,8 +76,10 @@ export function OptionColumn({
 	maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
 }: OptionColumnProps) {
 	const label = FIELD_LABELS[fieldName] ?? fieldName;
-	const selectedSet = new Set(selectedValues);
-	const selectedValue = selectedValues[0] ?? "";
+	const effectiveSelectedValues = selectedValues ??
+		(selectedValueProp !== undefined ? [selectedValueProp] : []);
+	const selectedSet = new Set(effectiveSelectedValues);
+	const selectedValue = effectiveSelectedValues[0] ?? "";
 	const staleSet = new Set(staleItems);
 	const visibleItemCount = Math.max(1, maxVisibleItems);
 	const pinnedStatus = fieldName === "model" ? getModelPinnedStatus(items) : undefined;

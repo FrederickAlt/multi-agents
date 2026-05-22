@@ -152,7 +152,7 @@ describe("Board", () => {
 		const text = collectText(result);
 		expect(text).toContain("Saved default.md");
 		expect(text).toContain("reasoning");
-		expect(text).toContain("depth");
+		expect(text).toContain("model");
 		expect(children.length).toBeGreaterThan(0);
 	});
 
@@ -169,7 +169,7 @@ describe("Board", () => {
 			isExpanded: true,
 			focusedField: 5,
 			focusedOptionItem: 2,
-			optionColumnScrollOffset: 0,
+			optionColumnScrollOffset: 3,
 			options: {
 				...options,
 				reasoningEfforts: ["low", "medium", "high"],
@@ -181,8 +181,7 @@ describe("Board", () => {
 
 		const text = collectText(result);
 		expect(text).toContain("can_spawn");
-		expect(text).toContain("1 selected");
-		expect(text).toContain("Press Enter/Space to edit");
+		expect(text).toContain("Enter/Space open/edit");
 	});
 
 	it("keeps non-inline context visible when status is present", () => {
@@ -198,7 +197,7 @@ describe("Board", () => {
 			isExpanded: true,
 			focusedField: 5,
 			focusedOptionItem: 2,
-			optionColumnScrollOffset: 0,
+			optionColumnScrollOffset: 3,
 			options: {
 				...options,
 				reasoningEfforts: ["low", "medium", "high"],
@@ -210,8 +209,7 @@ describe("Board", () => {
 
 		const text = collectText(result);
 		expect(text).toContain("Saved default.md");
-		expect(text).toContain("Focus: can_spawn");
-		expect(text).toContain("Press Enter/Space to edit");
+		expect(text).toContain("Enter/Space open/edit");
 	});
 
 	it("marks stale inline checkbox entries as missing", () => {

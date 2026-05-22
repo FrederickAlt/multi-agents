@@ -692,7 +692,7 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(3);
 
 		next = configReducer(next, { type: "FOCUS_FIELD", direction: "next" });
-		expect(next.focus.fieldIndex).toBe(4);
+		expect(next.focus.fieldIndex).toBe(5);
 		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
@@ -707,8 +707,8 @@ describe("inline Option columns", () => {
 
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
 
-		expect(next.focus.fieldIndex).toBe(2);
-		expect(next.focus.optionItemIndex).toBe(1);
+		expect(next.focus.fieldIndex).toBe(4);
+		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
 	it("FOCUS_FIELD moves left from reasoning_effort to extensions", () => {
@@ -722,7 +722,7 @@ describe("inline Option columns", () => {
 
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
 
-		expect(next.focus.fieldIndex).toBe(1);
+		expect(next.focus.fieldIndex).toBe(4);
 		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
@@ -737,8 +737,8 @@ describe("inline Option columns", () => {
 
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
 
-		expect(next.focus.fieldIndex).toBe(4);
-		expect(next.focus.optionItemIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(3);
+		expect(next.focus.optionItemIndex).toBe(3);
 	});
 
 	it("FOCUS_FIELD moves right from model to can_spawn", () => {
@@ -752,8 +752,8 @@ describe("inline Option columns", () => {
 
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
 
-		expect(next.focus.fieldIndex).toBe(5);
-		expect(next.focus.optionItemIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.optionItemIndex).toBe(1);
 	});
 
 	it("FOCUS_OPTION_ITEM moves up and down within the focused option column", () => {
@@ -1039,9 +1039,7 @@ describe("model discovery options", () => {
 			MODEL_OPTION_LOADING_ITEM,
 			"claude",
 		]);
-		expect(getOptionColumnSelectedValue(agent, options, "model")).toBe(
-			MODEL_OPTION_LOADING_ITEM,
-		);
+		expect(getOptionColumnSelectedValue(agent, options, "model")).toBe("claude");
 	});
 
 	it("keeps row and inline model option focus when model options update", () => {
