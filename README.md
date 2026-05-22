@@ -55,6 +55,11 @@ Depth controls how many levels of sub-agent spawning are allowed from the Root a
 
 A sub-agent with `depth: 0` cannot call Task at all, including `resume`. New Task calls and resume calls both pass through `DepthPolicy` checks.
 
+## Task Runtime Limits
+
+Task executions are bounded by a default runtime timeout of **30 minutes**.
+If the limit is exceeded, Task fails with `execution_timeout` and the sub-agent transcript is retained for `resume`.
+
 `can_spawn` examples:
 - field absent → any agent name may be spawned if depth allows it
 - `can_spawn: []` → no agent names may be spawned

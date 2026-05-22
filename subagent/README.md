@@ -27,6 +27,8 @@ Pi extension for delegating work to persistent configured sub-agents.
 
 `resume` is optional. Omit it to start a new persistent sub-agent. Use the returned ID to continue the same transcript later.
 
+Each `Task` execution has a production runtime timeout of **30 minutes**. If an execution exceeds this limit, it fails with a timeout error (`execution_timeout`) and the sub-agent is cleaned up so the same `resume` ID stays valid.
+
 Parallel work does not need a special mode. Pi can execute sibling tool calls concurrently when the model emits multiple `Task` calls in one turn. Sequential chains happen naturally by calling `Task`, reading the result, then calling `Task` again.
 
 ## Agent Definitions

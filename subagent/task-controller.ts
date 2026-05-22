@@ -31,6 +31,21 @@ import type {
 	SessionSetupContext,
 } from "./session-manager.js";
 
+/**
+ * Default maximum runtime for a Task sub-agent execution, in minutes.
+ *
+ * Keep this as a production default-only value unless a use-case clearly
+ * requires configurability; the Task tool remains intentionally simple.
+ */
+export const DEFAULT_TASK_RUNTIME_TIMEOUT_MINUTES = 30;
+
+/**
+ * Default Task sub-agent runtime timeout in milliseconds.
+ */
+export const DEFAULT_TASK_RUNTIME_TIMEOUT_MS = DEFAULT_TASK_RUNTIME_TIMEOUT_MINUTES * 60 * 1000;
+
+export const TASK_RUNTIME_TIMEOUT_ERROR_CODE = "execution_timeout";
+
 // ---------------------------------------------------------------------------
 // Adapter interfaces (injectable, testable without concrete classes)
 // ---------------------------------------------------------------------------
@@ -420,15 +435,68 @@ export class TaskController {
 					});
 				};
 
+				let runtimeTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+				const clearRuntimeTimeout = () => {
+					if (runtimeTimeoutHandle !== undefined) {
+						clearTimeout(runtimeTimeoutHandle);
+						runtimeTimeoutHandle = undefined;
+					}
+				};
 				const abort = () => {
+					clearRuntimeTimeout();
 					void session?.abort();
 				};
-				if (context.signal?.aborted) abort();
-				else context.signal?.addEventListener("abort", abort, { once: true });
+
+				const promptResult = session.prompt(params.prompt).then(
+					() => ({ type: "completed" as const }),
+					(error: unknown) => ({ type: "failed" as const, error }),
+				);
+				const timeoutResult = context.signal?.aborted
+					? undefined
+					: new Promise<{ type: "timeout" }>((resolve) => {
+						runtimeTimeoutHandle = setTimeout(() => {
+							abort();
+							resolve({ type: "timeout" });
+						}, DEFAULT_TASK_RUNTIME_TIMEOUT_MS);
+					});
+
+				if (context.signal?.aborted) {
+					abort();
+				} else {
+					context.signal?.addEventListener("abort", abort, { once: true });
+				}
 
 				try {
 					emit(`${record!.displayName} (${record!.id}) running...`);
-					await session.prompt(params.prompt);
+					const promptOrTimeout = await (context.signal?.aborted
+						? promptResult
+						: Promise.race([promptResult, timeoutResult!]));
+					clearRuntimeTimeout();
+					if (promptOrTimeout.type === "timeout") {
+						const message =
+							`Task execution exceeded the ${DEFAULT_TASK_RUNTIME_TIMEOUT_MINUTES}-minute runtime limit. Use resume: "${record!.id}" to continue this agent.`;
+						const warningText =
+							warnings.length > 0
+								? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
+								: "";
+						return {
+							content: [{ type: "text", text: `${record!.displayName} (${record!.id}) timed out. ${message}${warningText}` }],
+							details: {
+								id: record!.id,
+								displayName: record!.displayName,
+								agentType: record!.agentType,
+								description: params.description,
+								resumed: Boolean(params.resume),
+								sessionFile: record!.sessionFile,
+								warnings,
+								error: TASK_RUNTIME_TIMEOUT_ERROR_CODE,
+							},
+						};
+					}
+					if (promptOrTimeout.type === "failed") {
+						throw promptOrTimeout.error;
+					}
+
 					const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
 					const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
 					const warningText =
@@ -479,6 +547,7 @@ export class TaskController {
 					};
 				} finally {
 					context.signal?.removeEventListener("abort", abort);
+					clearRuntimeTimeout();
 					try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
 					try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
 				}

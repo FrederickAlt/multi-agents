@@ -24,6 +24,8 @@ import {
 	type AgentDiscoveryAdapter,
 	type MetadataAdapter,
 	type SessionAdapter,
+	DEFAULT_TASK_RUNTIME_TIMEOUT_MS,
+	TASK_RUNTIME_TIMEOUT_ERROR_CODE,
 } from "../subagent/task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "../subagent/depth-policy.js";
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
@@ -526,6 +528,27 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("string error");
 	});
 
+	it("times out long-running task execution and still disposes the session", async () => {
+		vi.useFakeTimers();
+
+		try {
+			mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+			const resultPromise = controller.execute(makeParams(), makeContext());
+			await vi.advanceTimersByTimeAsync(DEFAULT_TASK_RUNTIME_TIMEOUT_MS);
+
+			const result = await resultPromise;
+			expect(result.details.error).toBe(TASK_RUNTIME_TIMEOUT_ERROR_CODE);
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("timed out");
+			expect(disposeSpy).toHaveBeenCalled();
+			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// ---- Empty output ----
 
 	it("returns (no output) when session has no assistant text", async () => {
@@ -713,5 +736,6 @@ describe("TaskController.execute", () => {
 		);
 
 		expect(result).toBeDefined();
+		expect(result.details.error).not.toBe(TASK_RUNTIME_TIMEOUT_ERROR_CODE);
 	});
 });
