@@ -1,5 +1,33 @@
-import type { AgentConfigState, DiscoveredOptions, OptionColumnFieldName } from "./types.js";
-import { OPTION_COLUMN_FIELDS } from "./types.js";
+import type {
+	AgentConfigState,
+	DiscoveredOptions,
+	FieldName,
+	OptionColumnFieldName,
+} from "./types.js";
+import { FIELDS_ORDER, OPTION_COLUMN_FIELDS } from "./types.js";
+
+function clampIndex(index: number, length: number): number {
+	if (length === 0) return 0;
+	return ((index % length) + length) % length;
+}
+
+export function getFieldName(fieldIndex: number): FieldName {
+	return FIELDS_ORDER[clampIndex(fieldIndex, FIELDS_ORDER.length)];
+}
+
+export function isOptionColumnField(
+	fieldName: string,
+): fieldName is OptionColumnFieldName {
+	return OPTION_COLUMN_FIELDS.includes(fieldName as OptionColumnFieldName);
+}
+
+export function getInlineOptionColumnFieldFromFieldIndex(fieldIndex: number): OptionColumnFieldName {
+	return OPTION_COLUMN_FIELDS[clampIndex(fieldIndex, OPTION_COLUMN_FIELDS.length)];
+}
+
+export function getInlineOptionColumnFieldIndex(fieldName: string): number {
+	return OPTION_COLUMN_FIELDS.indexOf(fieldName as OptionColumnFieldName);
+}
 
 export function getOptionColumnAvailableItems(
 	options: DiscoveredOptions,
@@ -65,8 +93,12 @@ export function getOptionColumnItemIndex(
 	return index >= 0 ? index : 0;
 }
 
+/**
+ * Map an option-column index into a field name.
+ * Retains existing behavior used by earlier inline-only logic.
+ */
 export function getFocusedOptionColumnField(fieldIndex: number): OptionColumnFieldName {
-	return OPTION_COLUMN_FIELDS[((fieldIndex % OPTION_COLUMN_FIELDS.length) + OPTION_COLUMN_FIELDS.length) % OPTION_COLUMN_FIELDS.length];
+	return getInlineOptionColumnFieldFromFieldIndex(fieldIndex);
 }
 
 export function getOptionColumnSaveValue(

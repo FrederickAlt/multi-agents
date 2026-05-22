@@ -626,7 +626,7 @@ describe("inline Option columns", () => {
 		const next = configReducer(state, { type: "EXPAND" });
 
 		expect(next.expandedAgentIndex).toBe(0);
-		expect(next.focus.fieldIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(3);
 		expect(next.focus.optionItemIndex).toBe(2);
 	});
 
@@ -636,14 +636,15 @@ describe("inline Option columns", () => {
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
 		};
 
 		let next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
-		expect(next.focus.fieldIndex).toBe(1);
+		expect(next.focus.fieldIndex).toBe(4);
 		expect(next.focus.optionItemIndex).toBe(3);
 
 		next = configReducer(next, { type: "FOCUS_FIELD", direction: "prev" });
-		expect(next.focus.fieldIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(3);
 		expect(next.focus.optionItemIndex).toBe(1);
 	});
 
@@ -653,7 +654,7 @@ describe("inline Option columns", () => {
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium" } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
 		};
 
 		let next = configReducer(state, { type: "FOCUS_OPTION_ITEM", direction: "next" });
@@ -667,14 +668,15 @@ describe("inline Option columns", () => {
 		setTerminalColumns(24);
 		const state: ConfigState = {
 			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { depth: 2 } })],
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "low", depth: 2 } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
 		};
 
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
 
-		expect(next.focus.fieldIndex).toBe(1);
+		expect(next.focus.fieldIndex).toBe(4);
 		expect(next.optionColumnScrollOffset).toBe(1);
 	});
 
@@ -684,17 +686,17 @@ describe("inline Option columns", () => {
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "ultra" } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
 		};
 
 		const next = configReducer(state, {
 			type: "UPDATE_AGENT_FRONTMATTER",
 			agentIndex: 0,
-			frontmatter: { reasoning_effort: "low" },
+			frontmatter: { reasoning_effort: "high" },
 			staleItems: {},
 		});
 
-		expect(next.focus.optionItemIndex).toBe(0);
+		expect(next.focus.optionItemIndex).toBe(2);
 	});
 
 	it("keeps stale custom single-select values visible without changing frontmatter", () => {
@@ -736,14 +738,14 @@ describe("EXPAND", () => {
 		expect(next.expandedAgentIndex).toBe(1);
 	});
 
-	it("resets fieldIndex to 0 when expanding", () => {
+	it("resets fieldIndex to the default inline field when expanding", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" })],
 			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
 		};
 		const next = configReducer(state, { type: "EXPAND" });
-		expect(next.focus.fieldIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(3);
 	});
 
 	it("collapses the previous expanded row when a different agent is expanded", () => {

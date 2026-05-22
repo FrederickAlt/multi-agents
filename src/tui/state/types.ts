@@ -14,8 +14,8 @@ export interface AgentConfigState {
 
 export interface FocusState {
 	agentIndex: number;
-	fieldIndex: number; // index into OPTION_COLUMN_FIELDS while expanded
-	optionItemIndex: number; // index into the focused inline Option column
+	fieldIndex: number; // index into FIELDS_ORDER while expanded
+	optionItemIndex: number; // index into focused inline option column when focused field is inline
 }
 
 export interface OverlayState {

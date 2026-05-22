@@ -4,6 +4,8 @@ import type { AgentConfigState, DiscoveredOptions, StatusInfo } from "../state/t
 import { OPTION_COLUMN_FIELDS } from "../state/types.js";
 import { getMaxVisibleOptionColumns } from "../layout.js";
 import {
+	getFieldName,
+	isOptionColumnField,
 	getOptionColumnItems,
 	getOptionColumnSelectedValue,
 } from "../state/option-columns.js";
@@ -20,6 +22,37 @@ interface AgentRowProps {
 	optionColumnScrollOffset: number;
 	options: DiscoveredOptions;
 	status: StatusInfo | undefined;
+}
+
+const INLINE_FIELD_LABELS: Record<string, string> = {
+	tools: "tools",
+	extensions: "extensions",
+	model: "model",
+	can_spawn: "can_spawn",
+	skills: "skills",
+	prompt_parts: "prompt_parts",
+};
+
+function getFocusedNonInlineSummary(agent: AgentConfigState, fieldName: string): string {
+	const fm = agent.frontmatter ?? {};
+	const raw = fm[fieldName];
+
+	switch (fieldName) {
+		case "tools":
+		case "extensions":
+		case "can_spawn":
+		case "skills":
+		case "prompt_parts": {
+			if (raw === undefined) return "all (default)";
+			if (!Array.isArray(raw)) return String(raw);
+			if (raw.length === 0) return "none";
+			return `${raw.length} selected`;
+		}
+		case "model":
+			return raw !== undefined && raw !== null && raw !== "" ? String(raw) : "(default)";
+		default:
+			return raw !== undefined ? String(raw) : "-";
+	}
 }
 
 export function AgentRow({
@@ -44,6 +77,8 @@ export function AgentRow({
 			: agent.description;
 
 	if (isExpanded) {
+		const focusedFieldName = getFieldName(focusedField);
+		const isFocusedFieldInline = isOptionColumnField(focusedFieldName);
 		const visibleCount = getMaxVisibleOptionColumns(undefined, OPTION_COLUMN_FIELDS.length);
 		const visibleFields = OPTION_COLUMN_FIELDS.slice(
 			optionColumnScrollOffset,
@@ -71,14 +106,20 @@ export function AgentRow({
 				<Box flexDirection="row">
 					{status ? (
 						<StatusLine status={status} />
+					) : isFocusedFieldInline ? (
+						<Text dimColor>↑/↓ fields · h/l columns · j/k items · Enter/Space open/edit</Text>
 					) : (
-						<Text dimColor>←/→ columns · ↑/↓ items · Enter/Space select</Text>
+						<Text dimColor>
+							Focus: {INLINE_FIELD_LABELS[focusedFieldName] ?? focusedFieldName} = {
+							getFocusedNonInlineSummary(agent, focusedFieldName)
+						}
+							 · Press Enter/Space to edit
+						</Text>
 					)}
 				</Box>
 				<Box flexDirection="row" height={6} overflow="hidden">
 					{hasMoreLeft && <Text dimColor>◀ </Text>}
 					{visibleFields.map((fieldName) => {
-						const globalIndex = OPTION_COLUMN_FIELDS.indexOf(fieldName);
 						return (
 							<OptionColumn
 								key={fieldName}
@@ -86,7 +127,7 @@ export function AgentRow({
 								items={getOptionColumnItems(agent, options, fieldName)}
 								selectedValue={getOptionColumnSelectedValue(agent, fieldName)}
 								focusedItemIndex={focusedOptionItem}
-								isFocused={isFocused && focusedField === globalIndex}
+								isFocused={isFocused && getFieldName(focusedField) === fieldName}
 							/>
 						);
 					})}

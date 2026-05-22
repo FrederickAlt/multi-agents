@@ -8,7 +8,7 @@ import { CheckboxOverlay } from "./components/CheckboxOverlay.js";
 import { DropdownOverlay } from "./components/DropdownOverlay.js";
 import { HelpFooter } from "./components/HelpFooter.js";
 import { EmptyState } from "./components/EmptyState.js";
-import { getFocusedOptionColumnField } from "./state/option-columns.js";
+import { getFieldName } from "./state/option-columns.js";
 
 /**
  * Root Ink component — state hub and layout orchestration.
@@ -52,7 +52,7 @@ export function App() {
 
 	// Build keyboard state getter for useKeyboard
 	const getKeyboardState = useCallback(() => {
-		const fieldName = getFocusedOptionColumnField(state.focus.fieldIndex);
+		const fieldName = getFieldName(state.focus.fieldIndex);
 
 		return {
 			isOverlayOpen: overlay !== null,

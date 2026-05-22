@@ -2,6 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 import { Board } from "../src/tui/components/Board.js";
 import { AgentRow } from "../src/tui/components/AgentRow.js";
+import { OptionColumn } from "../src/tui/components/OptionColumn.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../src/tui/state/types.js";
 
 const options: DiscoveredOptions = {
@@ -148,6 +149,49 @@ describe("Board", () => {
 		expect(text).toContain("depth");
 		expect(text).not.toContain("reasoning");
 		expect(children.length).toBeGreaterThan(0);
+	});
+
+	it("shows focused non-inline field context in expanded rows", () => {
+		const focusedAgent = {
+			...agent("default"),
+			frontmatter: {
+				model: "claude",
+			},
+		};
+		const result = AgentRow({
+			agent: focusedAgent,
+			isFocused: true,
+			isExpanded: true,
+			focusedField: 2,
+			focusedOptionItem: 2,
+			optionColumnScrollOffset: 0,
+			options: {
+				...options,
+				reasoningEfforts: ["low", "medium", "high"],
+				depths: [0, 1, 2],
+			},
+			status: undefined,
+		}) as React.ReactElement;
+
+		const text = collectText(result);
+		expect(text).toContain("model");
+		expect(text).toContain("claude");
+		expect(text).toContain("Press Enter/Space to edit");
+	});
+
+	it("keeps the focused option item visible when list scrolls vertically", () => {
+		const result = OptionColumn({
+			fieldName: "depth",
+			items: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+			selectedValue: "0",
+			focusedItemIndex: 8,
+			isFocused: true,
+			maxVisibleItems: 5,
+		}) as React.ReactElement;
+		const text = collectText(result);
+
+		expect(text).toContain("8");
+		expect(text).not.toMatch(/(?:^|\s)0(?:\s|$)/);
 	});
 
 	it("never trims the expanded agent when scroll indicators overflow", () => {

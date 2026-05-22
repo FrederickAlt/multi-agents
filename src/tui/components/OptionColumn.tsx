@@ -8,6 +8,7 @@ interface OptionColumnProps {
 	selectedValue: string;
 	focusedItemIndex: number;
 	isFocused: boolean;
+	maxVisibleItems?: number;
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -15,14 +16,48 @@ const FIELD_LABELS: Record<string, string> = {
 	depth: "depth",
 };
 
+const DEFAULT_MAX_VISIBLE_ITEMS = 5;
+
+function clamp(index: number, len: number): number {
+	if (len <= 0) return 0;
+	return Math.max(0, Math.min(index, len));
+}
+
+function getVisibleRange(
+	itemsCount: number,
+	focusedItemIndex: number,
+	maxItems: number,
+): { start: number; end: number } {
+	if (itemsCount <= 0 || maxItems <= 0) {
+		return { start: 0, end: 0 };
+	}
+
+	if (itemsCount <= maxItems) {
+		return { start: 0, end: itemsCount };
+	}
+
+	const maxStart = itemsCount - maxItems;
+	const center = Math.floor((maxItems - 1) / 2);
+	const start = clamp(focusedItemIndex - center, maxStart);
+	return { start, end: start + maxItems };
+}
+
 export function OptionColumn({
 	fieldName,
 	items,
 	selectedValue,
 	focusedItemIndex,
 	isFocused,
+	maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
 }: OptionColumnProps) {
 	const label = FIELD_LABELS[fieldName] ?? fieldName;
+	const visibleItemCount = Math.max(1, maxVisibleItems);
+	const { start, end } = getVisibleRange(
+		items.length,
+		focusedItemIndex,
+		visibleItemCount,
+	);
+	const visibleItems = items.slice(start, end);
 
 	return (
 		<Box
@@ -34,9 +69,10 @@ export function OptionColumn({
 			paddingX={1}
 		>
 			<Text bold color={isFocused ? "cyan" : undefined}>{label}</Text>
-			{items.map((item, index) => {
+			{visibleItems.map((item, index) => {
+				const absoluteIndex = start + index;
 				const selected = item === selectedValue;
-				const focused = isFocused && index === focusedItemIndex;
+				const focused = isFocused && absoluteIndex === focusedItemIndex;
 				return (
 					<Text
 						key={`${fieldName}-${item}`}

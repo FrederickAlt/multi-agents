@@ -34,6 +34,21 @@ export interface KeyboardState {
 	scrollOffset: number;
 }
 
+export function isInlineEditableField(fieldName: string): boolean {
+	return fieldName === "reasoning_effort" || fieldName === "depth";
+}
+
+export function handleExpandedEnterOrSpace(
+	state: Pick<KeyboardState, "fieldName" | "agentIndex">,
+	actions: Pick<KeyboardActions, "selectFocusedOption" | "openOverlay">,
+): void {
+	if (isInlineEditableField(state.fieldName)) {
+		actions.selectFocusedOption();
+	} else {
+		actions.openOverlay(state.agentIndex, state.fieldName);
+	}
+}
+
 /**
  * Hook that maps keyboard input to TUI actions.
  * Uses Ink's useInput for keypress handling.
@@ -108,17 +123,25 @@ export function useKeyboard(
 				}
 
 				if (key.upArrow || input === "k") {
-					actions.focusPrevOptionItem();
+					if (isInlineEditableField(state.fieldName)) {
+						actions.focusPrevOptionItem();
+					} else {
+						actions.focusPrevField();
+					}
 					return;
 				}
 
 				if (key.downArrow || input === "j") {
-					actions.focusNextOptionItem();
+					if (isInlineEditableField(state.fieldName)) {
+						actions.focusNextOptionItem();
+					} else {
+						actions.focusNextField();
+					}
 					return;
 				}
 
 				if (key.return || input === " ") {
-					actions.selectFocusedOption();
+					handleExpandedEnterOrSpace(state, actions);
 					return;
 				}
 

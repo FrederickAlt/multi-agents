@@ -10,10 +10,11 @@ import { useOptionDiscovery } from "./useOptionDiscovery.js";
 import { writeFieldToFile } from "../file-io/write-agent.js";
 import { modelDisplayNameToCanonicalRef } from "../discovery/options.js";
 import {
-	getFocusedOptionColumnField,
+	getFieldName,
 	getOptionColumnCurrentValue,
 	getOptionColumnItems,
 	getOptionColumnSaveValue,
+	isOptionColumnField,
 } from "../state/option-columns.js";
 
 /**
@@ -227,7 +228,9 @@ export function useConfig() {
 		const agent = state.agents[state.focus.agentIndex];
 		if (!agent || agent.error) return;
 
-		const fieldName = getFocusedOptionColumnField(state.focus.fieldIndex);
+		const fieldName = getFieldName(state.focus.fieldIndex);
+		if (!isOptionColumnField(fieldName)) return;
+
 		const items = getOptionColumnItems(agent, state.options, fieldName);
 		const item = items[state.focus.optionItemIndex];
 		if (item === undefined) return;

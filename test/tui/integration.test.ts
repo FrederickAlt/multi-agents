@@ -253,3 +253,87 @@ describe("Integration: reducer + state flow", () => {
 		expect(state.overlay).toBeNull();
 	});
 });
+
+describe("Integration: inline write-only and non-inline overlay flows", () => {
+	it("keeps inline row context while updating reasoning_effort directly", () => {
+		const filePath = writeAgentMd("inline-agent", {
+			description: "inline route",
+			reasoning_effort: "low",
+			model: "claude",
+			depth: 1,
+			tools: ["read"],
+		});
+
+		const options: DiscoveredOptions = {
+			tools: ["read", "bash"],
+			extensions: [],
+			models: [{ provider: "p", modelId: "claude", displayName: "claude", canonicalRef: "claude" }],
+			defaultModel: "claude",
+			reasoningEfforts: ["low", "medium", "high", "maximum"],
+			depths: [0, 1, 2],
+			canSpawn: [],
+			skills: [],
+			promptParts: [],
+		};
+
+		const agent = readAgent(filePath);
+		let state = createInitialState();
+		state = configReducer(state, {
+			type: "INIT_COMPLETE",
+			agents: [agent],
+			options,
+		});
+		state = configReducer(state, { type: "EXPAND" });
+
+		expect(state.expandedAgentIndex).toBe(0);
+		expect(state.focus.fieldIndex).toBe(3);
+		expect(state.focus.optionItemIndex).toBe(0);
+
+		const result = writeFieldToFile(filePath, "reasoning_effort", "high");
+		expect(result.success).toBe(true);
+
+		state = configReducer(state, {
+			type: "UPDATE_AGENT_FRONTMATTER",
+			agentIndex: 0,
+			frontmatter: readAgent(filePath).frontmatter ?? {},
+			staleItems: agent.staleItems,
+		});
+
+		expect(state.expandedAgentIndex).toBe(0);
+		expect(state.focus.fieldIndex).toBe(3);
+		expect(state.focus.optionItemIndex).toBe(2);
+
+		const updated = readAgent(filePath);
+		expect(updated.frontmatter?.reasoning_effort).toBe("high");
+	});
+
+	it("keeps non-inline fields editable via overlay path", () => {
+		const filePath = writeAgentMd("overlay-agent", {
+			description: "overlay route",
+			model: "claude",
+			tools: ["read"],
+		});
+		const options: DiscoveredOptions = {
+			tools: ["read", "bash"],
+			extensions: ["ext"],
+			models: [{ provider: "p", modelId: "claude", displayName: "claude", canonicalRef: "claude" }],
+			defaultModel: "claude",
+			reasoningEfforts: ["low", "medium", "high"],
+			depths: [0, 1, 2],
+			canSpawn: [],
+			skills: [],
+			promptParts: [],
+		};
+
+		const agent = readAgent(filePath);
+		let state = createInitialState();
+		state = configReducer(state, { type: "INIT_COMPLETE", agents: [agent], options });
+
+		state = configReducer(state, { type: "EXPAND" });
+		state = { ...state, focus: { ...state.focus, fieldIndex: 2 } }; // model
+
+		state = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
+		expect(state.overlay).not.toBeNull();
+		expect(state.overlay!.type).toBe("dropdown");
+	});
+});
