@@ -20,9 +20,9 @@ describe("Keyboard editability mapping", () => {
 	it("uses full field order indices for inline/non-inline behavior", () => {
 		expect(isInlineEditableField(getFieldName(0))).toBe(true); // tools
 		expect(isInlineEditableField(getFieldName(1))).toBe(true); // extensions
-		expect(isInlineEditableField(getFieldName(2))).toBe(true); // model
-		expect(isInlineEditableField(getFieldName(3))).toBe(true); // reasoning_effort
-		expect(isInlineEditableField(getFieldName(4))).toBe(true); // depth
+		expect(isInlineEditableField(getFieldName(2))).toBe(true); // reasoning_effort
+		expect(isInlineEditableField(getFieldName(3))).toBe(true); // depth
+		expect(isInlineEditableField(getFieldName(4))).toBe(true); // model
 		expect(isInlineEditableField(getFieldName(5))).toBe(true); // can_spawn
 		expect(isInlineEditableField(getFieldName(6))).toBe(true); // skills
 		expect(isInlineEditableField(getFieldName(7))).toBe(true); // prompt_parts

@@ -674,7 +674,7 @@ describe("inline Option columns", () => {
 		const next = configReducer(state, { type: "EXPAND" });
 
 		expect(next.expandedAgentIndex).toBe(0);
-		expect(next.focus.fieldIndex).toBe(3);
+		expect(next.focus.fieldIndex).toBe(2);
 		expect(next.focus.optionItemIndex).toBe(2);
 	});
 
@@ -684,30 +684,45 @@ describe("inline Option columns", () => {
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
 		};
 
 		let next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
-		expect(next.focus.fieldIndex).toBe(4);
+		expect(next.focus.fieldIndex).toBe(3);
 		expect(next.focus.optionItemIndex).toBe(3);
 
 		next = configReducer(next, { type: "FOCUS_FIELD", direction: "next" });
-		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.fieldIndex).toBe(4);
 		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
-	it("FOCUS_FIELD moves left from first inline column to model", () => {
+	it("FOCUS_FIELD moves right from extensions to the rendered inline order", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: 1, optionItemIndex: 0 },
+		};
+
+		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
+
+		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.optionItemIndex).toBe(1);
+	});
+
+	it("FOCUS_FIELD moves left from can_spawn to model", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 0 },
 		};
 
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
 
-		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.fieldIndex).toBe(4);
 		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
@@ -717,7 +732,7 @@ describe("inline Option columns", () => {
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium" } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
 		};
 
 		let next = configReducer(state, { type: "FOCUS_OPTION_ITEM", direction: "next" });
@@ -840,13 +855,14 @@ describe("inline Option columns", () => {
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "low", depth: 2 } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 0 },
 		};
 
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
 
-		expect(next.focus.fieldIndex).toBe(4);
-		expect(next.optionColumnScrollOffset).toBe(3);
+		expect(next.focus.fieldIndex).toBe(3);
+		expect(next.optionColumnScrollOffset).toBe(4);
+
 	});
 
 	it("realigns focused item after a stale custom value is replaced", () => {
@@ -855,7 +871,7 @@ describe("inline Option columns", () => {
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "ultra" } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
 		};
 
 		const next = configReducer(state, {
@@ -993,7 +1009,7 @@ describe("model discovery options", () => {
 			expandedAgentIndex: 0,
 			focus: {
 				agentIndex: 0,
-				fieldIndex: 2,
+				fieldIndex: 4,
 				optionItemIndex: 0,
 			},
 		};
@@ -1008,7 +1024,7 @@ describe("model discovery options", () => {
 		});
 
 		expect(next.focus.agentIndex).toBe(0);
-		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.fieldIndex).toBe(4);
 		expect(next.focus.optionItemIndex).toBe(0);
 		expect(next.options.modelDiscovery.status).toBe("ready");
 		expect(next.options.models).toEqual(loadedOptions.models);
@@ -1038,7 +1054,7 @@ describe("model discovery options", () => {
 		});
 
 		expect(failed.focus.agentIndex).toBe(0);
-		expect(failed.focus.fieldIndex).toBe(2);
+		expect(failed.focus.fieldIndex).toBe(4);
 		expect(failed.focus.optionItemIndex).toBe(0);
 		expect(failed.options.modelDiscovery.status).toBe("degraded");
 	});
@@ -1071,7 +1087,7 @@ describe("model discovery options", () => {
 		});
 
 		expect(stable.focus.agentIndex).toBe(0);
-		expect(stable.focus.fieldIndex).toBe(4);
+		expect(stable.focus.fieldIndex).toBe(3);
 		expect(stable.focus.optionItemIndex).toBe(3); // depth value 3 remains selected
 	});
 });
@@ -1095,10 +1111,10 @@ describe("EXPAND", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ name: "a" })],
-			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 0 },
 		};
 		const next = configReducer(state, { type: "EXPAND" });
-		expect(next.focus.fieldIndex).toBe(3);
+		expect(next.focus.fieldIndex).toBe(2);
 	});
 
 	it("collapses the previous expanded row when a different agent is expanded", () => {

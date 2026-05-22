@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { Board } from "../src/tui/components/Board.js";
 import { AgentRow } from "../src/tui/components/AgentRow.js";
 import { OptionColumn } from "../src/tui/components/OptionColumn.js";
+import { MODEL_OPTION_DEGRADED_STATUS } from "../src/tui/state/option-columns.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../src/tui/state/types.js";
 
 const options: DiscoveredOptions = {
@@ -246,7 +247,7 @@ describe("Board", () => {
 		const s = state({
 			focus: {
 				agentIndex: 0,
-				fieldIndex: 4,
+				fieldIndex: 3,
 				optionItemIndex: 10,
 			},
 			expandedAgentIndex: 0,
@@ -281,6 +282,28 @@ describe("Board", () => {
 
 		expect(text).toContain("8");
 		expect(text).not.toMatch(/(?:^|\s)0(?:\s|$)/);
+	});
+
+	it("pins degraded model status outside the scroll window", () => {
+		const result = OptionColumn({
+			fieldName: "model",
+			items: [
+				MODEL_OPTION_DEGRADED_STATUS,
+				"model-alpha",
+				"model-beta",
+				"model-gamma",
+				"model-delta",
+			],
+			selectedValue: "model-delta",
+			focusedItemIndex: 4,
+			isFocused: true,
+			maxVisibleItems: 3,
+		}) as React.ReactElement;
+		const text = collectText(result);
+
+		expect(text).toContain(MODEL_OPTION_DEGRADED_STATUS);
+		expect(text).toContain("model-delta");
+		expect(text).not.toContain("model-alpha");
 	});
 
 	it("never trims the expanded agent when scroll indicators overflow", () => {

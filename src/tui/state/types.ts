@@ -97,9 +97,9 @@ export interface ConfigState {
 export const FIELDS_ORDER = [
 	"tools",
 	"extensions",
-	"model",
 	"reasoning_effort",
 	"depth",
+	"model",
 	"can_spawn",
 	"skills",
 	"prompt_parts",
