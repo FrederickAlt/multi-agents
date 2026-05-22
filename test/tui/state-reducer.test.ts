@@ -20,8 +20,8 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 		tools: ["read", "bash", "write"],
 		extensions: ["ext-a", "ext-b"],
 		models: [
-			{ provider: "anthropic", modelId: "claude", displayName: "claude" },
-			{ provider: "openai", modelId: "gpt5", displayName: "gpt-5" },
+			{ provider: "anthropic", modelId: "claude", displayName: "claude", canonicalRef: "claude" },
+			{ provider: "openai", modelId: "gpt5", displayName: "gpt-5", canonicalRef: "gpt5" },
 		],
 		defaultModel: "claude",
 		reasoningEfforts: ["low", "medium", "high", "maximum"],

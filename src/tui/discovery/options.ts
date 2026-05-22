@@ -3,6 +3,61 @@ import * as path from "node:path";
 import type { DiscoveredOptions, ModelOption } from "../state/types.js";
 
 // ---------------------------------------------------------------------------
+// Model reference helpers
+// ---------------------------------------------------------------------------
+
+/** Compute canonical runtime-reference for every model.
+ *  Bare modelId when unique across providers, otherwise `provider/modelId`. */
+export function computeCanonicalModelRefs(models: ModelOption[]): void {
+	// Count how many providers expose each modelId
+	const idCounts = new Map<string, number>();
+	for (const m of models) {
+		idCounts.set(m.modelId, (idCounts.get(m.modelId) ?? 0) + 1);
+	}
+	for (const m of models) {
+		const isUnique = idCounts.get(m.modelId) === 1;
+		m.canonicalRef = isUnique ? m.modelId : `${m.provider}/${m.modelId}`;
+	}
+}
+
+/**
+ * Resolve a stored model value (bare ID, canonical ref, or display name)
+ * to the best-matching display name for the TUI dropdown.
+ * Returns undefined if no model matches.
+ */
+export function resolveModelDisplayName(
+	value: string | undefined,
+	models: ModelOption[],
+): string | undefined {
+	if (!value) return undefined;
+	// Try exact match by canonicalRef
+	let match = models.find((m) => m.canonicalRef === value);
+	if (match) return match.displayName;
+	// Try exact match by modelId
+	match = models.find((m) => m.modelId === value);
+	if (match) return match.displayName;
+	// Try exact match by displayName
+	match = models.find((m) => m.displayName === value);
+	if (match) return match.displayName;
+	// Try constructed provider/modelId match (e.g. "deepseek/deepseek-v4")
+	match = models.find((m) => `${m.provider}/${m.modelId}` === value);
+	if (match) return match.displayName;
+	return undefined;
+}
+
+/**
+ * Map a display name back to the canonical runtime reference.
+ * Returns undefined if no model matches the display name.
+ */
+export function modelDisplayNameToCanonicalRef(
+	displayName: string,
+	models: ModelOption[],
+): string | undefined {
+	const match = models.find((m) => m.displayName === displayName);
+	return match?.canonicalRef;
+}
+
+// ---------------------------------------------------------------------------
 // Tools Discovery
 // ---------------------------------------------------------------------------
 
@@ -100,7 +155,9 @@ export async function discoverModels(agentDir: string): Promise<{
 			provider: m.provider ?? "",
 			modelId: m.id ?? "",
 			displayName: m.name ?? `${m.provider}/${m.id}`,
+			canonicalRef: "", // populated below
 		}));
+		computeCanonicalModelRefs(allModels);
 
 		// Determine default: first model with configured auth, or first model.
 		// NOTE: "first available model with configured auth" is a heuristic proxy
@@ -132,12 +189,14 @@ export async function discoverModels(agentDir: string): Promise<{
 }
 
 function getBuiltInModels(): ModelOption[] {
-	return [
-		{ provider: "anthropic", modelId: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4" },
-		{ provider: "anthropic", modelId: "claude-opus-4-20250514", displayName: "Claude Opus 4" },
-		{ provider: "anthropic", modelId: "claude-haiku-4-5-20250514", displayName: "Claude Haiku 4.5" },
-		{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5" },
+	const models: ModelOption[] = [
+		{ provider: "anthropic", modelId: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4", canonicalRef: "" },
+		{ provider: "anthropic", modelId: "claude-opus-4-20250514", displayName: "Claude Opus 4", canonicalRef: "" },
+		{ provider: "anthropic", modelId: "claude-haiku-4-5-20250514", displayName: "Claude Haiku 4.5", canonicalRef: "" },
+		{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "" },
 	];
+	computeCanonicalModelRefs(models);
+	return models;
 }
 
 // ---------------------------------------------------------------------------

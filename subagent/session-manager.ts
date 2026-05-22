@@ -110,22 +110,24 @@ export class PiModelResolver implements ModelResolver {
 		warnings: string[],
 	): Model | undefined {
 		if (!modelName) return undefined;
-		let model: Model | undefined;
 
-		if (modelName.includes("/")) {
-			// Provider-prefixed name: look up exact provider+id
-			const [provider, id] = modelName.split("/", 2);
-			model = this.modelRegistry.find(provider, id);
-			if (!model) {
-				warnings.push(
-					`Configured model "${modelName}" was not found; using the current/default model.`,
-				);
-				return fallback;
-			}
-			if (
-				typeof this.modelRegistry.hasConfiguredAuth === "function" &&
-				!this.modelRegistry.hasConfiguredAuth(model)
-			) {
+		const all: Model[] =
+			typeof this.modelRegistry.getAll === "function"
+				? this.modelRegistry.getAll()
+				: [];
+
+		const hasAuth = (m: Model): boolean => {
+			if (typeof this.modelRegistry.hasConfiguredAuth !== "function") return true;
+			return this.modelRegistry.hasConfiguredAuth(m);
+		};
+
+		// ---- Step 1: Exact match by model ID ----
+		// Handles both bare IDs and slash-containing model IDs.
+		const exactById = all.filter((c: Model) => c.id === modelName);
+
+		if (exactById.length === 1) {
+			const model = exactById[0];
+			if (!hasAuth(model)) {
 				warnings.push(
 					`Configured model "${modelName}" is not available because its provider is not authenticated; using the current/default model.`,
 				);
@@ -134,53 +136,38 @@ export class PiModelResolver implements ModelResolver {
 			return model;
 		}
 
-		// Bare model id: prefer authenticated providers, then fall back.
-		// getAvailable() returns only models whose provider has auth configured;
-		// getAll() returns all models regardless of auth status.
-		// We search getAvailable() first because a bare id may exist under
-		// multiple providers (e.g. "deepseek-v4-flash" under both "deepseek"
-		// and "opencode-go") and we want the one the user can actually use.
-		const available =
-			typeof this.modelRegistry.getAvailable === "function"
-				? this.modelRegistry.getAvailable()
-				: [];
-		const all: Model[] =
-			typeof this.modelRegistry.getAll === "function"
-				? this.modelRegistry.getAll()
-				: [];
-
-		const matchIn = (source: Model[]): Model | undefined =>
-			source.find(
-				(candidate: Model) =>
-					candidate.id === modelName ||
-					`${candidate.provider}/${candidate.id}` === modelName,
-			);
-
-		model = matchIn(available);
-		if (!model) {
-			model = matchIn(all);
-		}
-
-		if (!model) {
+		if (exactById.length > 1) {
+			// Ambiguous bare model ID — matches multiple providers.
 			warnings.push(
-				`Configured model "${modelName}" was not found; using the current/default model.`,
+				`Configured model "${modelName}" is ambiguous (matches multiple providers); using the current/default model.`,
 			);
 			return fallback;
 		}
 
-		// If we found the model in getAvailable() it's already authenticated.
-		// If we fell back to getAll(), verify auth explicitly.
-		if (
-			typeof this.modelRegistry.hasConfiguredAuth === "function" &&
-			!this.modelRegistry.hasConfiguredAuth(model)
-		) {
-			warnings.push(
-				`Configured model "${modelName}" is not available because its provider is not authenticated; using the current/default model.`,
-			);
-			return fallback;
+		// ---- Step 2: Canonical provider/model-id reference ----
+		// Only reached when no exact model-ID match exists.
+		if (modelName.includes("/")) {
+			// Split on first / only to preserve slash-containing model IDs.
+			const slashIdx = modelName.indexOf("/");
+			const provider = modelName.slice(0, slashIdx);
+			const id = modelName.slice(slashIdx + 1);
+			const model = this.modelRegistry.find(provider, id);
+			if (model) {
+				if (!hasAuth(model)) {
+					warnings.push(
+						`Configured model "${modelName}" is not available because its provider is not authenticated; using the current/default model.`,
+					);
+					return fallback;
+				}
+				return model;
+			}
 		}
 
-		return model;
+		// ---- Step 3: No match ----
+		warnings.push(
+			`Configured model "${modelName}" was not found; using the current/default model.`,
+		);
+		return fallback;
 	}
 }
 

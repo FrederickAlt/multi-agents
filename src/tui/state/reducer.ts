@@ -7,6 +7,7 @@ import type {
 } from "./types.js";
 import { FIELDS_ORDER } from "./types.js";
 import { clampScrollOffset } from "../layout.js";
+import { resolveModelDisplayName } from "../discovery/options.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -207,7 +208,16 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				};
 			} else {
 				const defaultVal = getDefaultValue(action.fieldName, availableItems, state.options.defaultModel);
-				const current = currentValue !== undefined ? String(currentValue) : defaultVal;
+				let current = defaultVal;
+				if (currentValue !== undefined) {
+					if (action.fieldName === "model") {
+						// Resolve stored value (bare ID / canonical ref / display name) to display name
+						const resolved = resolveModelDisplayName(String(currentValue), state.options.models);
+						current = resolved ?? String(currentValue);
+					} else {
+						current = String(currentValue);
+					}
+				}
 				overlay = {
 					type: "dropdown",
 					agentIndex: action.agentIndex,
