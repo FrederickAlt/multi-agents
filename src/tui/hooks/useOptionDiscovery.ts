@@ -27,6 +27,10 @@ export function useOptionDiscovery(): {
 		extensions: [],
 		models: [],
 		defaultModel: "",
+		modelDiscovery: {
+			status: "loading",
+			error: null,
+		},
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: [],
@@ -52,13 +56,15 @@ export function useOptionDiscovery(): {
 					return Array.isArray(t) ? t.map(String) : [];
 				});
 
-			const { models: discoveredModels, defaultModelDisplayName } = await discoverModels(agentDir);
-
 			const discovered: DiscoveredOptions = {
 				tools: discoverTools(agentDir, toolLists),
 				extensions: discoverExtensions(agentDir),
-				models: discoveredModels,
-				defaultModel: defaultModelDisplayName,
+				models: [],
+				defaultModel: "",
+				modelDiscovery: {
+					status: "loading",
+					error: null,
+				},
 				reasoningEfforts: ["low", "medium", "high", "maximum"],
 				depths: [0, 1, 2, 3, 4, 5],
 				canSpawn: allNames,
@@ -66,7 +72,7 @@ export function useOptionDiscovery(): {
 				promptParts: discoverPromptParts(agentDir),
 			};
 
-			// Detect stale items
+			// Detect stale items before surfacing options to the UI.
 			detectStaleItems(
 				scanned,
 				allNames,
@@ -78,9 +84,36 @@ export function useOptionDiscovery(): {
 
 			setAgents(scanned);
 			setOptions(discovered);
+			setLoading(false);
+
+			// Continue model discovery asynchronously.
+			try {
+				const {
+					models: discoveredModels,
+					defaultModelDisplayName,
+					status,
+					error: modelError,
+				} = await discoverModels(agentDir);
+				setOptions((prev) => ({
+					...prev,
+					models: discoveredModels,
+					defaultModel: defaultModelDisplayName,
+					modelDiscovery: {
+						status,
+						error: modelError ?? null,
+					},
+				}));
+			} catch (modelErr) {
+				setOptions((prev) => ({
+					...prev,
+					modelDiscovery: {
+						status: "degraded",
+						error: (modelErr as Error).message,
+					},
+				}));
+			}
 		} catch (err) {
 			setError((err as Error).message);
-		} finally {
 			setLoading(false);
 		}
 	};

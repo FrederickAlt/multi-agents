@@ -9,6 +9,10 @@ const options: DiscoveredOptions = {
 	extensions: [],
 	models: [],
 	defaultModel: "",
+	modelDiscovery: {
+		status: "ready",
+		error: null,
+	},
 	reasoningEfforts: [],
 	depths: [],
 	canSpawn: [],

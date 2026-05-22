@@ -124,8 +124,8 @@ export function App() {
 	// Mouse hook
 	useMouse(actions, getKeyboardState);
 
-	// Loading state
-	if (loading) {
+	// Loading state while discovery bootstrap has not yielded agents yet.
+	if (loading && state.agents.length === 0) {
 		return (
 			<Box flexDirection="column" height="100%">
 				<Box flexGrow={1} justifyContent="center" alignItems="center">
@@ -149,7 +149,7 @@ export function App() {
 		);
 	}
 
-	// No agents
+	// No agents (after discovery completed)
 	if (state.agents.length === 0) {
 		return (
 			<Box flexDirection="column" height="100%">

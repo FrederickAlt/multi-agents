@@ -21,6 +21,7 @@ const FIELD_LABELS: Record<string, string> = {
 	prompt_parts: "prompt_parts",
 	reasoning_effort: "reasoning",
 	depth: "depth",
+	model: "model",
 };
 
 const DEFAULT_MAX_VISIBLE_ITEMS = 5;

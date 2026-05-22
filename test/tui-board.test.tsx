@@ -10,6 +10,10 @@ const options: DiscoveredOptions = {
 	extensions: [],
 	models: [],
 	defaultModel: "",
+	modelDiscovery: {
+		status: "ready",
+		error: null,
+	},
 	reasoningEfforts: [],
 	depths: [],
 	canSpawn: [],
@@ -155,27 +159,28 @@ describe("Board", () => {
 		const focusedAgent = {
 			...agent("default"),
 			frontmatter: {
-				model: "claude",
+				can_spawn: ["builder"],
 			},
 		};
 		const result = AgentRow({
 			agent: focusedAgent,
 			isFocused: true,
 			isExpanded: true,
-			focusedField: 2,
+			focusedField: 5,
 			focusedOptionItem: 2,
 			optionColumnScrollOffset: 0,
 			options: {
 				...options,
 				reasoningEfforts: ["low", "medium", "high"],
 				depths: [0, 1, 2],
+				canSpawn: ["builder", "reviewer"],
 			},
 			status: undefined,
 		}) as React.ReactElement;
 
 		const text = collectText(result);
-		expect(text).toContain("model");
-		expect(text).toContain("claude");
+		expect(text).toContain("can_spawn");
+		expect(text).toContain("1 selected");
 		expect(text).toContain("Press Enter/Space to edit");
 	});
 
@@ -183,27 +188,28 @@ describe("Board", () => {
 		const focusedAgent = {
 			...agent("default"),
 			frontmatter: {
-				model: "claude",
+				can_spawn: ["builder"],
 			},
 		};
 		const result = AgentRow({
 			agent: focusedAgent,
 			isFocused: true,
 			isExpanded: true,
-			focusedField: 2,
+			focusedField: 5,
 			focusedOptionItem: 2,
 			optionColumnScrollOffset: 0,
 			options: {
 				...options,
 				reasoningEfforts: ["low", "medium", "high"],
 				depths: [0, 1, 2],
+				canSpawn: ["builder", "reviewer"],
 			},
 			status: { type: "saved", message: "Saved default.md", timestamp: 1 },
 		}) as React.ReactElement;
 
 		const text = collectText(result);
 		expect(text).toContain("Saved default.md");
-		expect(text).toContain("Focus: model");
+		expect(text).toContain("Focus: can_spawn");
 		expect(text).toContain("Press Enter/Space to edit");
 	});
 

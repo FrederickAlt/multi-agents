@@ -14,6 +14,8 @@ import {
 	getOptionColumnItemIndex,
 	getOptionColumnItems,
 	isOptionColumnField,
+	MODEL_OPTION_LOADING_ITEM,
+	MODEL_OPTION_DEGRADED_STATUS,
 } from "./option-columns.js";
 
 // ---------------------------------------------------------------------------
@@ -99,6 +101,10 @@ export function createInitialState(): ConfigState {
 			extensions: [],
 			models: [],
 			defaultModel: "",
+			modelDiscovery: {
+				status: "ready",
+				error: null,
+			},
 			reasoningEfforts: ["low", "medium", "high", "maximum"],
 			depths: [0, 1, 2, 3, 4, 5],
 			canSpawn: [],
@@ -452,6 +458,27 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			};
 		}
 
+		case "UPDATE_OPTIONS": {
+			const focusedAgent = state.agents[state.focus.agentIndex];
+			return {
+				...state,
+				options: action.options,
+				focus: {
+					...state.focus,
+					optionItemIndex: getFocusedOptionItemIndex(
+						focusedAgent,
+						action.options,
+						state.focus.fieldIndex,
+					),
+				},
+				optionColumnScrollOffset: syncOptionColumnScrollOffset(
+					state.optionColumnScrollOffset,
+					state.focus.fieldIndex,
+					OPTION_COLUMN_FIELDS.length,
+				),
+			};
+		}
+
 		case "SCROLL": {
 			const len = state.agents.length;
 			if (len === 0) return state;
@@ -520,6 +547,12 @@ function getAvailableItems(
 		case "extensions":
 			return options.extensions;
 		case "model":
+			if (options.modelDiscovery.status === "loading") {
+				return [MODEL_OPTION_LOADING_ITEM];
+			}
+			if (options.modelDiscovery.status === "degraded" && options.models.length === 0) {
+				return [MODEL_OPTION_DEGRADED_STATUS];
+			}
 			return options.models.map((m) => m.displayName);
 		case "reasoning_effort":
 			return options.reasoningEfforts;
@@ -543,6 +576,11 @@ function getDefaultValue(
 ): string {
 	if (fieldName === "depth") return "0";
 	if (fieldName === "reasoning_effort") return "medium";
-	if (fieldName === "model") return defaultModel || availableItems[0] || "(none)";
+	if (fieldName === "model") {
+		if (defaultModel) return defaultModel;
+		if (availableItems.includes(MODEL_OPTION_LOADING_ITEM)) return MODEL_OPTION_LOADING_ITEM;
+		if (availableItems.includes(MODEL_OPTION_DEGRADED_STATUS)) return MODEL_OPTION_DEGRADED_STATUS;
+		return availableItems[0] || "(none)";
+	}
 	return availableItems[0] ?? "";
 }

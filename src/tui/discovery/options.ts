@@ -125,10 +125,14 @@ export function discoverExtensions(agentDir: string): string[] {
  * Discover models using ModelRegistry from @mariozechner/pi-coding-agent.
  * Falls back to built-in models if registry fails or package is unavailable.
  */
-export async function discoverModels(agentDir: string): Promise<{
+export interface DiscoveredModelsResult {
 	models: ModelOption[];
 	defaultModelDisplayName: string;
-}> {
+	status: "ready" | "degraded";
+	error?: string;
+}
+
+export async function discoverModels(agentDir: string): Promise<DiscoveredModelsResult> {
 	try {
 		const pcg = await import("@mariozechner/pi-coding-agent");
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -138,7 +142,12 @@ export async function discoverModels(agentDir: string): Promise<{
 
 		if (!AuthStorage || !ModelRegistry) {
 			const builtin = getBuiltInModels();
-			return { models: builtin, defaultModelDisplayName: builtin[0]?.displayName ?? "" };
+			return {
+				models: builtin,
+				defaultModelDisplayName: builtin[0]?.displayName ?? "",
+				status: "degraded",
+				error: "Model discovery unavailable; using built-in defaults.",
+			};
 		}
 
 		const authStorage = AuthStorage.create(
@@ -180,11 +189,21 @@ export async function discoverModels(agentDir: string): Promise<{
 			defaultModelDisplayName = allModels[0].displayName;
 		}
 
-		return { models: allModels, defaultModelDisplayName };
-	} catch {
+		return {
+			models: allModels,
+			defaultModelDisplayName,
+			status: "ready",
+			error: undefined,
+		};
+	} catch (err) {
 		// Fall back to built-in models
 		const builtin = getBuiltInModels();
-		return { models: builtin, defaultModelDisplayName: builtin[0]?.displayName ?? "" };
+		return {
+			models: builtin,
+			defaultModelDisplayName: builtin[0]?.displayName ?? "",
+			status: "degraded",
+			error: (err as Error).message ?? String(err),
+		};
 	}
 }
 
@@ -307,12 +326,16 @@ export async function discoverAllOptions(
 	agentToolLists: string[][],
 	allAgentNames: string[],
 ): Promise<DiscoveredOptions> {
-	const { models, defaultModelDisplayName } = await discoverModels(agentDir);
+	const { models, defaultModelDisplayName, status, error } = await discoverModels(agentDir);
 	return {
 		tools: discoverTools(agentDir, agentToolLists),
 		extensions: discoverExtensions(agentDir),
 		models,
 		defaultModel: defaultModelDisplayName,
+		modelDiscovery: {
+			status,
+			error,
+		},
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: allAgentNames,

@@ -1,6 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { configReducer, createInitialState, resolveCheckboxSelection, computeCheckboxSaveValue } from "../../src/tui/state/reducer.js";
-import { getOptionColumnItems } from "../../src/tui/state/option-columns.js";
+import {
+	getOptionColumnItems,
+	getOptionColumnAvailableItems,
+	MODEL_OPTION_LOADING_ITEM,
+	MODEL_OPTION_DEGRADED_STATUS,
+} from "../../src/tui/state/option-columns.js";
 import type { ConfigState, AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
 const originalRowsDescriptor = Object.getOwnPropertyDescriptor(
@@ -61,6 +66,7 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 			{ provider: "openai", modelId: "gpt5", displayName: "gpt-5", canonicalRef: "gpt5" },
 		],
 		defaultModel: "claude",
+		modelDiscovery: { status: "ready", error: null },
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: ["other-agent", "coder"],
@@ -888,6 +894,134 @@ describe("inline Option columns", () => {
 		expect(next.expandedAgentIndex).toBe(0);
 		expect(next.focus.fieldIndex).toBe(0);
 		expect(next.focus.optionItemIndex).toBe(2);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Model discovery state transitions
+// ---------------------------------------------------------------------------
+
+describe("model discovery options", () => {
+	it("shows loading placeholder in model option column while discovery is pending", () => {
+		const options = {
+			...makeOptions(),
+			modelDiscovery: { status: "loading", error: null },
+			models: [],
+			defaultModel: "",
+		};
+
+		expect(getOptionColumnAvailableItems(options, "model")).toEqual([
+			MODEL_OPTION_LOADING_ITEM,
+		]);
+	});
+
+	it("shows degraded placeholder for unresolved model discovery", () => {
+		const options = {
+			...makeOptions(),
+			modelDiscovery: { status: "degraded", error: "registry missing" },
+			models: [],
+			defaultModel: "",
+		};
+
+		expect(getOptionColumnAvailableItems(options, "model")).toEqual([
+			MODEL_OPTION_DEGRADED_STATUS,
+		]);
+	});
+
+	it("keeps row and inline model option focus when model options update", () => {
+		const agent = makeAgent({ frontmatter: { model: "claude", description: "agent" } });
+		const baseState: ConfigState = {
+			...createInitialState(),
+			agents: [agent],
+			options: {
+				...makeOptions(),
+				modelDiscovery: { status: "loading", error: null },
+				models: [],
+				defaultModel: "",
+			},
+			expandedAgentIndex: 0,
+			focus: {
+				agentIndex: 0,
+				fieldIndex: 2,
+				optionItemIndex: 0,
+			},
+		};
+
+		const loadedOptions = {
+			...makeOptions(),
+			modelDiscovery: { status: "ready", error: null },
+		};
+		const next = configReducer(baseState, {
+			type: "UPDATE_OPTIONS",
+			options: loadedOptions,
+		});
+
+		expect(next.focus.agentIndex).toBe(0);
+		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.optionItemIndex).toBe(0);
+		expect(next.options.modelDiscovery.status).toBe("ready");
+		expect(next.options.models).toEqual(loadedOptions.models);
+	});
+
+	it("keeps row and inline model option focus when model discovery fails", () => {
+		const agent = makeAgent({ frontmatter: { model: "claude", description: "agent" } });
+		const baseline = {
+			...makeOptions(),
+			modelDiscovery: { status: "ready", error: null },
+		};
+		let state = configReducer(createInitialState(), {
+			type: "INIT_COMPLETE",
+			agents: [agent],
+			options: baseline,
+		});
+		state = configReducer(state, { type: "EXPAND" });
+		state = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" }); // model
+		const failed = configReducer(state, {
+			type: "UPDATE_OPTIONS",
+			options: {
+				...makeOptions(),
+				models: [],
+				modelDiscovery: { status: "degraded", error: "network" },
+				defaultModel: "",
+			},
+		});
+
+		expect(failed.focus.agentIndex).toBe(0);
+		expect(failed.focus.fieldIndex).toBe(2);
+		expect(failed.focus.optionItemIndex).toBe(0);
+		expect(failed.options.modelDiscovery.status).toBe("degraded");
+	});
+
+	it("preserves focus on non-model option column during model discovery updates", () => {
+		const agent = makeAgent({
+			frontmatter: { reasoning_effort: "high", depth: 3, description: "agent" },
+		});
+		const stateWithPendingModel = configReducer(createInitialState(), {
+			type: "INIT_COMPLETE",
+			agents: [agent],
+			options: {
+				...makeOptions(),
+				modelDiscovery: { status: "loading", error: null },
+				models: [],
+			},
+		});
+		const focusedState = configReducer(stateWithPendingModel, { type: "EXPAND" });
+		const withFocus = configReducer(focusedState, {
+			type: "FOCUS_FIELD",
+			direction: "next",
+		}); // reasoning_effort -> depth
+		const stable = configReducer(withFocus, {
+			type: "UPDATE_OPTIONS",
+			options: {
+				...makeOptions(),
+				modelDiscovery: { status: "ready", error: null },
+				defaultModel: "claude",
+			},
+		});
+
+		expect(stable.focus.agentIndex).toBe(0);
+		expect(stable.focus.fieldIndex).toBe(4);
+		expect(stable.focus.optionItemIndex).toBe(3); // depth value 3 remains selected
 	});
 });
 

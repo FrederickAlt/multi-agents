@@ -5,6 +5,10 @@ import type {
 	OptionColumnFieldName,
 } from "./types.js";
 import { FIELDS_ORDER, OPTION_COLUMN_FIELDS } from "./types.js";
+import { resolveModelDisplayName } from "../discovery/options.js";
+
+export const MODEL_OPTION_LOADING_ITEM = "(loading models...)";
+export const MODEL_OPTION_DEGRADED_STATUS = "(model discovery unavailable)";
 
 function clampIndex(index: number, length: number): number {
 	if (length === 0) return 0;
@@ -57,6 +61,14 @@ export function getOptionColumnAvailableItems(
 			return options.tools;
 		case "extensions":
 			return options.extensions;
+		case "model":
+			if (options.modelDiscovery.status === "loading") {
+				return [MODEL_OPTION_LOADING_ITEM];
+			}
+			if (options.modelDiscovery.status === "degraded" && options.models.length === 0) {
+				return [MODEL_OPTION_DEGRADED_STATUS];
+			}
+			return options.models.map((m) => m.displayName);
 		case "reasoning_effort":
 			return options.reasoningEfforts;
 		case "depth":
@@ -70,9 +82,11 @@ export function getOptionColumnAvailableItems(
 		case "prompt_parts":
 			return options.promptParts;
 	}
+	return [];
 }
 
 export function getOptionColumnDefaultValue(
+	options: DiscoveredOptions,
 	fieldName: OptionColumnFieldName,
 ): string {
 	switch (fieldName) {
@@ -80,18 +94,34 @@ export function getOptionColumnDefaultValue(
 			return "medium";
 		case "depth":
 			return "0";
-		default:
-			return "";
+		case "model": {
+			if (options.defaultModel) {
+				return options.defaultModel;
+			}
+			if (options.modelDiscovery.status === "loading") {
+				return MODEL_OPTION_LOADING_ITEM;
+			}
+			if (options.modelDiscovery.status === "degraded" && options.models.length === 0) {
+				return MODEL_OPTION_DEGRADED_STATUS;
+			}
+			return "(none)";
+		}
 	}
+	return "";
 }
 
 export function getOptionColumnCurrentValue(
 	agent: AgentConfigState,
+	options: DiscoveredOptions,
 	fieldName: OptionColumnFieldName,
 ): string | undefined {
 	const raw = agent.frontmatter?.[fieldName];
 	if (raw === undefined || raw === null || Array.isArray(raw)) return undefined;
-	return String(raw);
+	const value = String(raw);
+	if (fieldName === "model") {
+		return resolveModelDisplayName(value, options.models) ?? value;
+	}
+	return value;
 }
 
 export function getOptionColumnSelectedValues(
@@ -117,9 +147,9 @@ export function getOptionColumnSelectedValues(
 		return selectedValues;
 	}
 
-	const currentValue = getOptionColumnCurrentValue(agent, fieldName);
+	const currentValue = getOptionColumnCurrentValue(agent, options, fieldName);
 	if (currentValue === undefined) {
-		return [getOptionColumnDefaultValue(fieldName)];
+		return [getOptionColumnDefaultValue(options, fieldName)];
 	}
 	return [currentValue];
 }
@@ -130,12 +160,8 @@ export function getOptionColumnSelectedValue(
 	fieldName: OptionColumnFieldName,
 	agentName?: string,
 ): string {
-	return getOptionColumnSelectedValues(
-		agent,
-		options,
-		fieldName,
-		agentName,
-	)[0] ?? "";
+	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
+	return selectedValues[0] ?? "";
 }
 
 export function getOptionColumnItems(
@@ -155,6 +181,7 @@ export function getOptionColumnItems(
 		fieldName,
 		agentName,
 	);
+	const selectedValue = selectedValues[0];
 
 	if (isCheckboxOptionColumnField(fieldName)) {
 		const items: string[] = [];
@@ -167,9 +194,27 @@ export function getOptionColumnItems(
 		return items;
 	}
 
-	const currentValue = getOptionColumnCurrentValue(agent, fieldName);
-	if (currentValue !== undefined && !availableItems.includes(currentValue)) {
-		return [currentValue, ...availableItems];
+	if (fieldName === "model") {
+		if (options.modelDiscovery.status === "loading") {
+			if (selectedValue === undefined || availableItems.includes(selectedValue)) {
+				return availableItems;
+			}
+			return [...availableItems, selectedValue];
+		}
+		if (options.modelDiscovery.status === "degraded") {
+			if (selectedValue === undefined || availableItems.includes(selectedValue)) {
+				return availableItems;
+			}
+			return [
+				availableItems[0],
+				selectedValue,
+				...availableItems.slice(1),
+			];
+		}
+	}
+
+	if (selectedValue !== undefined && !availableItems.includes(selectedValue)) {
+		return [selectedValue, ...availableItems];
 	}
 	return availableItems;
 }

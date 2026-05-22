@@ -9,7 +9,7 @@ describe("Keyboard editability mapping", () => {
 	it("uses inline edit path for all inline checkbox/select fields", () => {
 		expect(isInlineEditableField("reasoning_effort")).toBe(true);
 		expect(isInlineEditableField("depth")).toBe(true);
-		expect(isInlineEditableField("model")).toBe(false);
+		expect(isInlineEditableField("model")).toBe(true);
 		expect(isInlineEditableField("tools")).toBe(true);
 		expect(isInlineEditableField("extensions")).toBe(true);
 		expect(isInlineEditableField("can_spawn")).toBe(true);
@@ -20,7 +20,7 @@ describe("Keyboard editability mapping", () => {
 	it("uses full field order indices for inline/non-inline behavior", () => {
 		expect(isInlineEditableField(getFieldName(0))).toBe(true); // tools
 		expect(isInlineEditableField(getFieldName(1))).toBe(true); // extensions
-		expect(isInlineEditableField(getFieldName(2))).toBe(false); // model
+		expect(isInlineEditableField(getFieldName(2))).toBe(true); // model
 		expect(isInlineEditableField(getFieldName(3))).toBe(true); // reasoning_effort
 		expect(isInlineEditableField(getFieldName(4))).toBe(true); // depth
 		expect(isInlineEditableField(getFieldName(5))).toBe(true); // can_spawn
@@ -52,12 +52,12 @@ describe("Keyboard Enter/Space action routing", () => {
 		};
 
 		handleExpandedEnterOrSpace(
-			{ agentIndex: 0, fieldName: getFieldName(2) },
+			{ agentIndex: 0, fieldName: "display_name" },
 			actions,
 		);
 
 		expect(actions.openOverlay).toHaveBeenCalledTimes(1);
-		expect(actions.openOverlay).toHaveBeenCalledWith(0, getFieldName(2));
+		expect(actions.openOverlay).toHaveBeenCalledWith(0, "display_name");
 		expect(actions.selectFocusedOption).not.toHaveBeenCalled();
 	});
 });

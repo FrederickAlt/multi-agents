@@ -23,6 +23,8 @@ import {
 	getOptionColumnSelectedValues,
 	isCheckboxOptionColumnField,
 	isOptionColumnField,
+	MODEL_OPTION_LOADING_ITEM,
+	MODEL_OPTION_DEGRADED_STATUS,
 } from "../state/option-columns.js";
 
 /**
@@ -71,6 +73,7 @@ export function useConfig() {
 
 	const initRun = useRef(false);
 	const rescanRequested = useRef(false);
+	const latestDiscoveredOptions = useRef<DiscoveredOptions | null>(null);
 
 	// Initialize state when discovery completes
 	useEffect(() => {
@@ -80,6 +83,7 @@ export function useConfig() {
 				dispatch({ type: "INIT_ERROR", error });
 			} else {
 				dispatch({ type: "INIT_COMPLETE", agents, options });
+				latestDiscoveredOptions.current = options;
 			}
 		}
 	}, [loading, error, agents, options]);
@@ -99,6 +103,7 @@ export function useConfig() {
 	useEffect(() => {
 		if (initRun.current && rescanRequested.current && !loading && !error) {
 			rescanRequested.current = false;
+			latestDiscoveredOptions.current = options;
 			dispatch({ type: "RESCAN_COMPLETE", agents, options });
 		}
 	}, [loading, error, agents, options]);
@@ -124,6 +129,14 @@ export function useConfig() {
 			}
 		}
 	}, [loading, error, state.agents.length]);
+
+	useEffect(() => {
+		if (!initRun.current || loading || rescanRequested.current) return;
+		if (latestDiscoveredOptions.current === options) return;
+
+		latestDiscoveredOptions.current = options;
+		dispatch({ type: "UPDATE_OPTIONS", options });
+	}, [loading, options]);
 
 	// Focus navigation
 	const focusNextAgent = useCallback(() => {
@@ -329,9 +342,53 @@ export function useConfig() {
 			return;
 		}
 
-		const currentValue = getOptionColumnCurrentValue(agent, fieldName);
-		const nextValue = getOptionColumnSaveValue(fieldName, item);
-		if (currentValue !== undefined && String(currentValue) === String(nextValue)) {
+		if (item === MODEL_OPTION_LOADING_ITEM) {
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: state.focus.agentIndex,
+				status: {
+					type: "error",
+					message: "Model options are still loading.",
+					timestamp: Date.now(),
+				},
+			});
+			return;
+		}
+		if (item === MODEL_OPTION_DEGRADED_STATUS) {
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: state.focus.agentIndex,
+				status: {
+					type: "error",
+					message: "Model discovery unavailable.",
+					timestamp: Date.now(),
+				},
+			});
+			return;
+		}
+
+		const currentRaw = agent.frontmatter?.[fieldName];
+		let nextValue: string | number;
+		if (fieldName === "model") {
+			const canonicalRef = modelDisplayNameToCanonicalRef(item, state.options.models);
+			if (!canonicalRef) {
+				dispatch({
+					type: "SAVE_COMPLETE",
+					agentIndex: state.focus.agentIndex,
+					status: {
+						type: "error",
+						message: `Cannot resolve model "${item}"`,
+						timestamp: Date.now(),
+					},
+				});
+				return;
+			}
+			nextValue = canonicalRef;
+		} else {
+			nextValue = getOptionColumnSaveValue(fieldName, item);
+		}
+
+		if (currentRaw !== undefined && String(currentRaw) === String(nextValue)) {
 			return;
 		}
 

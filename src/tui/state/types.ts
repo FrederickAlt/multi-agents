@@ -33,12 +33,29 @@ export interface OverlayState {
 	wasImplicit: boolean;
 }
 
+export interface ModelDiscoveryState {
+	status: "loading" | "ready" | "degraded";
+	/**
+	 * Human-readable failure text when status is "degraded".
+	 * Empty/undefined for loading/ready states.
+	 */
+	error?: string | null;
+}
+
 export interface DiscoveredOptions {
 	tools: string[];
 	extensions: string[];
 	models: ModelOption[];
-	/** Display name of the runtime default model (first available with auth). */
+	/**
+	 * Display name of the runtime default model (first available with auth).
+	 * Empty while model discovery is pending.
+	 */
 	defaultModel: string;
+	/**
+	 * Model discovery metadata for rendering a loading/degraded option column
+	 * state in the TUI without blocking other fields.
+	 */
+	modelDiscovery: ModelDiscoveryState;
 	reasoningEfforts: string[];
 	depths: number[];
 	canSpawn: string[];
@@ -93,6 +110,7 @@ export type FieldName = (typeof FIELDS_ORDER)[number];
 export const OPTION_COLUMN_FIELDS = [
 	"tools",
 	"extensions",
+	"model",
 	"reasoning_effort",
 	"depth",
 	"can_spawn",
@@ -137,6 +155,10 @@ export type ConfigAction =
 	| {
 			type: "RESCAN_COMPLETE";
 			agents: AgentConfigState[];
+			options: DiscoveredOptions;
+	  }
+	| {
+			type: "UPDATE_OPTIONS";
 			options: DiscoveredOptions;
 	  }
 	| { type: "SCROLL"; direction: "up" | "down" }
