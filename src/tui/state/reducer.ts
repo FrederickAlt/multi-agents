@@ -135,6 +135,47 @@ function getInlineFocusFieldIndex(fieldIndex: number): number | null {
 	return getInlineOptionColumnFieldIndex(focusedFieldName);
 }
 
+function getInlineFieldMovementTarget(
+	fieldIndex: number,
+	direction: "next" | "prev",
+): number {
+	const focusedFieldName = getFieldName(fieldIndex);
+	if (!isOptionColumnField(focusedFieldName)) {
+		return clamp(fieldIndex + (direction === "next" ? 1 : -1), FIELDS_ORDER.length);
+	}
+
+	const inlineIndex = getInlineOptionColumnFieldIndex(focusedFieldName);
+	if (inlineIndex === -1) {
+		return clamp(fieldIndex + (direction === "next" ? 1 : -1), FIELDS_ORDER.length);
+	}
+
+	if (direction === "next") {
+		if (inlineIndex < OPTION_COLUMN_FIELDS.length - 1) {
+			return FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex + 1]);
+		}
+
+		// From the last inline option column, continue to the first non-inline
+		// field after it (or wrap to the first field as a safety fallback).
+		const inlineFieldIndex = FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex]);
+		for (let i = inlineFieldIndex + 1; i < FIELDS_ORDER.length; i++) {
+			const nextField = FIELDS_ORDER[i];
+			if (!isOptionColumnField(nextField)) {
+				return i;
+			}
+		}
+		return 0;
+	}
+
+	if (inlineIndex > 0) {
+		return FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex - 1]);
+	}
+
+	// From the first inline field, move to the final inline field.
+	return FIELDS_ORDER.indexOf(
+		OPTION_COLUMN_FIELDS[OPTION_COLUMN_FIELDS.length - 1],
+	);
+}
+
 function getFocusedOptionItemIndex(
 	agent: AgentConfigState | undefined,
 	options: DiscoveredOptions,
@@ -262,10 +303,11 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		case "FOCUS_FIELD": {
 			const len = FIELDS_ORDER.length;
 			if (len === 0) return state;
-			const delta = action.direction === "next" ? 1 : -1;
-			const fieldIndex = clamp(state.focus.fieldIndex + delta, len);
+			const fieldIndex = getInlineFieldMovementTarget(
+				state.focus.fieldIndex,
+				action.direction,
+			);
 			const agent = state.agents[state.focus.agentIndex];
-			const fieldName = getFieldName(fieldIndex);
 			return {
 				...state,
 				focus: {

@@ -342,6 +342,19 @@ export function useConfig() {
 			return;
 		}
 
+		if (fieldName === "model" && state.options.modelDiscovery.status === "loading") {
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: state.focus.agentIndex,
+				status: {
+					type: "error",
+					message: "Model options are still loading.",
+					timestamp: Date.now(),
+				},
+			});
+			return;
+		}
+
 		if (item === MODEL_OPTION_LOADING_ITEM) {
 			dispatch({
 				type: "SAVE_COMPLETE",

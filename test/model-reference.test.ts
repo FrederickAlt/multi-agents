@@ -420,6 +420,17 @@ describe("modelDisplayNameToCanonicalRef", () => {
 		expect(modelDisplayNameToCanonicalRef("DeepSeek V4", models)).toBe("deepseek/deepseek-v4");
 	});
 
+	it("resolves slash-containing and ambiguous model display names to canonical refs", () => {
+		const slashAndDuplicateModels: ModelOption[] = [
+			{ provider: "acme", modelId: "shared/model", displayName: "Acme Shared", canonicalRef: "shared/model" },
+			{ provider: "other", modelId: "shared/model", displayName: "Other Shared", canonicalRef: "other/shared/model" },
+			{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
+		];
+
+		expect(modelDisplayNameToCanonicalRef("Acme Shared", slashAndDuplicateModels)).toBe("shared/model");
+		expect(modelDisplayNameToCanonicalRef("Other Shared", slashAndDuplicateModels)).toBe("other/shared/model");
+	});
+
 	it("returns undefined for unmatched display name", () => {
 		expect(modelDisplayNameToCanonicalRef("Nonexistent", models)).toBeUndefined();
 	});

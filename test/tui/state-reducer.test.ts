@@ -3,6 +3,7 @@ import { configReducer, createInitialState, resolveCheckboxSelection, computeChe
 import {
 	getOptionColumnItems,
 	getOptionColumnAvailableItems,
+	getOptionColumnSelectedValue,
 	MODEL_OPTION_LOADING_ITEM,
 	MODEL_OPTION_DEGRADED_STATUS,
 } from "../../src/tui/state/option-columns.js";
@@ -677,7 +678,7 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(2);
 	});
 
-	it("FOCUS_FIELD moves left and right through option columns", () => {
+	it("FOCUS_FIELD moves right across rendered option columns", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
@@ -690,9 +691,24 @@ describe("inline Option columns", () => {
 		expect(next.focus.fieldIndex).toBe(4);
 		expect(next.focus.optionItemIndex).toBe(3);
 
-		next = configReducer(next, { type: "FOCUS_FIELD", direction: "prev" });
-		expect(next.focus.fieldIndex).toBe(3);
-		expect(next.focus.optionItemIndex).toBe(1);
+		next = configReducer(next, { type: "FOCUS_FIELD", direction: "next" });
+		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.optionItemIndex).toBe(0);
+	});
+
+	it("FOCUS_FIELD moves left from first inline column to model", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 1 },
+		};
+
+		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
+
+		expect(next.focus.fieldIndex).toBe(2);
+		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
 	it("FOCUS_OPTION_ITEM moves up and down within the focused option column", () => {
@@ -926,6 +942,41 @@ describe("model discovery options", () => {
 		expect(getOptionColumnAvailableItems(options, "model")).toEqual([
 			MODEL_OPTION_DEGRADED_STATUS,
 		]);
+	});
+
+	it("shows degraded marker while keeping fallback models when present", () => {
+		const options = {
+			...makeOptions(),
+			modelDiscovery: { status: "degraded", error: "using builtin fallback" },
+			models: [
+				{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "claude" },
+				{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
+			],
+		};
+
+		expect(getOptionColumnAvailableItems(options, "model")).toEqual([
+			MODEL_OPTION_DEGRADED_STATUS,
+			"Claude",
+			"GPT-5",
+		]);
+	});
+
+	it("keeps loading placeholder visible when an existing model is already set", () => {
+		const options = {
+			...makeOptions(),
+			modelDiscovery: { status: "loading", error: null },
+			models: [],
+			defaultModel: "",
+		};
+		const agent = makeAgent({ frontmatter: { model: "claude", description: "agent" } });
+
+		expect(getOptionColumnItems(agent, options, "model")).toEqual([
+			MODEL_OPTION_LOADING_ITEM,
+			"claude",
+		]);
+		expect(getOptionColumnSelectedValue(agent, options, "model")).toBe(
+			MODEL_OPTION_LOADING_ITEM,
+		);
 	});
 
 	it("keeps row and inline model option focus when model options update", () => {

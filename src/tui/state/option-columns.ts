@@ -61,14 +61,16 @@ export function getOptionColumnAvailableItems(
 			return options.tools;
 		case "extensions":
 			return options.extensions;
-		case "model":
+		case "model": {
+			const modelItems = options.models.map((m) => m.displayName);
 			if (options.modelDiscovery.status === "loading") {
 				return [MODEL_OPTION_LOADING_ITEM];
 			}
-			if (options.modelDiscovery.status === "degraded" && options.models.length === 0) {
-				return [MODEL_OPTION_DEGRADED_STATUS];
+			if (options.modelDiscovery.status === "degraded") {
+				return [MODEL_OPTION_DEGRADED_STATUS, ...modelItems];
 			}
-			return options.models.map((m) => m.displayName);
+			return modelItems;
+		}
 		case "reasoning_effort":
 			return options.reasoningEfforts;
 		case "depth":
@@ -101,7 +103,7 @@ export function getOptionColumnDefaultValue(
 			if (options.modelDiscovery.status === "loading") {
 				return MODEL_OPTION_LOADING_ITEM;
 			}
-			if (options.modelDiscovery.status === "degraded" && options.models.length === 0) {
+			if (options.modelDiscovery.status === "degraded") {
 				return MODEL_OPTION_DEGRADED_STATUS;
 			}
 			return "(none)";
@@ -160,7 +162,12 @@ export function getOptionColumnSelectedValue(
 	fieldName: OptionColumnFieldName,
 	agentName?: string,
 ): string {
-	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
+	const selectedValues = getOptionColumnSelectedValues(
+		agent,
+		options,
+		fieldName,
+		agentName,
+	);
 	return selectedValues[0] ?? "";
 }
 
