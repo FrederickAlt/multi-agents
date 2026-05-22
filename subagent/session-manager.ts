@@ -218,11 +218,23 @@ export class SubagentSessionManager {
 	private completedSessions = new Set<string>();
 	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[] }>();
 	private asyncInFlight = new Set<string>();
+	private _onAsyncAgentEnd: ((id: string) => void) | undefined;
 
 	constructor(
 		private sessionManagerProvider: SessionManagerProvider,
 		private agentSessionFactory: AgentSessionFactory,
 	) {}
+
+	// ---- Async agent end callback ----
+
+	/**
+	 * Register a callback invoked when a session marked async-in-flight
+	 * reaches `agent_end`. Called before the result is stored via
+	 * `storeAsyncResult`.
+	 */
+	setOnAsyncAgentEnd(cb: ((id: string) => void) | undefined): void {
+		this._onAsyncAgentEnd = cb;
+	}
 
 	// ---- Session tracking ----
 
@@ -312,12 +324,16 @@ export class SubagentSessionManager {
 			}
 		}
 
-		// 7. Subscribe to agent_end to update metadata timestamp and mark completion
+		// 7. Subscribe to agent_end to update metadata timestamp and mark completion.
+		//    When the session was spawned asynchronously also notify the callback.
 		const unsubscribe = session.subscribe((event: any) => {
 			if (event.type === "agent_end") {
 				record.updatedAt = new Date().toISOString();
 				metadataStore.upsertRecord(record);
 				this.completedSessions.add(record.id);
+				if (this.asyncInFlight.has(record.id)) {
+					this._onAsyncAgentEnd?.(record.id);
+				}
 			}
 		});
 

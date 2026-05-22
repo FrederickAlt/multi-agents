@@ -23,6 +23,7 @@ import { seedAgentConfig } from "./seeding.js";
 import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { discoverPromptParts } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
+import { AsyncAgentNotifier } from "./async-agent-notifier.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
 import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
@@ -308,7 +309,21 @@ export function configureTaskToolForRuntime(
 				},
 			};
 
-			return controller.waitForAgent(wParams.agent_ids, { timeout: wParams.timeout }, executeContext);
+			const result = await controller.waitForAgent(wParams.agent_ids, { timeout: wParams.timeout }, executeContext);
+
+			// Consume async notifications for completed agents so they are
+			// removed from the turn-boundary notification set.
+			const agents = (result.details as TaskDetails | undefined)?.agents;
+			if (agents) {
+				const consumed = agents
+					.filter((a) => a.status === "completed")
+					.map((a) => a.id);
+				if (consumed.length > 0) {
+					_asyncAgentNotifier.consume(consumed);
+				}
+			}
+
+			return result;
 		},
 		renderCall(args, theme) {
 			const ids = Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : String(args.agent_ids ?? "");
@@ -350,12 +365,18 @@ export function configureTaskToolForRuntime(
 // share the same tracked sessions.
 let _sessionManager: SubagentSessionManager | undefined;
 
+// Module-level notifier singleton — injected at turn boundaries.
+const _asyncAgentNotifier = new AsyncAgentNotifier();
+
 function getOrCreateSessionManager(): SubagentSessionManager {
 	if (!_sessionManager) {
 		_sessionManager = new SubagentSessionManager(
 			new PiSessionManagerProvider(),
 			new PiAgentSessionFactory(),
 		);
+		_sessionManager.setOnAsyncAgentEnd((id) => {
+			_asyncAgentNotifier.markCompleted(id);
+		});
 	}
 	return _sessionManager;
 }
@@ -606,9 +627,29 @@ export default function (pi: ExtensionAPI) {
 		registerTaskTool(pi, mainRuntime);
 	});
 
+	// Inject async-agent completion notifications at turn boundaries.
+	// At each turn_end we check for unconsumed completed async agents and
+	// queue a consolidated [System] notification for delivery at the
+	// start of the next turn via deliverAs: "nextTurn".
+	pi.on("turn_end", async () => {
+		if (!_asyncAgentNotifier.hasUnconsumed()) return;
+		const notification = _asyncAgentNotifier.buildNotification();
+		if (notification) {
+			pi.sendMessage(
+				{
+					customType: "system",
+					content: notification,
+					display: true,
+				},
+				{ deliverAs: "nextTurn" },
+			);
+		}
+	});
+
 	pi.on("session_shutdown", async (event, ctx) => {
 		_sessionManager?.disposeAll();
 		_sessionManager = undefined;
+		_asyncAgentNotifier.consume([..._asyncAgentNotifier.getUnconsumed()]);
 		if (event.reason === "new") {
 			store?.cleanup();
 			store = undefined;

@@ -620,6 +620,81 @@ describe("SubagentSessionManager", () => {
 			expect(results).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 		});
 	});
+
+	// ---- Async agent end callback ----
+
+	describe("onAsyncAgentEnd callback", () => {
+		it("fires when agent_end event occurs on an async-in-flight session", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("async-cb");
+			// Mark as async-in-flight before creating session
+			sm.markAsyncRunning(record.id);
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			// Fire agent_end on the session's subscribe callbacks
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			expect(onEnd).toHaveBeenCalledWith(record.id);
+		});
+
+		it("does NOT fire when session is not async-in-flight", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("blocking-cb");
+			// Session is NOT marked async — this is a blocking agent
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			expect(onEnd).not.toHaveBeenCalled();
+		});
+
+		it("does not fire for non-agent_end events", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("non-end");
+			sm.markAsyncRunning(record.id);
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "token" });
+			}
+
+			expect(onEnd).not.toHaveBeenCalled();
+		});
+
+		it("can clear the callback by setting undefined", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+			sm.setOnAsyncAgentEnd(undefined);
+
+			const record = makeRecord("cleared");
+			sm.markAsyncRunning(record.id);
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			expect(onEnd).not.toHaveBeenCalled();
+		});
+	});
 });
 
 describe("PiAgentSessionFactory", () => {
