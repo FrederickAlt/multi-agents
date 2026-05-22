@@ -23,6 +23,7 @@ import { seedAgentConfig } from "./seeding.js";
 import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { discoverPromptParts } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
+import { AsyncAgentNotifier } from "./async-agent-notifier.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
 import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
@@ -147,10 +148,17 @@ function deactivateTaskTool(targetPi: ExtensionAPI): void {
 	updateActiveTools(targetPi, (activeTools) => activeTools.filter((name) => name !== "Task"));
 }
 
-function activateTaskTool(targetPi: ExtensionAPI): void {
-	updateActiveTools(targetPi, (activeTools) => (
-		activeTools.includes("Task") ? activeTools : [...activeTools, "Task"]
-	));
+function activateTaskTool(targetPi: ExtensionAPI, includeTaskTool: boolean): void {
+	updateActiveTools(targetPi, (activeTools) => {
+		let result = activeTools;
+		if (includeTaskTool && !result.includes("Task")) {
+			result = [...result, "Task"];
+		}
+		if (!result.includes("wait_for_agent")) {
+			result = [...result, "wait_for_agent"];
+		}
+		return result;
+	});
 }
 
 export function configureTaskToolForRuntime(
@@ -165,36 +173,41 @@ export function configureTaskToolForRuntime(
 	// DepthPolicy is the single source of truth.
 	const policy = runtime.depthPolicy;
 	const allowed = discovery.agents.filter(a => checkTaskAllowed(policy, a.name).allowed);
+	const canSpawn = allowed.length > 0;
 
-	// If this runtime previously registered Task, leaving it active would let
-	// the model call a stale tool after the policy has changed. Pi has no
-	// unregisterTool API, so deactivate Task when the current policy exposes no
-	// spawnable targets.
-	if (allowed.length === 0) {
+	if (!canSpawn) {
+		// If this runtime previously registered Task, leaving it active would let
+		// the model call a stale tool after the policy has changed. Pi has no
+		// unregisterTool API, so deactivate Task when the current policy exposes
+		// no spawnable targets.
 		deactivateTaskTool(targetPi);
-		return;
 	}
 
-	const agentNames = allowed.map(a => a.name);
-	const descriptionText = allowed
-		.map(a => `${a.name}: ${a.description}`)
-		.join(". ");
+	if (canSpawn) {
+		const agentNames = allowed.map(a => a.name);
+		const descriptionText = allowed
+			.map(a => `${a.name}: ${a.description}`)
+			.join(". ");
 
-	const params = Type.Object({
-		description: Type.String({ description: "Short 3-5 word description of the task." }),
-		prompt: Type.String({
-			description: "Full task description for the agent to perform autonomously. The agent reports back once.",
-		}),
-		subagent_type: Type.Enum(agentNames, {
-			description: `Which sub-agent to delegate to. ${descriptionText}`,
-		}),
-		resume: Type.Optional(Type.String({
-			description: "Short hex ID of a previous sub-agent to continue.",
-		})),
-		cwd: Type.Optional(Type.String({
-			description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
-		})),
-	});
+		const params = Type.Object({
+			description: Type.String({ description: "Short 3-5 word description of the task." }),
+			prompt: Type.String({
+				description: "Full task description for the agent to perform autonomously. The agent reports back once.",
+			}),
+			subagent_type: Type.Enum(agentNames, {
+				description: `Which sub-agent to delegate to. ${descriptionText}`,
+			}),
+			resume: Type.Optional(Type.String({
+				description: "Short hex ID of a previous sub-agent to continue.",
+			})),
+			cwd: Type.Optional(Type.String({
+				description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
+			})),
+			blocking: Type.Optional(Type.Boolean({
+				default: true,
+				description: "When false, spawns the sub-agent asynchronously and returns immediately. Default true.",
+			})),
+		});
 
 	targetPi.registerTool({
 		name: "Task",
@@ -206,6 +219,7 @@ export function configureTaskToolForRuntime(
 			"Use Task to delegate independent work to a specialized sub-agent.",
 			"Call Task multiple times in the same turn when independent sub-agent tasks can run in parallel.",
 			"Use Task resume with a returned sub-agent ID when follow-up work needs the same transcript.",
+			"Use Task with blocking:false to spawn a sub-agent asynchronously and continue working. Use wait_for_agent later to retrieve output.",
 		],
 		parameters: params,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -241,7 +255,153 @@ export function configureTaskToolForRuntime(
 			return container;
 		},
 	});
-	activateTaskTool(targetPi);
+	}
+	activateTaskTool(targetPi, canSpawn);
+
+	// Register wait_for_agent alongside Task for async retrieval.
+	const waitForAgentParams = Type.Object({
+		agent_ids: Type.Array(Type.String(), {
+			description: "List of short hex IDs of previously spawned sub-agents to wait for. The call returns as soon as any listed running agent finishes.",
+		}),
+		timeout: Type.Optional(Type.Number({
+			default: 5,
+			description: "Minutes to wait before returning a status update. Default 5 minutes.",
+		})),
+		kill_on_timeout: Type.Optional(Type.Boolean({
+			default: false,
+			description: "When true, on timeout sends a soft-kill instruction to each still-running agent to finish within the same timeout duration. Agents that don't finish in that kill window are hard-aborted (transcripts persist for resume).",
+		})),
+	});
+
+	targetPi.registerTool({
+		name: "wait_for_agent",
+		label: "Wait for Agent",
+		description:
+			"Wait for one or more asynchronously spawned sub-agents to finish and return their output. Also retrieves output from finished blocking agents. Returns as soon as any listed agent finishes or timeout expires.",
+		promptSnippet: "Wait for async sub-agent(s) by ID to finish",
+		promptGuidelines: [
+			"Use wait_for_agent to retrieve output from sub-agent(s) spawned with Task blocking:false.",
+			"Provide the agent_ids returned by the async Task calls as a list.",
+			"Pass multiple IDs to wait on several agents at once — returns when any finishes.",
+			"Pass timeout (in minutes, default 5) to bound the wait.",
+		],
+		parameters: waitForAgentParams,
+		async execute(_toolCallId, wParams, _signal, _onUpdate, ctx) {
+			const controller = new TaskController();
+
+			const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
+			const sm = getOrCreateSessionManager();
+
+			const agentDiscoveryAdapter: AgentDiscoveryAdapter = {
+				discover() {
+					const registry = new AgentRegistry();
+					registry.discover();
+					return {
+						agents: registry.agents,
+						diagnostics: registry.diagnostics,
+					};
+				},
+			};
+
+			const executeContext: TaskExecuteContext = {
+				cwd: ctx.cwd,
+				runtime,
+				agentDiscovery: agentDiscoveryAdapter,
+				metadataStore: activeStore,
+				sessionManager: sm,
+				modelResolver: new PiModelResolver(ctx.modelRegistry),
+				fallbackModel: ctx.model,
+				modelRegistry: ctx.modelRegistry,
+				createResourceLoaderFactory: async () => {
+					const loader = new DefaultResourceLoader({ cwd: ctx.cwd, agentDir: getAgentDir() });
+					await loader.reload();
+					return loader;
+				},
+			};
+
+			const result = await controller.waitForAgent(
+				wParams.agent_ids,
+				{ timeout: wParams.timeout, kill_on_timeout: wParams.kill_on_timeout },
+				executeContext,
+			);
+
+			// Consume terminal async notifications so killed/completed agents are removed
+			// from the turn-boundary notification set.
+			const agents = (result.details as TaskDetails | undefined)?.agents;
+			if (agents) {
+				const consumed = agents
+					.filter((a) => a.status === "completed" || a.status === "killed")
+					.map((a) => a.id);
+				if (consumed.length > 0) {
+					_asyncAgentNotifier.consume(consumed);
+				}
+			}
+
+			return result;
+
+		},
+
+		renderCall(args, theme) {
+			const ids = Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : String(args.agent_ids ?? "");
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("wait_for_agent "))}${theme.fg("muted", ids)}`,
+				0,
+				0,
+			);
+		},
+		renderResult(result, _opts, theme) {
+			const details = result.details as TaskDetails | undefined;
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "(no output)";
+			const container = new Container();
+			if (details?.agents && details.agents.length > 1) {
+				container.addChild(
+					new Text(
+						`${theme.fg("toolTitle", theme.bold("wait_for_agent"))}${theme.fg("muted", ` (${details.agents.length} agents)`)}`,
+						0,
+						0,
+					),
+				);
+			} else {
+				container.addChild(
+					new Text(
+						`${theme.fg("toolTitle", theme.bold(details?.displayName ?? "Agent"))}${details?.id ? theme.fg("muted", ` ${details.id}`) : ""}`,
+						0,
+						0,
+					),
+				);
+			}
+			container.addChild(new Spacer(1));
+			container.addChild(new Markdown(text, 0, 0, getMarkdownTheme()));
+			return container;
+		},
+	});
+}
+
+// Module-level session manager singleton so both Task and wait_for_agent
+// share the same tracked sessions.
+let _sessionManager: SubagentSessionManager | undefined;
+
+// Module-level notifier singleton — injected at turn boundaries.
+const _asyncAgentNotifier = new AsyncAgentNotifier();
+
+export const __testing = {
+	asyncAgentNotifier: _asyncAgentNotifier,
+	resetAsyncAgentNotifier(): void {
+		_asyncAgentNotifier.clear();
+	},
+};
+
+function getOrCreateSessionManager(): SubagentSessionManager {
+	if (!_sessionManager) {
+		_sessionManager = new SubagentSessionManager(
+			new PiSessionManagerProvider(),
+			new PiAgentSessionFactory(),
+		);
+		_sessionManager.setOnAsyncAgentEnd((id) => {
+			_asyncAgentNotifier.markCompleted(id);
+		});
+	}
+	return _sessionManager;
 }
 
 let seeded = false;
@@ -256,19 +416,6 @@ export default function (pi: ExtensionAPI) {
 	const mainRuntime: RuntimeContext = {
 		treeDepth: 0,
 		depthPolicy: defaultRootPolicy(),
-	};
-
-	// Create the session manager lazily once the MetadataStore is available.
-	let sessionManager: SubagentSessionManager | undefined;
-
-	const getOrCreateSessionManager = (): SubagentSessionManager => {
-		if (!sessionManager) {
-			sessionManager = new SubagentSessionManager(
-				new PiSessionManagerProvider(),
-				new PiAgentSessionFactory(),
-			);
-		}
-		return sessionManager;
 	};
 
 	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
@@ -454,7 +601,7 @@ export default function (pi: ExtensionAPI) {
 		default: DEFAULT_ROOT_AGENT_NAME,
 	});
 
-	pi.on("input", async (_event, ctx) => {
+	pi.on("input", async (event, ctx) => {
 		const activeStore = store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
 		try {
 			activeStore.load();
@@ -463,6 +610,18 @@ export default function (pi: ExtensionAPI) {
 			showMessage(ctx, formatRootAgentResolutionError(error), "error");
 			return { action: "handled" as const };
 		}
+
+		if (event.source !== "extension" && _asyncAgentNotifier.hasPendingCompletion()) {
+			const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+			if (notification) {
+				return {
+					action: "transform" as const,
+					text: `${notification}\n\n${event.text}`,
+					images: event.images,
+				};
+			}
+		}
+
 		return { action: "continue" as const };
 	});
 
@@ -503,9 +662,27 @@ export default function (pi: ExtensionAPI) {
 		registerTaskTool(pi, mainRuntime);
 	});
 
+	// Inject async-agent completion notifications at turn boundaries.
+	// The notifier owns first-notification and reminder cadence; this hook only
+	// delivers whichever consolidated message is currently due.
+	pi.on("turn_end", () => {
+		const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+		if (notification) {
+			pi.sendMessage(
+				{
+					customType: "system",
+					content: notification,
+					display: true,
+				},
+				{ deliverAs: "nextTurn" },
+			);
+		}
+	});
+
 	pi.on("session_shutdown", async (event, ctx) => {
-		sessionManager?.disposeAll();
-		sessionManager = undefined;
+		_sessionManager?.disposeAll();
+		_sessionManager = undefined;
+		_asyncAgentNotifier.clear();
 		if (event.reason === "new") {
 			store?.cleanup();
 			store = undefined;
@@ -623,6 +800,21 @@ export default function (pi: ExtensionAPI) {
 export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
 export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
+export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opts, context) => {
+	const result = await new TaskController().waitForAgent(agentIds, opts, context);
+	// Consume terminal async notifications so killed/completed agents are removed
+	// from the turn-boundary notification set (mirrors the tool handler).
+	const agents = (result.details as TaskDetails | undefined)?.agents;
+	if (agents) {
+		const consumed = agents
+			.filter((a) => a.status === "completed" || a.status === "killed")
+			.map((a) => a.id);
+		if (consumed.length > 0) {
+			_asyncAgentNotifier.consume(consumed);
+		}
+	}
+	return result;
+};
 
 // Re-export types introduced by task-controller
 export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";

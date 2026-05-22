@@ -16,7 +16,7 @@ import {
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
-import taskExtension, { configureTaskToolForRuntime, filterExtensionsForAgent } from "../subagent/index.js";
+import taskExtension, { __testing, configureTaskToolForRuntime, filterExtensionsForAgent } from "../subagent/index.js";
 import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
 import type { AgentConfig } from "../subagent/agents.js";
 
@@ -38,16 +38,19 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 	const commands = new Map<string, any>();
 	const flags = new Map<string, string | boolean | undefined>();
 	const registeredTools: any[] = [];
+	const sentMessages: Array<{ message: any; options?: any }> = [];
 	let activeTools = [...(options.activeTools ?? ["read", "bash", "edit", "write"])];
 	const pi = {
 		on: (event: string, handler: any) => handlers.set(event, handler),
 		registerTool: (tool: any) => { registeredTools.push(tool); },
 		registerCommand: (name: string, command: any) => commands.set(name, command),
+		sendMessage: (message: any, options?: any) => { sentMessages.push({ message, options }); },
 		registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
 		getFlag: (name: string) => flags.get(name),
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (names: string[]) => { activeTools = [...names]; },
 		_registeredTools: registeredTools,
+		_sentMessages: sentMessages,
 		_getActiveTools: () => [...activeTools],
 	} as any;
 	return { pi, handlers, commands, flags };
@@ -121,6 +124,7 @@ describe("extension loading", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		__testing.resetAsyncAgentNotifier();
 		delete process.env.PI_CODING_AGENT_DIR;
 		delete (globalThis as any).__multi_agents_selected_main_agent;
 		if (tempDir && existsSync(tempDir)) {
@@ -372,10 +376,14 @@ describe("extension loading", () => {
 			systemPromptOptions: { cwd: tempDir },
 		}, { cwd: tempDir, sessionManager });
 
-		// Verify Task was NOT registered (no spawnable agents)
+		// Verify Task was not registered for spawning, but wait_for_agent remains available.
 		const registeredTools = (pi as any)._registeredTools ?? [];
 		const taskTool = registeredTools.find((t: any) => t.name === "Task");
 		expect(taskTool).toBeUndefined();
+		const waitForAgentTool = registeredTools.find((t: any) => t.name === "wait_for_agent");
+		expect(waitForAgentTool).toBeDefined();
+		expect((pi as any)._getActiveTools()).not.toContain("Task");
+		expect((pi as any)._getActiveTools()).toContain("wait_for_agent");
 	});
 
 	it("hides Task when the resolved Root agent has empty can_spawn", async () => {
@@ -394,6 +402,10 @@ describe("extension loading", () => {
 		const registeredTools = (pi as any)._registeredTools ?? [];
 		const taskTool = registeredTools.find((t: any) => t.name === "Task");
 		expect(taskTool).toBeUndefined();
+		const waitForAgentTool = registeredTools.find((t: any) => t.name === "wait_for_agent");
+		expect(waitForAgentTool).toBeDefined();
+		expect((pi as any)._getActiveTools()).not.toContain("Task");
+		expect((pi as any)._getActiveTools()).toContain("wait_for_agent");
 	});
 
 	it("registers Task when the resolved Root agent has spawnable targets", async () => {
@@ -520,6 +532,48 @@ describe("extension loading", () => {
 		expect(taskTool).toBeDefined();
 		const enumValues: string[] = taskTool?.parameters?.properties?.subagent_type?.enum ?? [];
 		expect(enumValues).toEqual(["project-child"]);
+	});
+
+	describe("async notification boundaries", () => {
+		it("batches a pending async completion notification with user input", async () => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+			__testing.asyncAgentNotifier.markCompleted("agent-a");
+
+			const result = await handlers.get("input")(
+				{ type: "input", text: "continue with my request", source: "interactive" },
+				{ cwd: tempDir, sessionManager: makeSessionManager(tempDir, "batch-session"), ui: { notify: () => {} } },
+			);
+
+			expect(result).toEqual(expect.objectContaining({ action: "transform" }));
+			expect(result.text).toContain("[System]");
+			expect(result.text).toContain("agent-a");
+			expect(result.text).toContain("continue with my request");
+			expect((pi as any)._sentMessages).toEqual([]);
+		});
+
+		it("emits reminders at the extension turn boundary without duplicate spam", () => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+			__testing.asyncAgentNotifier.markCompleted("agent-a");
+			__testing.asyncAgentNotifier.markCompleted("agent-b");
+
+			const turnEnd = handlers.get("turn_end");
+			turnEnd();
+			expect((pi as any)._sentMessages).toHaveLength(1);
+			expect((pi as any)._sentMessages[0].message.content).toContain("agent-a");
+			expect((pi as any)._sentMessages[0].message.content).toContain("agent-b");
+			expect((pi as any)._sentMessages[0].options).toEqual({ deliverAs: "nextTurn" });
+
+			for (let i = 0; i < 4; i++) turnEnd();
+			expect((pi as any)._sentMessages).toHaveLength(1);
+
+			turnEnd();
+			expect((pi as any)._sentMessages).toHaveLength(2);
+			expect((pi as any)._sentMessages[1].message.content).toContain("Reminder");
+			expect((pi as any)._sentMessages[1].message.content).toContain("agent-a");
+			expect((pi as any)._sentMessages[1].message.content).toContain("agent-b");
+		});
 	});
 
 	it("filters this extension from sub-agent loaders even when loaded through a symlink", () => {
