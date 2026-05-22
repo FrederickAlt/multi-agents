@@ -1082,6 +1082,29 @@ describe("TaskController.execute", () => {
 		expect(text).not.toContain("partial output");
 	});
 
+	// ---- Shared outcome-agnostic extraction (async empty error fallback) ----
+
+	it("returns generic fallback via waitForAgent when async crash leaves no transcript and error is empty string", async () => {
+		mockSession.messages = [];
+		// Empty error message — extractor falls through to 'none'
+		mockSession.prompt = vi.fn().mockRejectedValue("");
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent(agentId, makeContext());
+
+		expect(result.details.error).toBe("");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("without producing any output");
+	});
+
 	// ---- Consistent behavior between blocking and async ----
 
 	it("produces same output structure for blocking and async crash with partial text", async () => {

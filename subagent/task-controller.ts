@@ -698,7 +698,7 @@ export class TaskController {
 			};
 		}
 
-		if (asyncResult.error) {
+		if (asyncResult.error !== undefined) {
 			const hasPartialOutput = asyncResult.output && asyncResult.output.length > 0;
 			// When extractOutput returns the error as diagnostic text,
 			// output equals error — don't duplicate them in the display.
@@ -706,7 +706,7 @@ export class TaskController {
 			const crashNote = isUniqueOutput ? ' crashed but produced partial output' : ' crashed';
 			const bodyText = isUniqueOutput
 				? `${asyncResult.error}\n\n${asyncResult.output}`
-				: asyncResult.error;
+				: asyncResult.error || 'The sub-agent stopped without producing any output.';
 			return {
 				content: [
 					{
