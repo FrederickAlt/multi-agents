@@ -711,6 +711,21 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(1);
 	});
 
+	it("FOCUS_FIELD moves left from reasoning_effort to extensions", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
+		};
+
+		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
+
+		expect(next.focus.fieldIndex).toBe(1);
+		expect(next.focus.optionItemIndex).toBe(0);
+	});
+
 	it("FOCUS_FIELD moves left from can_spawn to model", () => {
 		const state: ConfigState = {
 			...createInitialState(),
@@ -723,6 +738,21 @@ describe("inline Option columns", () => {
 		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
 
 		expect(next.focus.fieldIndex).toBe(4);
+		expect(next.focus.optionItemIndex).toBe(0);
+	});
+
+	it("FOCUS_FIELD moves right from model to can_spawn", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 4, optionItemIndex: 0 },
+		};
+
+		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
+
+		expect(next.focus.fieldIndex).toBe(5);
 		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
@@ -977,6 +1007,25 @@ describe("model discovery options", () => {
 		]);
 	});
 
+	it("keeps degraded marker pinned and inserts a stale model after it", () => {
+		const options = {
+			...makeOptions(),
+			modelDiscovery: { status: "degraded", error: "using builtin fallback" },
+			models: [
+				{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "claude" },
+				{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
+			],
+		};
+		const agent = makeAgent({ frontmatter: { model: "legacy-model", description: "agent" } });
+
+		expect(getOptionColumnItems(agent, options, "model")).toEqual([
+			MODEL_OPTION_DEGRADED_STATUS,
+			"legacy-model",
+			"Claude",
+			"GPT-5",
+		]);
+	});
+
 	it("keeps loading placeholder visible when an existing model is already set", () => {
 		const options = {
 			...makeOptions(),
@@ -1042,7 +1091,11 @@ describe("model discovery options", () => {
 			options: baseline,
 		});
 		state = configReducer(state, { type: "EXPAND" });
-		state = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" }); // model
+		state = {
+			...state,
+			focus: { ...state.focus, fieldIndex: 4, optionItemIndex: 0 },
+			expandedAgentIndex: 0,
+		};
 		const failed = configReducer(state, {
 			type: "UPDATE_OPTIONS",
 			options: {
@@ -1055,7 +1108,7 @@ describe("model discovery options", () => {
 
 		expect(failed.focus.agentIndex).toBe(0);
 		expect(failed.focus.fieldIndex).toBe(4);
-		expect(failed.focus.optionItemIndex).toBe(0);
+		expect(failed.focus.optionItemIndex).toBe(1);
 		expect(failed.options.modelDiscovery.status).toBe("degraded");
 	});
 

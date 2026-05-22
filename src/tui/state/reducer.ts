@@ -170,10 +170,8 @@ function getInlineFieldMovementTarget(
 		return FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex - 1]);
 	}
 
-	// From the first inline field, move to the final inline field.
-	return FIELDS_ORDER.indexOf(
-		OPTION_COLUMN_FIELDS[OPTION_COLUMN_FIELDS.length - 1],
-	);
+	const inlineFieldIndex = FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex]);
+	return inlineFieldIndex > 0 ? inlineFieldIndex - 1 : 0;
 }
 
 function getFocusedOptionItemIndex(
