@@ -176,3 +176,25 @@ describe("Keyboard input dispatch for inline option filtering", () => {
 		expect(exit).not.toHaveBeenCalled();
 	});
 });
+
+describe("Keyboard input dispatch for expanded non-option fields", () => {
+	it.each(["h", "j", "k", "l"]) (
+		"routes typed %s to field navigation in expanded non-option mode",
+		(input) => {
+			const actions = makeActions();
+			const exit = vi.fn();
+			const state = makeState({
+				fieldName: "description",
+				optionColumnFilter: "filter",
+			});
+			handleKeyboardInput(input, {}, state, actions, exit);
+
+			expect(actions.setOptionColumnFilter).not.toHaveBeenCalled();
+			expect(actions.focusPrevField).toHaveBeenCalledTimes(input === "h" || input === "k" ? 1 : 0);
+			expect(actions.focusNextField).toHaveBeenCalledTimes(input === "j" || input === "l" ? 1 : 0);
+			expect(actions.focusPrevOptionItem).not.toHaveBeenCalled();
+			expect(actions.focusNextOptionItem).not.toHaveBeenCalled();
+			expect(exit).not.toHaveBeenCalled();
+		},
+	);
+});
