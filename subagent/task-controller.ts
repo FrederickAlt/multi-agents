@@ -65,6 +65,20 @@ export interface SessionAdapter {
 	): Promise<any>;
 	withRecordRunLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
 	disposeSession(id: string): void;
+	/**
+	 * Wait for a tracked session to reach `agent_end`, resolving when the
+	 * agent finishes. Resolves immediately if the session already ended
+	 * or is no longer tracked.
+	 */
+	waitForSessionEnd(id: string): Promise<void>;
+	/** Store the output/error result of a completed async session. */
+	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[] }): void;
+	/** Retrieve a previously stored async result. */
+	getAsyncResult(id: string): { output: string; error?: string; warnings: string[] } | undefined;
+	/** Mark a session as having an in-flight async prompt. */
+	markAsyncRunning(id: string): void;
+	/** Check whether a session has an in-flight async prompt. */
+	isAsyncRunning(id: string): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +92,8 @@ export interface TaskExecuteParams {
 	subagent_type: string;
 	resume?: string;
 	cwd?: string;
+	/** When false, spawns the sub-agent and returns immediately with agent details. Default true. */
+	blocking?: boolean;
 }
 
 /** Typed subset of the parent runtime state needed by the TaskController. */
@@ -405,6 +421,59 @@ export class TaskController {
 					};
 				}
 
+				const blocking = params.blocking !== false;
+
+				if (!blocking) {
+					// Async path: start prompt in background, return immediately.
+					// The session stays tracked; `wait_for_agent` retrieves output later.
+					sessionManager.markAsyncRunning(record!.id);
+
+					const abort = () => {
+						void session?.abort();
+					};
+					if (context.signal?.aborted) abort();
+					else context.signal?.addEventListener("abort", abort, { once: true });
+
+					const finish = (resolved: boolean) => {
+						context.signal?.removeEventListener("abort", abort);
+						sessionManager.clearAsyncRunning(record!.id);
+						try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
+						try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
+						if (resolved) {
+							const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
+							sessionManager.storeAsyncResult(record!.id, { output, warnings });
+						}
+					};
+
+					session.prompt(params.prompt).then(
+						() => finish(true),
+						(err: unknown) => {
+							const message = err instanceof Error ? err.message : String(err);
+							sessionManager.storeAsyncResult(record!.id, { output: "", error: message, warnings });
+							finish(false);
+						},
+					);
+
+					return {
+						content: [
+							{
+								type: "text",
+								text: `${record!.displayName} (${record!.id}) started. Use wait_for_agent with agent_id "${record!.id}" to retrieve output.`,
+							},
+						],
+						details: {
+							id: record!.id,
+							displayName: record!.displayName,
+							agentType: record!.agentType,
+							description: params.description,
+							resumed: Boolean(params.resume),
+							sessionFile: record!.sessionFile,
+							warnings,
+						},
+					};
+				}
+
+				// Blocking path (existing behaviour)
 				const emit = (text: string) => {
 					onUpdate?.({
 						content: [{ type: "text", text }],
@@ -428,6 +497,22 @@ export class TaskController {
 
 				try {
 					emit(`${record!.displayName} (${record!.id}) running...`);
+					// Guard against double-prompt when async is already in-flight
+					if (sessionManager.isAsyncRunning(record!.id)) {
+						return {
+							content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is still running asynchronously. Use wait_for_agent with agent_id "${record!.id}" to retrieve output.` }],
+							details: {
+								id: record!.id,
+								displayName: record!.displayName,
+								agentType: record!.agentType,
+								description: params.description,
+								resumed: Boolean(params.resume),
+								sessionFile: record!.sessionFile,
+								warnings,
+								error: "async_in_flight",
+							},
+						};
+					}
 					await session.prompt(params.prompt);
 					const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
 					const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
@@ -500,5 +585,115 @@ export class TaskController {
 				},
 			};
 		}
+	}
+
+	/**
+	 * Wait for a previously spawned async sub-agent to finish and return its output.
+	 *
+	 * Looks up the record by ID, waits for the session to reach `agent_end`,
+	 * then returns the captured output (or error) from the async execution.
+	 * Returns an error result if the record cannot be found.
+	 */
+	async waitForAgent(
+		agentId: string,
+		context: TaskExecuteContext,
+	): Promise<TaskResult> {
+		const { metadataStore, sessionManager } = context;
+		const warnings: string[] = [];
+
+		// Look up the record
+		let record: SubagentRecord | undefined;
+		try {
+			record = metadataStore.findRecord(agentId);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return {
+				content: [{ type: "text", text: `wait_for_agent failed while reading metadata: ${message}` }],
+				details: { warnings, error: message },
+			};
+		}
+
+		if (!record) {
+			return {
+				content: [{ type: "text", text: `Unknown agent ID "${agentId}".` }],
+				details: { warnings, error: "unknown_agent_id" },
+			};
+		}
+
+		// Wait for the session to complete
+		try {
+			await sessionManager.waitForSessionEnd(agentId);
+		} catch {
+			// Session may have been disposed; try to extract whatever is available
+		}
+
+		// Re-read record to pick up updated session file
+		try {
+			record = metadataStore.findRecord(agentId) ?? record;
+		} catch { /* use current record */ }
+
+		// Retrieve the captured async output
+		const asyncResult = sessionManager.getAsyncResult(agentId);
+		const displayName = record.displayName || record.agentType;
+
+		if (!asyncResult) {
+			// Agent ended before we could store the result (e.g. resumed/blocking agent
+			// for which no async result was captured). Return a placeholder.
+			return {
+				content: [
+					{
+						type: "text",
+						text: `${displayName} (${agentId}) has completed. Use resume: "${agentId}" to read full output or continue this agent.`,
+					},
+				],
+				details: {
+					id: agentId,
+					displayName: record.displayName,
+					agentType: record.agentType,
+					sessionFile: record.sessionFile,
+					warnings,
+				},
+			};
+		}
+
+		if (asyncResult.error) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `${displayName} (${agentId}) failed. Use resume: "${agentId}" to retry or continue this agent.\n\n${asyncResult.error}`,
+					},
+				],
+				details: {
+					id: agentId,
+					displayName: record.displayName,
+					agentType: record.agentType,
+					description: record.displayName,
+					sessionFile: record.sessionFile,
+					warnings: asyncResult.warnings,
+					error: asyncResult.error,
+				},
+			};
+		}
+
+		const output = asyncResult.output;
+		const header = `${displayName} (${agentId}) completed. Use resume: "${agentId}" to continue this agent.`;
+		return {
+			content: [
+				{
+					type: "text",
+					text: `${header}\n\n${output || "(no output)"}`,
+				},
+			],
+			details: {
+				id: agentId,
+				displayName: record.displayName,
+				agentType: record.agentType,
+				description: record.displayName,
+				sessionFile: record.sessionFile,
+				warnings: asyncResult.warnings,
+				output,
+			},
+		};
 	}
 }

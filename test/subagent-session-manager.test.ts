@@ -385,6 +385,89 @@ describe("SubagentSessionManager", () => {
 		});
 	});
 
+	// ---- Async completion ----
+
+	describe("waitForSessionEnd", () => {
+		it("resolves immediately when the session is not tracked", async () => {
+			const sm = createManager();
+			await expect(sm.waitForSessionEnd("nope")).resolves.toBeUndefined();
+		});
+
+		it("resolves when agent_end event fires on tracked session", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			sm.trackSession("abc", session);
+
+			// Fire agent_end after a tick
+			setImmediate(() => {
+				for (const cb of session.callbacks) {
+					cb({ type: "agent_end" });
+				}
+			});
+
+			await expect(sm.waitForSessionEnd("abc")).resolves.toBeUndefined();
+		});
+
+		it("unsubscribes after agent_end fires", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			sm.trackSession("abc", session);
+
+			setImmediate(() => {
+				for (const cb of session.callbacks) {
+					cb({ type: "agent_end" });
+				}
+			});
+
+			await sm.waitForSessionEnd("abc");
+
+			// The unsubscribe returned by subscribe should have been called
+			expect(session.unsubscribe).toHaveBeenCalled();
+		});
+
+		it("only resolves on agent_end, not other events", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			sm.trackSession("abc", session);
+
+			let resolved = false;
+			const promise = sm.waitForSessionEnd("abc").then(() => { resolved = true; });
+
+			// Fire a non-agent_end event — should not resolve
+			for (const cb of session.callbacks) {
+				cb({ type: "token" });
+			}
+
+			await new Promise((r) => setTimeout(r, 10));
+			expect(resolved).toBe(false);
+
+			// Fire agent_end — should resolve
+			for (const cb of session.callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			await expect(promise).resolves.toBeUndefined();
+		});
+
+		it("resolves immediately when agent_end already fired (no race)", async () => {
+			const sm = createManager();
+			const record = makeRecord("race-test");
+
+			// Create session through getOrCreateSession so the agent_end
+			// subscription (which updates completedSessions) is set up.
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			// Fire agent_end before calling waitForSessionEnd
+			// The callbacks were stored by makeMockSession's subscribe impl
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			// Should resolve immediately — completedSessions tracks it
+			await expect(sm.waitForSessionEnd(record.id)).resolves.toBeUndefined();
+		});
+	});
+
 	describe("disposeAll", () => {
 		it("disposes all tracked sessions and clears the map", () => {
 			const sm = createManager();

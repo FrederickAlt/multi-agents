@@ -144,13 +144,16 @@ function updateActiveTools(
 }
 
 function deactivateTaskTool(targetPi: ExtensionAPI): void {
-	updateActiveTools(targetPi, (activeTools) => activeTools.filter((name) => name !== "Task"));
+	updateActiveTools(targetPi, (activeTools) => activeTools.filter((name) => name !== "Task" && name !== "wait_for_agent"));
 }
 
 function activateTaskTool(targetPi: ExtensionAPI): void {
-	updateActiveTools(targetPi, (activeTools) => (
-		activeTools.includes("Task") ? activeTools : [...activeTools, "Task"]
-	));
+	updateActiveTools(targetPi, (activeTools) => {
+		let result = activeTools;
+		if (!result.includes("Task")) result = [...result, "Task"];
+		if (!result.includes("wait_for_agent")) result = [...result, "wait_for_agent"];
+		return result;
+	});
 }
 
 export function configureTaskToolForRuntime(
@@ -194,6 +197,10 @@ export function configureTaskToolForRuntime(
 		cwd: Type.Optional(Type.String({
 			description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
 		})),
+		blocking: Type.Optional(Type.Boolean({
+			default: true,
+			description: "When false, spawns the sub-agent asynchronously and returns immediately. Default true.",
+		})),
 	});
 
 	targetPi.registerTool({
@@ -206,6 +213,7 @@ export function configureTaskToolForRuntime(
 			"Use Task to delegate independent work to a specialized sub-agent.",
 			"Call Task multiple times in the same turn when independent sub-agent tasks can run in parallel.",
 			"Use Task resume with a returned sub-agent ID when follow-up work needs the same transcript.",
+			"Use Task with blocking:false to spawn a sub-agent asynchronously and continue working. Use wait_for_agent later to retrieve output.",
 		],
 		parameters: params,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -242,6 +250,97 @@ export function configureTaskToolForRuntime(
 		},
 	});
 	activateTaskTool(targetPi);
+
+	// Register wait_for_agent alongside Task for async retrieval.
+	const waitForAgentParams = Type.Object({
+		agent_id: Type.String({
+			description: "Short hex ID of a previously spawned async sub-agent to wait for.",
+		}),
+	});
+
+	targetPi.registerTool({
+		name: "wait_for_agent",
+		label: "Wait for Agent",
+		description:
+			"Wait for an asynchronously spawned sub-agent to finish and return its output. Use after Task with blocking: false.",
+		promptSnippet: "Wait for async sub-agent by ID to finish",
+		promptGuidelines: [
+			"Use wait_for_agent to retrieve output from a sub-agent spawned with Task blocking:false.",
+			"Provide the agent_id returned by the async Task call.",
+		],
+		parameters: waitForAgentParams,
+		async execute(_toolCallId, wParams, _signal, _onUpdate, ctx) {
+			const controller = new TaskController();
+
+			const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
+			const sm = getOrCreateSessionManager();
+
+			const agentDiscoveryAdapter: AgentDiscoveryAdapter = {
+				discover() {
+					const registry = new AgentRegistry();
+					registry.discover();
+					return {
+						agents: registry.agents,
+						diagnostics: registry.diagnostics,
+					};
+				},
+			};
+
+			const executeContext: TaskExecuteContext = {
+				cwd: ctx.cwd,
+				runtime,
+				agentDiscovery: agentDiscoveryAdapter,
+				metadataStore: activeStore,
+				sessionManager: sm,
+				modelResolver: new PiModelResolver(ctx.modelRegistry),
+				fallbackModel: ctx.model,
+				modelRegistry: ctx.modelRegistry,
+				createResourceLoaderFactory: async () => {
+					const loader = new DefaultResourceLoader({ cwd: ctx.cwd, agentDir: getAgentDir() });
+					await loader.reload();
+					return loader;
+				},
+			};
+
+			return controller.waitForAgent(wParams.agent_id, executeContext);
+		},
+		renderCall(args, theme) {
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("wait_for_agent "))}${theme.fg("muted", args.agent_id)}`,
+				0,
+				0,
+			);
+		},
+		renderResult(result, _opts, theme) {
+			const details = result.details as TaskDetails | undefined;
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "(no output)";
+			const container = new Container();
+			container.addChild(
+				new Text(
+					`${theme.fg("toolTitle", theme.bold(details?.displayName ?? "Agent"))}${details?.id ? theme.fg("muted", ` ${details.id}`) : ""}`,
+					0,
+					0,
+				),
+			);
+			container.addChild(new Spacer(1));
+			container.addChild(new Markdown(text, 0, 0, getMarkdownTheme()));
+			return container;
+		},
+	});
+}
+
+// Module-level session manager singleton so both Task and wait_for_agent
+// share the same tracked sessions.
+let _sessionManager: SubagentSessionManager | undefined;
+
+function getOrCreateSessionManager(): SubagentSessionManager {
+	if (!_sessionManager) {
+		_sessionManager = new SubagentSessionManager(
+			new PiSessionManagerProvider(),
+			new PiAgentSessionFactory(),
+		);
+	}
+	return _sessionManager;
 }
 
 let seeded = false;
@@ -256,19 +355,6 @@ export default function (pi: ExtensionAPI) {
 	const mainRuntime: RuntimeContext = {
 		treeDepth: 0,
 		depthPolicy: defaultRootPolicy(),
-	};
-
-	// Create the session manager lazily once the MetadataStore is available.
-	let sessionManager: SubagentSessionManager | undefined;
-
-	const getOrCreateSessionManager = (): SubagentSessionManager => {
-		if (!sessionManager) {
-			sessionManager = new SubagentSessionManager(
-				new PiSessionManagerProvider(),
-				new PiAgentSessionFactory(),
-			);
-		}
-		return sessionManager;
 	};
 
 	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
@@ -504,8 +590,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		sessionManager?.disposeAll();
-		sessionManager = undefined;
+		_sessionManager?.disposeAll();
+		_sessionManager = undefined;
 		if (event.reason === "new") {
 			store?.cleanup();
 			store = undefined;
@@ -623,6 +709,8 @@ export default function (pi: ExtensionAPI) {
 export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
 export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
+export const waitForAgent: TaskController["waitForAgent"] = (agentId, context) =>
+	new TaskController().waitForAgent(agentId, context);
 
 // Re-export types introduced by task-controller
 export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";

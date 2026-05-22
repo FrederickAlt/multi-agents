@@ -334,6 +334,12 @@ describe("TaskController.execute", () => {
 					sessionManager.withRecordRunLock(id, fn),
 			),
 			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
+			waitForSessionEnd: vi.fn((id: string) => sessionManager.waitForSessionEnd(id)),
+			storeAsyncResult: vi.fn((id: string, result: any) => sessionManager.storeAsyncResult(id, result)),
+			getAsyncResult: vi.fn((id: string) => sessionManager.getAsyncResult(id)),
+			markAsyncRunning: vi.fn((id: string) => sessionManager.markAsyncRunning(id)),
+			clearAsyncRunning: vi.fn((id: string) => sessionManager.clearAsyncRunning(id)),
+			isAsyncRunning: vi.fn((id: string) => sessionManager.isAsyncRunning(id)),
 		};
 
 		controller = new TaskController();
@@ -713,5 +719,175 @@ describe("TaskController.execute", () => {
 		);
 
 		expect(result).toBeDefined();
+	});
+
+	// ---- Async execution (blocking: false) ----
+
+	it("returns immediately with agent details when blocking is false", async () => {
+		const result = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.id).toMatch(/^[0-9a-f]{8}$/);
+		expect(result.details.displayName).toContain("explorer");
+		expect(result.details.agentType).toBe("explorer");
+		// Should return immediately — not waiting for the prompt to finish
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("started");
+		expect(text).not.toContain("completed");
+	});
+
+	it("does not dispose session when returning from async spawn", async () => {
+		// Make prompt never resolve so the async cleanup doesn't fire
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+
+		// Session should NOT be disposed immediately for async agents
+		expect(disposeSpy).not.toHaveBeenCalled();
+	});
+
+	it("default blocking (undefined) preserves existing blocking behaviour", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "done" }] },
+		];
+
+		const result = await controller.execute(
+			makeParams(),
+			makeContext(),
+		);
+
+		expect(result.details.error).toBeUndefined();
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("completed");
+		expect(text).not.toContain("started");
+	});
+
+	it("blocking: true preserves existing behaviour", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "done" }] },
+		];
+
+		const result = await controller.execute(
+			makeParams({ blocking: true }),
+			makeContext(),
+		);
+
+		expect(result.details.error).toBeUndefined();
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("completed");
+	});
+
+	// ---- waitForAgent ----
+
+	it("returns error for unknown agent ID", async () => {
+		const result = await controller.waitForAgent(
+			"deadbeef",
+			makeContext(),
+		);
+
+		expect(result.details.error).toBe("unknown_agent_id");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Unknown agent ID");
+	});
+
+	it("waits for session end and returns structured result for known agent", async () => {
+		// Set mock messages so the async cleanup handler captures real output
+		mockSession.messages = [
+			{ role: "user", content: "Do something" },
+			{ role: "assistant", content: [{ type: "text", text: "async result output" }] },
+		];
+
+		// First spawn an async agent
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Allow the async cleanup microtask to run (prompt resolves immediately)
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Verify the session was already disposed by the async cleanup
+		expect(sessionManager.hasOpenSession(agentId)).toBe(false);
+
+		// Wait for the agent
+		const result = await controller.waitForAgent(agentId, makeContext());
+
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.id).toBe(agentId);
+		expect(result.details.displayName).toContain("explorer");
+		expect(result.details.output).toBe("async result output");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("completed");
+		expect(text).toContain("async result output");
+		expect(text).toContain("Use resume:");
+	});
+
+	it("returns error result when async agent failed", async () => {
+		// Make prompt reject so the async error path fires
+		mockSession.prompt = vi.fn().mockRejectedValue(new Error("async crash"));
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent(agentId, makeContext());
+
+		expect(result.details.error).toBe("async crash");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("failed");
+		expect(text).toContain("async crash");
+	});
+
+	// ---- In-flight guard ----
+
+	it("blocks blocking call when async is already in-flight on same record", async () => {
+		// Make prompt never resolve so the async stays in-flight
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Try to start a blocking call on the same agent via resume
+		const result = await controller.execute(
+			makeParams({ blocking: true, resume: agentId, subagent_type: "explorer" }),
+			makeContext(),
+		);
+
+		expect(result.details.error).toBe("async_in_flight");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("still running asynchronously");
+	});
+
+	// ---- Abort handling ----
+
+	it("aborts background async session when parent signal fires", async () => {
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+		const ac = new AbortController();
+
+		await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext({ signal: ac.signal }),
+		);
+
+		expect(mockSession.abort).not.toHaveBeenCalled();
+
+		// Fire abort signal — should abort the background session
+		ac.abort();
+
+		expect(mockSession.abort).toHaveBeenCalled();
 	});
 });

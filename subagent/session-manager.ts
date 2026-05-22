@@ -215,6 +215,9 @@ export interface SessionSetupContext {
 export class SubagentSessionManager {
 	private openSessions = new Map<string, AgentSession>();
 	private runLocks = new Map<string, Promise<void>>();
+	private completedSessions = new Set<string>();
+	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[] }>();
+	private asyncInFlight = new Set<string>();
 
 	constructor(
 		private sessionManagerProvider: SessionManagerProvider,
@@ -309,11 +312,12 @@ export class SubagentSessionManager {
 			}
 		}
 
-		// 7. Subscribe to agent_end to update metadata timestamp
+		// 7. Subscribe to agent_end to update metadata timestamp and mark completion
 		const unsubscribe = session.subscribe((event: any) => {
 			if (event.type === "agent_end") {
 				record.updatedAt = new Date().toISOString();
 				metadataStore.upsertRecord(record);
+				this.completedSessions.add(record.id);
 			}
 		});
 
@@ -339,6 +343,8 @@ export class SubagentSessionManager {
 			session.dispose();
 			this.openSessions.delete(id);
 		}
+		this.completedSessions.delete(id);
+		this.asyncInFlight.delete(id);
 	}
 
 	/**
@@ -355,6 +361,56 @@ export class SubagentSessionManager {
 			}
 		}
 		this.openSessions.clear();
+		this.completedSessions.clear();
+		this.asyncResults.clear();
+		this.asyncInFlight.clear();
+	}
+
+	// ---- Async completion ----
+
+	/**
+	 * Wait for a tracked session to reach `agent_end`.
+	 * Resolves immediately if the session already ended or is no longer tracked.
+	 */
+	async waitForSessionEnd(id: string): Promise<void> {
+		if (this.completedSessions.has(id)) return;
+
+		const session = this.openSessions.get(id);
+		if (!session) return;
+
+		return new Promise<void>((resolve) => {
+			const unsubscribe = session.subscribe((event: any) => {
+				if (event.type === "agent_end") {
+					unsubscribe();
+					resolve();
+				}
+			});
+		});
+	}
+
+	/** Store the output/error of a completed async sub-agent session. */
+	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[] }): void {
+		this.asyncResults.set(id, result);
+	}
+
+	/** Retrieve the stored output/error from a completed async sub-agent. */
+	getAsyncResult(id: string): { output: string; error?: string; warnings: string[] } | undefined {
+		return this.asyncResults.get(id);
+	}
+
+	/** Mark a session ID as having an in-flight async prompt. */
+	markAsyncRunning(id: string): void {
+		this.asyncInFlight.add(id);
+	}
+
+	/** Clear the in-flight marker for a session ID. */
+	clearAsyncRunning(id: string): void {
+		this.asyncInFlight.delete(id);
+	}
+
+	/** Check whether a session has an in-flight async prompt. */
+	isAsyncRunning(id: string): boolean {
+		return this.asyncInFlight.has(id);
 	}
 
 	// ---- Run serialization ----
