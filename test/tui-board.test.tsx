@@ -44,6 +44,7 @@ function state(overrides: Partial<ConfigState> = {}): ConfigState {
 		statuses: new Map(),
 		scrollOffset: 0,
 		optionColumnScrollOffset: 0,
+		optionColumnFilter: "",
 		globalError: null,
 		...overrides,
 	};
@@ -280,6 +281,59 @@ describe("Board", () => {
 
 		expect(text).toContain("8");
 		expect(text).not.toMatch(/(?:^|\s)0(?:\s|$)/);
+	});
+
+	it("shows filter bar only for focused option columns with active filter", () => {
+		const filteredFocused = OptionColumn({
+			fieldName: "depth",
+			items: ["low", "medium", "high", "maximum"],
+			selectedValues: ["low"],
+			focusedItemIndex: 0,
+			isFocused: true,
+			filterText: "hi",
+		}) as React.ReactElement;
+		const filteredText = collectText(filteredFocused);
+		expect(filteredText).toContain("filter: hi");
+
+		const filteredUnfocused = OptionColumn({
+			fieldName: "depth",
+			items: ["low", "medium", "high", "maximum"],
+			selectedValues: ["low"],
+			focusedItemIndex: 0,
+			isFocused: false,
+			filterText: "hi",
+		}) as React.ReactElement;
+		expect(collectText(filteredUnfocused)).not.toContain("filter:");
+
+		const emptyFilter = OptionColumn({
+			fieldName: "depth",
+			items: ["low", "medium", "high", "maximum"],
+			selectedValues: ["low"],
+			focusedItemIndex: 0,
+			isFocused: true,
+		}) as React.ReactElement;
+		expect(collectText(emptyFilter)).not.toContain("filter:");
+	});
+
+	it("passes active filter only to the focused expanded inline column", () => {
+		const result = AgentRow({
+			agent: agent("default"),
+			isFocused: true,
+			isExpanded: true,
+			focusedField: 0,
+			focusedOptionItem: 0,
+			optionColumnScrollOffset: 0,
+			options: {
+				...options,
+				reasoningEfforts: ["low", "medium", "high", "maximum"],
+				depths: [0, 1, 2],
+			},
+			status: undefined,
+			optionColumnFilter: "med",
+		}) as React.ReactElement;
+		const text = collectText(result);
+		expect(text).toContain("filter: med");
+		expect((text.match(/filter:/g) ?? []).length).toBe(1);
 	});
 
 	it("pins degraded model status outside the scroll window", () => {

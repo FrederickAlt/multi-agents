@@ -90,6 +90,11 @@ export interface ConfigState {
 	statuses: Map<string, StatusInfo>; // keyed by filePath
 	scrollOffset: number; // vertical scroll (index of first visible agent)
 	optionColumnScrollOffset: number; // horizontal scroll (index of first visible Option column)
+	/**
+	 * Temporary text filter for the focused inline Option column.
+	 * Cleared when focus moves to another column or actions require an unfiltered view.
+	 */
+	optionColumnFilter: string;
 	globalError: string | null;
 }
 
@@ -163,7 +168,9 @@ export type ConfigAction =
 	  }
 	| { type: "SCROLL"; direction: "up" | "down" }
 	| { type: "EXPAND" }
-	| { type: "COLLAPSE" };
+	| { type: "COLLAPSE" }
+	| { type: "SET_OPTION_COLUMN_FILTER"; filter: string }
+	| { type: "CLEAR_OPTION_COLUMN_FILTER" };
 
 /** Height of a compact agent row in terminal lines. */
 export const COMPACT_ROW_HEIGHT = 3;

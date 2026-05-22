@@ -65,6 +65,7 @@ export function Board({ state }: BoardProps) {
 						optionColumnScrollOffset={state.optionColumnScrollOffset}
 						options={state.options}
 						status={state.statuses.get(agent.filePath)}
+						optionColumnFilter={state.optionColumnFilter}
 					/>
 				);
 			})}

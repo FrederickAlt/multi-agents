@@ -10,6 +10,22 @@ import { resolveModelDisplayName } from "../discovery/options.js";
 export const MODEL_OPTION_LOADING_ITEM = "(loading models...)";
 export const MODEL_OPTION_DEGRADED_STATUS = "(model discovery unavailable)";
 
+function normalizeFilter(text: string): string {
+	return text.trim().toLowerCase();
+}
+
+function isModelStatusValue(item: string): boolean {
+	return item === MODEL_OPTION_LOADING_ITEM || item === MODEL_OPTION_DEGRADED_STATUS;
+}
+
+function filterItems(items: string[], filter: string): string[] {
+	const normalizedFilter = normalizeFilter(filter);
+	if (!normalizedFilter) {
+		return [...items];
+	}
+	return items.filter((item) => item.toLowerCase().includes(normalizedFilter));
+}
+
 function clampIndex(index: number, length: number): number {
 	if (length === 0) return 0;
 	return ((index % length) + length) % length;
@@ -176,6 +192,7 @@ export function getOptionColumnItems(
 	options: DiscoveredOptions,
 	fieldName: OptionColumnFieldName,
 	agentName?: string,
+	columnFilter = "",
 ): string[] {
 	const availableItems = getOptionColumnAvailableItems(
 		options,
@@ -190,40 +207,52 @@ export function getOptionColumnItems(
 	);
 	const selectedValue = selectedValues[0];
 
-	if (isCheckboxOptionColumnField(fieldName)) {
-		const items: string[] = [];
-		for (const item of selectedValues) {
-			addUnique(items, item);
+	const unfilteredItems = (() => {
+		if (isCheckboxOptionColumnField(fieldName)) {
+			const items: string[] = [];
+			for (const item of selectedValues) {
+				addUnique(items, item);
+			}
+			for (const item of availableItems) {
+				addUnique(items, item);
+			}
+			return items;
 		}
-		for (const item of availableItems) {
-			addUnique(items, item);
+
+		if (fieldName === "model") {
+			if (options.modelDiscovery.status === "loading") {
+				if (selectedValue === undefined || availableItems.includes(selectedValue)) {
+					return availableItems;
+				}
+				return [...availableItems, selectedValue];
+			}
+			if (options.modelDiscovery.status === "degraded") {
+				if (selectedValue === undefined || availableItems.includes(selectedValue)) {
+					return availableItems;
+				}
+				return [
+					availableItems[0],
+					selectedValue,
+					...availableItems.slice(1),
+				];
+			}
 		}
-		return items;
-	}
+
+		if (selectedValue !== undefined && !availableItems.includes(selectedValue)) {
+			return [selectedValue, ...availableItems];
+		}
+		return availableItems;
+	})();
 
 	if (fieldName === "model") {
-		if (options.modelDiscovery.status === "loading") {
-			if (selectedValue === undefined || availableItems.includes(selectedValue)) {
-				return availableItems;
-			}
-			return [...availableItems, selectedValue];
+		const [firstItem, ...rest] = unfilteredItems;
+		if (!isModelStatusValue(firstItem)) {
+			return filterItems(unfilteredItems, columnFilter);
 		}
-		if (options.modelDiscovery.status === "degraded") {
-			if (selectedValue === undefined || availableItems.includes(selectedValue)) {
-				return availableItems;
-			}
-			return [
-				availableItems[0],
-				selectedValue,
-				...availableItems.slice(1),
-			];
-		}
+		return [firstItem, ...filterItems(rest, columnFilter)];
 	}
 
-	if (selectedValue !== undefined && !availableItems.includes(selectedValue)) {
-		return [selectedValue, ...availableItems];
-	}
-	return availableItems;
+	return filterItems(unfilteredItems, columnFilter);
 }
 
 export function getOptionColumnItemIndex(
@@ -232,8 +261,15 @@ export function getOptionColumnItemIndex(
 	fieldName: OptionColumnFieldName,
 	itemValue?: string,
 	agentName?: string,
+	columnFilter = "",
 ): number {
-	const items = getOptionColumnItems(agent, options, fieldName, agentName);
+	const items = getOptionColumnItems(
+		agent,
+		options,
+		fieldName,
+		agentName,
+		columnFilter,
+	);
 	if (items.length === 0) {
 		return 0;
 	}

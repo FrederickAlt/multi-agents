@@ -327,7 +327,13 @@ export function useConfig() {
 		const fieldName = getFieldName(state.focus.fieldIndex);
 		if (!isOptionColumnField(fieldName)) return;
 
-		const items = getOptionColumnItems(agent, state.options, fieldName, agent.name);
+		const items = getOptionColumnItems(
+			agent,
+			state.options,
+			fieldName,
+			agent.name,
+			state.optionColumnFilter,
+		);
 		const item = items[state.focus.optionItemIndex];
 		if (item === undefined) return;
 
@@ -406,7 +412,13 @@ export function useConfig() {
 		}
 
 		saveFieldValue(agent, state.focus.agentIndex, fieldName, nextValue);
-	}, [state.agents, state.focus, state.options, saveFieldValue]);
+	}, [
+		state.agents,
+		state.focus,
+		state.options,
+		state.optionColumnFilter,
+		saveFieldValue,
+	]);
 
 	// Commit overlay: save to file (dropdown) or just close (checkbox)
 	const commitOverlay = useCallback(() => {
@@ -504,6 +516,10 @@ export function useConfig() {
 		dispatch({ type: "CLOSE_OVERLAY" });
 	}, [state.overlay, state.agents, state.options.models]);
 
+	const setOptionColumnFilter = useCallback((value: string) => {
+		dispatch({ type: "SET_OPTION_COLUMN_FILTER", filter: value });
+	}, []);
+
 	return {
 		state,
 		loading,
@@ -521,6 +537,7 @@ export function useConfig() {
 		instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay,
+		setOptionColumnFilter,
 		selectFocusedOption,
 		rescan,
 	};

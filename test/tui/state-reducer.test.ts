@@ -788,6 +788,84 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(1);
 	});
 
+	it("SET_OPTION_COLUMN_FILTER applies inline item filtering for option lists", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { skills: "skill-beta" } })],
+			options: makeOptions({
+				skills: [
+					"skill-alpha",
+					"skill-beta",
+					"skill-gamma",
+					"other-skill",
+					"another",
+				],
+			}),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 6, optionItemIndex: 1 },
+		};
+
+		const filtered = configReducer(state, {
+			type: "SET_OPTION_COLUMN_FILTER",
+			filter: "skill",
+		});
+
+		expect(filtered.optionColumnFilter).toBe("skill");
+		expect(filtered.agents).toEqual(state.agents);
+		expect(filtered.focus.optionItemIndex).toBe(1);
+
+		const next = configReducer(filtered, { type: "FOCUS_OPTION_ITEM", direction: "next" });
+		expect(next.focus.optionItemIndex).toBe(2);
+	});
+
+	it("Backspace-style filter shortening preserves filtered focus", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { skills: "skill-beta" } })],
+			options: makeOptions({
+				skills: [
+					"skill-alpha",
+					"skill-beta",
+					"skill-gamma",
+					"skill-delta",
+				],
+			}),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 6, optionItemIndex: 1 },
+		};
+
+		const filtered = configReducer(state, {
+			type: "SET_OPTION_COLUMN_FILTER",
+			filter: "skill",
+		});
+		const backspaced = configReducer(filtered, {
+			type: "SET_OPTION_COLUMN_FILTER",
+			filter: "skil",
+		});
+
+		expect(backspaced.optionColumnFilter).toBe("skil");
+		expect(backspaced.focus.optionItemIndex).toBe(filtered.focus.optionItemIndex);
+	});
+
+	it("clears filter when moving to another Option column", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium" } })],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
+		};
+
+		const filtered = configReducer(state, {
+			type: "SET_OPTION_COLUMN_FILTER",
+			filter: "med",
+		});
+
+		const next = configReducer(filtered, { type: "FOCUS_FIELD", direction: "next" });
+		expect(next.optionColumnFilter).toBe("");
+		expect(next.focus.fieldIndex).toBe(3);
+	});
+
 	it("excludes current agent from inline can_spawn options", () => {
 		const options = makeOptions({
 			canSpawn: ["peer", "self-agent", "advisor"],
@@ -1206,6 +1284,27 @@ describe("COLLAPSE", () => {
 		};
 		const next = configReducer(state, { type: "COLLAPSE" });
 		expect(next.expandedAgentIndex).toBeNull();
+	});
+
+	it("escapes filter first before collapsing an expanded row", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent()],
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 0 },
+		};
+		const filtered = configReducer(state, {
+			type: "SET_OPTION_COLUMN_FILTER",
+			filter: "med",
+		});
+		expect(filtered.expandedAgentIndex).toBe(0);
+
+		const firstCollapse = configReducer(filtered, { type: "COLLAPSE" });
+		expect(firstCollapse.expandedAgentIndex).toBe(0);
+		expect(firstCollapse.optionColumnFilter).toBe("");
+
+		const secondCollapse = configReducer(firstCollapse, { type: "COLLAPSE" });
+		expect(secondCollapse.expandedAgentIndex).toBeNull();
 	});
 
 	it("preserves the focused agent index after collapse", () => {

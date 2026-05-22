@@ -15,6 +15,7 @@ interface OptionColumnProps {
 	isFocused: boolean;
 	isCheckbox?: boolean;
 	staleItems?: string[];
+	filterText?: string;
 	maxVisibleItems?: number;
 }
 
@@ -73,6 +74,7 @@ export function OptionColumn({
 	isFocused,
 	isCheckbox = false,
 	staleItems = [],
+	filterText,
 	maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
 }: OptionColumnProps) {
 	const label = FIELD_LABELS[fieldName] ?? fieldName;
@@ -82,6 +84,10 @@ export function OptionColumn({
 	const selectedValue = effectiveSelectedValues[0] ?? "";
 	const staleSet = new Set(staleItems);
 	const visibleItemCount = Math.max(1, maxVisibleItems);
+	const filterValue = filterText?.trim() ?? "";
+	const showFilterBar = isFocused && filterValue.length > 0;
+	const reservedLines = showFilterBar ? 1 : 0;
+	const effectiveMaxVisibleItems = Math.max(1, visibleItemCount - reservedLines);
 	const pinnedStatus = fieldName === "model" ? getModelPinnedStatus(items) : undefined;
 	const scrollableItems = pinnedStatus ? items.slice(1) : items;
 	const focusedInScrollable = pinnedStatus && focusedItemIndex > 0
@@ -90,7 +96,7 @@ export function OptionColumn({
 	const { start, end } = getVisibleRange(
 		scrollableItems.length,
 		focusedInScrollable,
-		visibleItemCount,
+		effectiveMaxVisibleItems,
 	);
 	const visibleItems = scrollableItems.slice(start, end);
 
@@ -104,6 +110,10 @@ export function OptionColumn({
 			paddingX={1}
 		>
 			<Text bold color={isFocused ? "cyan" : undefined}>{label}</Text>
+			{showFilterBar && (
+				<Text dimColor>filter: {filterValue}</Text>
+			)}
+
 			{pinnedStatus && (
 				<Text
 					key={`${fieldName}-status`}

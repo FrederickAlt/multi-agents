@@ -117,6 +117,7 @@ export function createInitialState(): ConfigState {
 		statuses: new Map(),
 		scrollOffset: 0,
 		optionColumnScrollOffset: 0,
+		optionColumnFilter: "",
 		globalError: null,
 	};
 }
@@ -179,6 +180,7 @@ function getFocusedOptionItemIndex(
 	options: DiscoveredOptions,
 	fieldIndex: number,
 	focusedItemValue?: string,
+	columnFilter = "",
 ): number {
 	if (!agent) return 0;
 	const fieldName = getFieldName(fieldIndex);
@@ -189,6 +191,7 @@ function getFocusedOptionItemIndex(
 		fieldName,
 		focusedItemValue,
 		agent.name,
+		columnFilter,
 	);
 }
 function syncOptionColumnScrollOffset(
@@ -231,6 +234,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				agents: action.agents,
 				options: action.options,
 				globalError: null,
+				optionColumnFilter: "",
 				expandedAgentIndex: null,
 				focus: {
 					agentIndex: clamp(state.focus.agentIndex, action.agents.length),
@@ -266,6 +270,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				expandedAgentIndex: nextExpanded,
+				optionColumnFilter: "",
 				focus: { ...state.focus, agentIndex: newIdx },
 				scrollOffset: clampVerticalScrollOffset(
 					state.scrollOffset,
@@ -288,6 +293,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				expandedAgentIndex: nextExpanded,
+				optionColumnFilter: "",
 				focus: { ...state.focus, agentIndex: newIdx },
 				scrollOffset: clampVerticalScrollOffset(
 					state.scrollOffset,
@@ -308,6 +314,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			const agent = state.agents[state.focus.agentIndex];
 			return {
 				...state,
+				optionColumnFilter: "",
 				focus: {
 					...state.focus,
 					fieldIndex,
@@ -328,7 +335,13 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			if (!isOptionColumnField(fieldName)) {
 				return state;
 			}
-			const items = getOptionColumnItems(agent, state.options, fieldName, agent.name);
+			const items = getOptionColumnItems(
+				agent,
+				state.options,
+				fieldName,
+				agent.name,
+				state.optionColumnFilter,
+			);
 			if (items.length === 0) return state;
 			const delta = action.direction === "next" ? 1 : -1;
 			return {
@@ -394,11 +407,79 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				};
 			}
 
-			return { ...state, overlay };
+			return { ...state, overlay, optionColumnFilter: "" };
 		}
 
 		case "CLOSE_OVERLAY": {
-			return { ...state, overlay: null };
+			return { ...state, overlay: null, optionColumnFilter: "" };
+		}
+
+		case "SET_OPTION_COLUMN_FILTER": {
+			const filteredFieldName = getFieldName(state.focus.fieldIndex);
+			if (!isOptionColumnField(filteredFieldName)) {
+				return { ...state, optionColumnFilter: action.filter };
+			}
+			const agent = state.agents[state.focus.agentIndex];
+			if (!agent) {
+				return { ...state, optionColumnFilter: action.filter };
+			}
+			const currentItems = getOptionColumnItems(
+				agent,
+				state.options,
+				filteredFieldName,
+				agent.name,
+				state.optionColumnFilter,
+			);
+			const focusedItem = currentItems[state.focus.optionItemIndex];
+			return {
+				...state,
+				optionColumnFilter: action.filter,
+				focus: {
+					...state.focus,
+					optionItemIndex: getOptionColumnItemIndex(
+						agent,
+						state.options,
+						filteredFieldName,
+						focusedItem,
+						agent.name,
+						action.filter,
+					),
+				},
+			};
+		}
+
+		case "CLEAR_OPTION_COLUMN_FILTER": {
+			const filteredFieldName = getFieldName(state.focus.fieldIndex);
+			if (!isOptionColumnField(filteredFieldName)) {
+				return { ...state, optionColumnFilter: "" };
+			}
+			const agent = state.agents[state.focus.agentIndex];
+			if (!agent) {
+				return { ...state, optionColumnFilter: "" };
+			}
+			const currentItems = getOptionColumnItems(
+				agent,
+				state.options,
+				filteredFieldName,
+				agent.name,
+				state.optionColumnFilter,
+			);
+			const focusedItem = currentItems[state.focus.optionItemIndex];
+			return {
+				...state,
+				optionColumnFilter: "",
+				focus: {
+					...state.focus,
+					optionItemIndex: getOptionColumnItemIndex(
+						agent,
+						state.options,
+						filteredFieldName,
+						focusedItem,
+						agent.name,
+						"",
+					),
+				},
+			};
 		}
 
 		case "TOGGLE_CHECKBOX": {
@@ -445,8 +526,15 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				state.focus.agentIndex === action.agentIndex
 			) {
 				const fieldName = getFieldName(state.focus.fieldIndex);
-				const previousItems = previousAgent && isOptionColumnField(fieldName)
-					? getOptionColumnItems(previousAgent, state.options, fieldName, previousAgent.name)
+				const previousItems =
+					previousAgent && isOptionColumnField(fieldName)
+						? getOptionColumnItems(
+							previousAgent,
+							state.options,
+							fieldName,
+							previousAgent.name,
+							state.optionColumnFilter,
+						)
 					: [];
 				const focusedItem = previousItems[state.focus.optionItemIndex];
 				return {
@@ -459,6 +547,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 							state.options,
 							state.focus.fieldIndex,
 							focusedItem,
+							state.optionColumnFilter,
 						),
 					},
 				};
@@ -468,7 +557,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		}
 
 		case "RESCAN": {
-			return { ...state, overlay: null };
+			return { ...state, overlay: null, optionColumnFilter: "" };
 		}
 
 		case "RESCAN_COMPLETE": {
@@ -480,6 +569,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				agents: action.agents,
 				options: action.options,
 				globalError: null,
+				optionColumnFilter: "",
 				expandedAgentIndex: null,
 				focus: {
 					agentIndex: clamp(state.focus.agentIndex, len),
@@ -509,6 +599,8 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 						focusedAgent,
 						action.options,
 						state.focus.fieldIndex,
+						undefined,
+						state.optionColumnFilter,
 					),
 				},
 				optionColumnScrollOffset: syncOptionColumnScrollOffset(
@@ -536,6 +628,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				expandedAgentIndex: idx,
+				optionColumnFilter: "",
 				focus: {
 					agentIndex: idx,
 					fieldIndex,
@@ -554,6 +647,9 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		}
 
 		case "COLLAPSE": {
+			if (state.optionColumnFilter) {
+				return { ...state, optionColumnFilter: "" };
+			}
 			return { ...state, expandedAgentIndex: null };
 		}
 

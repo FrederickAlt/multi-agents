@@ -18,6 +18,7 @@ export interface KeyboardActions {
 	rescan: () => void;
 	expand: () => void;
 	collapse: () => void;
+	setOptionColumnFilter: (value: string) => void;
 	overlayFocusUp: () => void;
 	overlayFocusDown: () => void;
 	overlayActivate: () => void;
@@ -33,7 +34,32 @@ export interface KeyboardState {
 	fieldIndex: number;
 	fieldName: string;
 	scrollOffset: number;
+	optionColumnFilter: string;
 }
+
+type KeyboardKey = {
+	alt?: boolean;
+	backspace?: boolean;
+	ctrl?: boolean;
+	delete?: boolean;
+	downArrow?: boolean;
+	escape?: boolean;
+	leftArrow?: boolean;
+	meta?: boolean;
+	rightArrow?: boolean;
+	return?: boolean;
+	upArrow?: boolean;
+};
+
+const isInlineColumnFilterInput = (input: string, key: KeyboardKey): boolean => {
+	return (
+		input.length === 1 &&
+		input !== " " &&
+		!key.ctrl &&
+		!key.meta &&
+		!key.alt
+	);
+};
 
 export function isInlineEditableField(fieldName: string): boolean {
 	return isOptionColumnField(fieldName);
@@ -50,6 +76,136 @@ export function handleExpandedEnterOrSpace(
 	}
 }
 
+export function handleKeyboardInput(
+	input: string,
+	key: KeyboardKey,
+	state: KeyboardState,
+	actions: KeyboardActions,
+	exit: () => void,
+): void {
+	const isInlineOptionColumn =
+		state.isExpanded && isOptionColumnField(state.fieldName);
+
+	const shouldHandleGlobalShortcuts =
+		!state.isExpanded || !isInlineOptionColumn || state.isOverlayOpen;
+
+	if (shouldHandleGlobalShortcuts && (input === "q" || input === "Q")) {
+		exit();
+		return;
+	}
+
+	if (shouldHandleGlobalShortcuts && (input === "r" || input === "R")) {
+		actions.rescan();
+		return;
+	}
+
+	if (state.isOverlayOpen) {
+		// Overlay keyboard handling (unchanged from horizontal layout)
+		if (key.escape) {
+			actions.closeOverlay();
+			return;
+		}
+
+		if (key.return) {
+			actions.overlayActivate();
+			return;
+		}
+
+		if (key.upArrow || input === "k") {
+			actions.overlayFocusUp();
+			return;
+		}
+
+		if (key.downArrow || input === "j") {
+			actions.overlayFocusDown();
+			return;
+		}
+
+		if (input === " " && state.overlayType === "checkbox") {
+			const item = state.overlayItems[state.overlayFocusedIndex];
+			if (item) {
+				actions.toggleCheckbox(item);
+			}
+			return;
+		}
+
+		return;
+	}
+
+	if (state.isExpanded) {
+		if (key.escape) {
+			actions.collapse();
+			return;
+		}
+
+		if (key.leftArrow) {
+			actions.focusPrevField();
+			return;
+		}
+
+		if (key.rightArrow) {
+			actions.focusNextField();
+			return;
+		}
+
+		if (key.upArrow) {
+			if (isInlineOptionColumn) {
+				actions.focusPrevOptionItem();
+			} else {
+				actions.focusPrevField();
+			}
+			return;
+		}
+
+		if (key.downArrow) {
+			if (isInlineOptionColumn) {
+				actions.focusNextOptionItem();
+			} else {
+				actions.focusNextField();
+			}
+			return;
+		}
+
+		if (key.backspace || key.delete) {
+			if (isInlineOptionColumn) {
+				actions.setOptionColumnFilter(state.optionColumnFilter.slice(0, -1));
+			}
+			return;
+		}
+
+		if (isInlineOptionColumn && isInlineColumnFilterInput(input, key)) {
+			actions.setOptionColumnFilter(state.optionColumnFilter + input);
+			return;
+		}
+
+		if (key.return || input === " ") {
+			handleExpandedEnterOrSpace(state, actions);
+			return;
+		}
+
+		return;
+	}
+
+	// Compact mode: Up/Down navigate agents, Enter/Space expands,
+	// Left/Right are no-ops
+	if (key.upArrow || input === "k") {
+		actions.focusPrevAgent();
+		return;
+	}
+
+	if (key.downArrow || input === "j") {
+		actions.focusNextAgent();
+		return;
+	}
+
+	if (key.return || input === " ") {
+		actions.expand();
+		return;
+	}
+
+	// Left/Right are no-ops in compact mode
+}
+
 /**
  * Hook that maps keyboard input to TUI actions.
  * Uses Ink's useInput for keypress handling.
@@ -63,111 +219,7 @@ export function useKeyboard(
 	const inputIsActive = Boolean(isRawModeSupported && typeof process.stdin.setRawMode === "function");
 
 	useInput((input, key) => {
-		// Global keys
-		if (input === "q" || input === "Q") {
-			exit();
-			return;
-		}
-
-		if (input === "r" || input === "R") {
-			actions.rescan();
-			return;
-		}
-
 		const state = getState();
-
-		if (state.isOverlayOpen) {
-			// Overlay keyboard handling (unchanged from horizontal layout)
-			if (key.escape) {
-				actions.closeOverlay();
-				return;
-			}
-
-			if (key.return) {
-				actions.overlayActivate();
-				return;
-			}
-
-			if (key.upArrow || input === "k") {
-				actions.overlayFocusUp();
-				return;
-			}
-
-			if (key.downArrow || input === "j") {
-				actions.overlayFocusDown();
-				return;
-			}
-
-			if (input === " " && state.overlayType === "checkbox") {
-				const item = state.overlayItems[state.overlayFocusedIndex];
-				if (item) {
-					actions.toggleCheckbox(item);
-				}
-				return;
-			}
-		} else {
-			// Main board keyboard handling (vertical layout)
-			if (state.isExpanded) {
-				if (key.escape) {
-					actions.collapse();
-					return;
-				}
-
-				if (key.leftArrow || input === "h") {
-					actions.focusPrevField();
-					return;
-				}
-
-				if (key.rightArrow || input === "l") {
-					actions.focusNextField();
-					return;
-				}
-
-				if (key.upArrow || input === "k") {
-					if (isInlineEditableField(state.fieldName)) {
-						actions.focusPrevOptionItem();
-					} else {
-						actions.focusPrevField();
-					}
-					return;
-				}
-
-				if (key.downArrow || input === "j") {
-					if (isInlineEditableField(state.fieldName)) {
-						actions.focusNextOptionItem();
-					} else {
-						actions.focusNextField();
-					}
-					return;
-				}
-
-				if (key.return || input === " ") {
-					handleExpandedEnterOrSpace(state, actions);
-					return;
-				}
-
-				return;
-			} else {
-				// Compact mode: Up/Down navigate agents, Enter/Space expands,
-				// Left/Right are no-ops
-				if (key.upArrow || input === "k") {
-					actions.focusPrevAgent();
-					return;
-				}
-
-				if (key.downArrow || input === "j") {
-					actions.focusNextAgent();
-					return;
-				}
-
-				if (key.return || input === " ") {
-					actions.expand();
-					return;
-				}
-
-				// Left/Right are no-ops in compact mode
-				return;
-			}
-		}
+		handleKeyboardInput(input, key, state, actions, exit);
 	}, { isActive: inputIsActive });
 }

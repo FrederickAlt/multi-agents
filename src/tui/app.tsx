@@ -35,9 +35,9 @@ export function App() {
 		selectDropdown,
 		commitOverlay,
 		selectFocusedOption,
+		setOptionColumnFilter,
 		rescan,
 	} = useConfig();
-
 	// Overlay-local focus index (for up/down navigation within overlay items)
 	const [overlayFocusIndex, setOverlayFocusIndex] = useState(0);
 
@@ -64,8 +64,16 @@ export function App() {
 			fieldIndex: state.focus.fieldIndex,
 			fieldName,
 			scrollOffset: state.scrollOffset,
+			optionColumnFilter: state.optionColumnFilter,
 		};
-	}, [overlay, overlayFocusIndex, state.focus, state.scrollOffset, state.expandedAgentIndex]);
+	}, [
+		overlay,
+		overlayFocusIndex,
+		state.focus,
+		state.scrollOffset,
+		state.expandedAgentIndex,
+		state.optionColumnFilter,
+	]);
 
 	// Wrap overlay navigation
 	const handleOverlayUp = useCallback(() => {
@@ -111,6 +119,7 @@ export function App() {
 		commitOverlay: () => commitOverlay(),
 		selectFocusedOption,
 		rescan,
+		setOptionColumnFilter,
 		focusNextOptionItem,
 		focusPrevOptionItem,
 		overlayFocusUp: handleOverlayUp,
