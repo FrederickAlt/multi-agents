@@ -725,7 +725,10 @@ describe("inline Option columns", () => {
 		const options = makeOptions({
 			canSpawn: ["peer", "self-agent", "advisor"],
 		});
-		const agent = makeAgent({ name: "self-agent", frontmatter: {} });
+		const agent = makeAgent({
+			name: "self-agent",
+			frontmatter: { can_spawn: ["self-agent", "peer", "advisor"] },
+		});
 
 		expect(getOptionColumnItems(agent, options, "can_spawn", "self-agent")).toEqual([
 			"peer",

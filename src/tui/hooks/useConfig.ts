@@ -18,7 +18,9 @@ import {
 	getFieldName,
 	getOptionColumnAvailableItems,
 	getOptionColumnCurrentValue,
+	getOptionColumnItems,
 	getOptionColumnSaveValue,
+	getOptionColumnSelectedValues,
 	isCheckboxOptionColumnField,
 	isOptionColumnField,
 } from "../state/option-columns.js";
@@ -38,17 +40,20 @@ export function computeInlineCheckboxSaveValue(
 	fieldName: string,
 	item: string,
 ): string[] | undefined {
+	const typedField = fieldName as OptionColumnFieldName;
 	const availableItems = getOptionColumnAvailableItems(
 		options,
-		fieldName as OptionColumnFieldName,
+		typedField,
 		agent.name,
 	);
-	const currentValue = agent.frontmatter?.[fieldName];
-	const rawSelection = Array.isArray(currentValue)
-		? currentValue.map((value) => String(value))
-		: undefined;
+	const selectedValues = getOptionColumnSelectedValues(
+		agent,
+		options,
+		typedField,
+		agent.name,
+	);
 	const { localSelection, wasImplicit } = resolveCheckboxSelection(
-		rawSelection,
+		selectedValues,
 		availableItems,
 	);
 	const { localSelection: newSelection } = applyToggle(

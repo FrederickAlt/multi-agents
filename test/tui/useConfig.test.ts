@@ -71,4 +71,25 @@ describe("computeInlineCheckboxSaveValue", () => {
 
 		expect(result).toEqual(["agent-b", "legacy-agent", "agent-c"]);
 	});
+
+	it("filters self from explicit can_spawn selections before computing save value", () => {
+		const options = makeOptions();
+		const agent = makeAgent({
+			name: "agent-a",
+			frontmatter: {
+				description: "A test agent",
+				can_spawn: ["agent-a", "agent-b"],
+			},
+		});
+
+		const result = computeInlineCheckboxSaveValue(
+			options,
+			agent,
+			"can_spawn",
+			"agent-b",
+		);
+
+		expect(result).toEqual([]);
+		expect(result).not.toContain("agent-a");
+	});
 });

@@ -102,13 +102,19 @@ export function getOptionColumnSelectedValues(
 ): string[] {
 	if (isCheckboxOptionColumnField(fieldName)) {
 		const raw = agent.frontmatter?.[fieldName];
+		let selectedValues: string[];
 		if (raw === undefined || raw === null) {
-			return getOptionColumnAvailableItems(options, fieldName, agentName);
+			selectedValues = getOptionColumnAvailableItems(options, fieldName, agentName);
+		} else if (Array.isArray(raw)) {
+			selectedValues = raw.map((v) => String(v));
+		} else {
+			selectedValues = [String(raw)];
 		}
-		if (Array.isArray(raw)) {
-			return raw.map((v) => String(v));
+
+		if (fieldName === "can_spawn" && agentName !== undefined) {
+			return selectedValues.filter((value) => value !== agentName);
 		}
-		return [String(raw)];
+		return selectedValues;
 	}
 
 	const currentValue = getOptionColumnCurrentValue(agent, fieldName);
