@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
+import { extractOutput } from "./output-extraction.js";
 import type { AgentConfig } from "./agents.js";
 import type { MetadataStore, SubagentRecord } from "./metadata.js";
 
@@ -218,6 +219,7 @@ export class SubagentSessionManager {
 	private completedSessions = new Set<string>();
 	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[] }>();
 	private asyncInFlight = new Set<string>();
+	private killInProgress = new Set<string>();
 
 	constructor(
 		private sessionManagerProvider: SessionManagerProvider,
@@ -426,11 +428,24 @@ export class SubagentSessionManager {
 	// ---- Kill / abort ----
 
 	/**
+	 * Check whether a soft-kill is in progress for the given session ID.
+	 * Used by the async finish handler to avoid disposing a session that
+	 * the kill flow still needs.
+	 */
+	isKillInProgress(id: string): boolean {
+		return this.killInProgress.has(id);
+	}
+
+	/**
 	 * Send a soft-kill instruction to a running async session.
 	 *
-	 * Aborts the current prompt (the async error handler stores any partial
-	 * output), then sends a kill message as a new prompt giving the agent
-	 * one more turn to produce a final answer.
+	 * Marks kill-in-progress before aborting the original prompt so that
+	 * the async finish handler skips disposal. After abort, sends a kill
+	 * message as a new prompt giving the agent one more turn.
+	 *
+	 * On completion (success or failure): clears kill-in-progress, stores
+	 * the final result using shared extraction, marks completed, clears
+	 * async-running, and disposes the session.
 	 */
 	sendKillMessage(id: string, timeoutMinutes: number): void {
 		const session = this.openSessions.get(id);
@@ -438,69 +453,84 @@ export class SubagentSessionManager {
 
 		const killMessage = `[System] The parent agent requires you to finish within ${timeoutMinutes} minute(s). Please produce your final answer now.`;
 
-		// Abort the current prompt so the agent sees the kill instruction
+		// Mark kill-in-progress BEFORE abort so the original finish() skips disposal.
+		this.killInProgress.add(id);
+
+		// Abort the current prompt — the original error handler fires and stores
+		// partial output via storeAsyncResult, but finish() skips disposeSession
+		// because killInProgress is set.
 		try { session.abort(); } catch { /* best-effort */ }
 
-		// Send the kill message as a new prompt — gives the agent one last turn
+		// Give the agent one last turn with the kill instruction.
 		session.prompt(killMessage).then(
 			() => {
-				// Agent finished: extract output from messages (shared extraction path)
-				// The messages include the kill message + agent's final response
-				// Store as fresh async result replacing any partial output from abort
-				const messages = session.messages as any[];
-				const lastAssistant = messages
-					.filter((m: any) => m.role === 'assistant')
-					.map((m: any) => {
-						if (typeof m.content === 'string') return m.content;
-						if (Array.isArray(m.content)) {
-							return m.content
-								.filter((b: any) => b.type === 'text')
-								.map((b: any) => b.text)
-								.join('\n');
-						}
-						return '';
-					})
-					.join('\n');
-				this.asyncResults.set(id, { output: lastAssistant || '', warnings: [] });
-				this.completedSessions.add(id);
+				// Agent finished successfully — store fresh output.
+				const extracted = extractOutput(session.messages as any[]);
+				this.asyncResults.set(id, { output: extracted.text, warnings: [] });
+				this._cleanupAfterKill(id, session);
 			},
 			(error: any) => {
-				// Kill prompt crashed — store error + any partial output from messages
+				// Kill prompt crashed — store error + partial output.
 				const message = error instanceof Error ? error.message : String(error);
-				const messages = session.messages as any[];
-				const lastAssistant = messages
-					.filter((m: any) => m.role === 'assistant')
-					.map((m: any) => {
-						if (typeof m.content === 'string') return m.content;
-						if (Array.isArray(m.content)) {
-							return m.content
-								.filter((b: any) => b.type === 'text')
-								.map((b: any) => b.text)
-								.join('\n');
-						}
-						return '';
-					})
-					.join('\n');
-				this.asyncResults.set(id, { output: lastAssistant || '', error: message || 'The sub-agent stopped without producing any output.', warnings: [] });
-				this.completedSessions.add(id);
+				const extracted = extractOutput(session.messages as any[], message || undefined);
+				this.asyncResults.set(id, {
+					output: extracted.text,
+					error: message || 'The sub-agent stopped without producing any output.',
+					warnings: [],
+				});
+				this._cleanupAfterKill(id, session);
 			},
 		);
 	}
 
 	/**
 	 * Hard-abort a session immediately.
-	 * The session is disposed but the transcript persists on disk for resume.
+	 *
+	 * Marks kill-in-progress before aborting so the original async reject
+	 * handler doesn't interfere. Extracts best available transcript content
+	 * via shared extraction, stores the result as async output with killed
+	 * status, marks the session completed, and disposes it. The transcript
+	 * file persists on disk for later resume.
 	 */
 	abortSession(id: string): void {
 		const session = this.openSessions.get(id);
 		if (!session) return;
 
+		// Mark kill-in-progress to prevent the original async reject handler
+		// from storing a competing result or disposing the session.
+		this.killInProgress.add(id);
+
+		// Capture partial output before abort using shared extraction.
+		const extracted = extractOutput(session.messages as any[], 'killed');
+
 		try { session.abort(); } catch { /* best-effort */ }
 
-		// Mark as completed so waitForSessionEnd resolves and the
-		// buildResult picks up whatever asyncResult was stored by the
-		// original error handler.
+		// Store partial output (or error) so wait_for_agent can return it.
+		this.asyncResults.set(id, {
+			output: extracted.text || '',
+			error: 'killed',
+			warnings: [],
+		});
+
+		// Clean up: mark completed, clear run flags, dispose session.
+		// Defer killInProgress cleanup so the microtask'd reject handler
+		// still sees it and skips storing a competing result.
 		this.completedSessions.add(id);
+		this.asyncInFlight.delete(id);
+		try { session.dispose(); } catch { /* best-effort */ }
+		this.openSessions.delete(id);
+		queueMicrotask(() => this.killInProgress.delete(id));
+	}
+
+	/**
+	 * Shared cleanup after a soft-kill prompt finishes (success or failure).
+	 */
+	private _cleanupAfterKill(id: string, session: AgentSession): void {
+		this.completedSessions.add(id);
+		this.killInProgress.delete(id);
+		this.asyncInFlight.delete(id);
+		try { session.dispose(); } catch { /* best-effort */ }
+		this.openSessions.delete(id);
 	}
 
 	// ---- Run serialization ----

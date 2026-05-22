@@ -396,6 +396,7 @@ describe("TaskController.execute", () => {
 			hasOpenSession: vi.fn((id: string) => sessionManager.hasOpenSession(id)),
 			sendKillMessage: vi.fn((id: string, timeoutMinutes: number) => sessionManager.sendKillMessage(id, timeoutMinutes)),
 			abortSession: vi.fn((id: string) => sessionManager.abortSession(id)),
+			isKillInProgress: vi.fn((id: string) => sessionManager.isKillInProgress(id)),
 		};
 
 		controller = new TaskController();
@@ -1740,5 +1741,271 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("partial work before kill");
 
 		fakeSessionManager.abortSession = origAbortSession;
+	});
+
+	// ---- Race-safe coordination between kill and async finish (#25 review) ----
+
+	it("soft-kill marks kill-in-progress before aborting to prevent race", async () => {
+		// Setup: session with deferred prompt rejection (simulates abort causing rejection)
+		const subs: Array<(e: any) => void> = [];
+		let promptReject: ((err: any) => void) | null = null;
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			abort: vi.fn(() => {
+				// Simulate abort causing prompt rejection (real production behavior)
+				if (promptReject) {
+					promptReject(new Error("aborted by soft-kill"));
+					promptReject = null;
+				}
+			}),
+			messages: [
+				{ role: "user", content: "original task" },
+				{ role: "assistant", content: [{ type: "text", text: "partial work so far" }] },
+			],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Now call sendKillMessage through the real session manager (not mocked)
+		// The mock session.abort triggers prompt rejection which fires finish()
+		// but finish() sees killInProgress and skips disposal.
+		sessionManager.sendKillMessage(agentId, 5);
+
+		// Yield to allow async handlers to run
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Kill-in-progress should still be set — the kill prompt (second
+		// session.prompt call) never resolves in this test.
+		expect(sessionManager.isKillInProgress(agentId)).toBe(true);
+
+		// Verify the session was NOT disposed by finish()
+		// (the real SubagentSessionManager handles disposal via _cleanupAfterKill)
+	});
+
+	it("async finish handler skips disposal when kill is in progress", async () => {
+		// Setup: simulate an agent that gets soft-killed mid-flight
+		const subs: Array<(e: any) => void> = [];
+		let promptReject: ((err: any) => void) | null = null;
+		const disposeSpy = vi.fn();
+		mockSession = {
+			dispose: disposeSpy,
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			abort: vi.fn(() => {
+				if (promptReject) {
+					promptReject(new Error("aborted"));
+					promptReject = null;
+				}
+			}),
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: "work in progress" }] },
+			],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Manually mark kill in progress (simulating sendKillMessage start)
+		(sessionManager as any).killInProgress.add(agentId);
+
+		// Now abort — this triggers the reject handler which calls finish()
+		mockSession.abort();
+
+		// Yield to let async handlers run
+		await new Promise((r) => setTimeout(r, 10));
+
+		// finish() should have seen killInProgress and skipped disposal
+		expect(disposeSpy).not.toHaveBeenCalled();
+
+		// Clean up
+		(sessionManager as any).killInProgress.delete(agentId);
+	});
+
+	it("abortSession uses shared extraction to capture partial output before abort", async () => {
+		const subs: Array<(e: any) => void> = [];
+		let promptReject: ((err: any) => void) | null = null;
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			abort: vi.fn(() => {
+				if (promptReject) {
+					promptReject(new Error("aborted"));
+					promptReject = null;
+				}
+			}),
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: "partial data before abort" }] },
+			],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Call the real abortSession
+		sessionManager.abortSession(agentId);
+
+		// Yield to let async handlers run
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Verify stored async result contains partial output via shared extraction
+		const stored = sessionManager.getAsyncResult(agentId);
+		expect(stored).toBeDefined();
+		expect(stored!.output).toBe("partial data before abort");
+		expect(stored!.error).toBe("killed");
+	});
+
+	it("abortSession marks session completed and disposes it", async () => {
+		const subs: Array<(e: any) => void> = [];
+		let promptReject: ((err: any) => void) | null = null;
+		const disposeSpy = vi.fn();
+		mockSession = {
+			dispose: disposeSpy,
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			abort: vi.fn(() => {
+				if (promptReject) {
+					promptReject(new Error("aborted"));
+					promptReject = null;
+				}
+			}),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		sessionManager.abortSession(agentId);
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Session should be marked completed
+		expect(sessionManager.isCompleted(agentId)).toBe(true);
+		// Session should be disposed
+		expect(disposeSpy).toHaveBeenCalled();
+		// Session should be removed from open sessions
+		expect(sessionManager.hasOpenSession(agentId)).toBe(false);
+	});
+
+	it("soft-kill success: real sendKillMessage stores output and cleans up", async () => {
+		// Simulate a real soft-kill where:
+		// 1. sendKillMessage aborts original prompt
+		// 2. finish() skips disposal (kill in progress)
+		// 3. kill prompt succeeds and stores final result
+		const subs: Array<(e: any) => void> = [];
+		let promptReject: ((err: any) => void) | null = null;
+		let killPromptResolve: ((val: any) => void) | null = null;
+		let callCount = 0;
+
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => {
+				callCount++;
+				if (callCount === 1) {
+					// Original prompt: hangs until aborted
+					return new Promise((_, reject) => { promptReject = reject; });
+				}
+				// Kill prompt: succeeds
+				return new Promise((resolve) => { killPromptResolve = resolve; });
+			}),
+			abort: vi.fn(() => {
+				if (promptReject) {
+					promptReject(new Error("aborted"));
+					promptReject = null;
+				}
+			}),
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: "final answer after kill" }] },
+			],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Start the real sendKillMessage
+		sessionManager.sendKillMessage(agentId, 5);
+
+		// Verify kill-in-progress is set during the kill flow
+		expect(sessionManager.isKillInProgress(agentId)).toBe(true);
+
+		// Resolve the kill prompt (agent finishes after receiving kill message)
+		killPromptResolve!(undefined);
+
+		// Yield to let .then() handlers run
+		await new Promise((r) => setTimeout(r, 10));
+
+		// After kill prompt resolves, cleanup should have happened
+		expect(sessionManager.isKillInProgress(agentId)).toBe(false);
+		expect(sessionManager.isCompleted(agentId)).toBe(true);
+
+		// The stored result should be the kill prompt success output
+		const stored = sessionManager.getAsyncResult(agentId);
+		expect(stored).toBeDefined();
+		expect(stored!.output).toBe("final answer after kill");
+		expect(stored!.error).toBeUndefined();
+	});
+
+	it("soft-kill failure: real sendKillMessage stores error with partial output", async () => {
+		// Kill prompt crashes — verify error + partial output stored
+		const subs: Array<(e: any) => void> = [];
+		let promptReject: ((err: any) => void) | null = null;
+		let killPromptReject: ((err: any) => void) | null = null;
+		let callCount = 0;
+
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => {
+				callCount++;
+				if (callCount === 1) {
+					return new Promise((_, reject) => { promptReject = reject; });
+				}
+				return new Promise((_, reject) => { killPromptReject = reject; });
+			}),
+			abort: vi.fn(() => {
+				if (promptReject) {
+					promptReject(new Error("aborted"));
+					promptReject = null;
+				}
+			}),
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: "tried to finish" }] },
+			],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		sessionManager.sendKillMessage(agentId, 5);
+
+		// Reject the kill prompt
+		killPromptReject!(new Error("model crash during kill"));
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Kill-in-progress should be cleared
+		expect(sessionManager.isKillInProgress(agentId)).toBe(false);
+		expect(sessionManager.isCompleted(agentId)).toBe(true);
+
+		// Partial output + error should be stored
+		const stored = sessionManager.getAsyncResult(agentId);
+		expect(stored).toBeDefined();
+		expect(stored!.output).toBe("tried to finish");
+		expect(stored!.error).toBe("model crash during kill");
 	});
 });

@@ -31,6 +31,7 @@ import type {
 	ModelResolver,
 	SessionSetupContext,
 } from "./session-manager.js";
+import { extractOutput, getFinalTextFromMessages } from "./output-extraction.js";
 
 // ---------------------------------------------------------------------------
 // Adapter interfaces (injectable, testable without concrete classes)
@@ -97,6 +98,12 @@ export interface SessionAdapter {
 	 * The transcript persists on disk for later resume.
 	 */
 	abortSession(id: string): void;
+	/**
+	 * Check whether a soft-kill is in progress for the given session ID.
+	 * Used by the async finish handler to avoid disposing a session that
+	 * the kill flow still needs.
+	 */
+	isKillInProgress(id: string): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,44 +275,9 @@ export class TaskController {
 		return { ok: true, record, agent };
 	}
 
-	/**
-	 * Extract the last assistant text content from a message array.
-	 */
-	static getFinalTextFromMessages(messages: any[]): string {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const msg = messages[i];
-			if (msg?.role !== "assistant") continue;
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			for (const part of content) {
-				if (part?.type === "text" && typeof part.text === "string") return part.text;
-			}
-		}
-		return "";
-	}
-
-	/**
-	 * Extract the best available output from a sub-agent session transcript,
-	 * regardless of outcome (success, crash, timeout, abort).
-	 *
-	 * Shared by blocking and async paths so output extraction stays consistent.
-	 *
-	 * 1. Last assistant text in messages → return it (partial output survives crash).
-	 * 2. No assistant text but error/abort diagnostic → return that.
-	 * 3. Neither → return empty string (caller supplies generic fallback).
-	 */
-	static extractOutput(
-		messages: any[],
-		error?: string,
-	): { text: string; source: 'assistant' | 'diagnostic' | 'none' } {
-		const assistantText = TaskController.getFinalTextFromMessages(messages);
-		if (assistantText) {
-			return { text: assistantText, source: 'assistant' };
-		}
-		if (error) {
-			return { text: error, source: 'diagnostic' };
-		}
-		return { text: '', source: 'none' };
-	}
+	// Re-exported from shared module for backward compatibility.
+	static getFinalTextFromMessages = getFinalTextFromMessages;
+	static extractOutput = extractOutput;
 
 	// ---- Instance methods ----
 
@@ -497,7 +469,10 @@ export class TaskController {
 						context.signal?.removeEventListener("abort", abort);
 						sessionManager.clearAsyncRunning(record!.id);
 						try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
-						try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
+						// If a soft-kill is in progress, the kill flow owns cleanup.
+						if (!sessionManager.isKillInProgress(record!.id)) {
+							try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
+						}
 						if (resolved) {
 							const extracted = TaskController.extractOutput(session.messages as any[]);
 							sessionManager.storeAsyncResult(record!.id, { output: extracted.text, warnings });
@@ -508,8 +483,12 @@ export class TaskController {
 						() => finish(true),
 						(err: unknown) => {
 							const message = err instanceof Error ? err.message : String(err);
-							const extracted = TaskController.extractOutput(session.messages as any[], message);
-							sessionManager.storeAsyncResult(record!.id, { output: extracted.text, error: message, warnings });
+							// When a soft-kill or hard-abort is in progress, the kill/abort
+							// flow owns the result. Skip storing to avoid overwriting it.
+							if (!sessionManager.isKillInProgress(record!.id)) {
+								const extracted = TaskController.extractOutput(session.messages as any[], message);
+								sessionManager.storeAsyncResult(record!.id, { output: extracted.text, error: message, warnings });
+							}
 							finish(false);
 						},
 					);
