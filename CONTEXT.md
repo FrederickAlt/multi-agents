@@ -12,6 +12,9 @@
 - **Agent definition**: A markdown-backed persona/configuration that can run either as
   the Root agent or as a Sub-agent. Root-vs-Sub-agent placement should not change
   prompt composition semantics; only runtime facts such as tree depth and parent ID differ.
+- **Model reference**: The frontmatter value for an Agent definition's model selection; it must resolve to exactly one Pi model through the runtime model resolver, preferring a unique model ID and using `provider/model-id` only when the model ID is ambiguous.
+- **Agent row**: The TUI representation of one Agent definition in the configuration screen; compact rows are three terminal lines tall and the selected row expands into a bounded ten-line configuration panel.
+- **Option column**: A fixed-width editable column inside the selected Agent row, representing one configurable frontmatter field and its selectable items.
 - **Default Root agent definition**: The Agent definition selected for the Root agent when the user has not explicitly selected one. This is configuration, not special runtime behaviour; the selected Agent definition remains fully symmetric with every other Agent definition.
 - **Root agent selection**: Session-local choice of which Agent definition runs as the Root agent. `/agent <name>` changes the current session's selection; new sessions fall back to the configured Default Root agent definition.
 - **Tree depth**: Current position in the agent tree. Root is 0, child is 1,
@@ -59,3 +62,4 @@
 - `canSpawn` conflicts with the preferred frontmatter naming style — resolved: use `can_spawn` only; no prototype backward compatibility for `canSpawn`.
 - Comma-separated checkbox fields are less clear than YAML arrays — resolved: store checkbox selections as YAML lists, with `[]` meaning none.
 - Project-level `.pi/agents/` and `.pi/prompt-parts/` conflict with the desired single editable configuration home — resolved: use user-level `~/.pi/agent/agents/` and `~/.pi/agent/prompt-parts/` only.
+- "singular model name" was ambiguous between a stripped bare identifier, Pi's CLI table output, and runtime-resolvable model selection — resolved: use **Model reference** values derived from Pi library model objects and accepted by the runtime model resolver; preserve slashes that are part of model IDs.
