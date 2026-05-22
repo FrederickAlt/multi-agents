@@ -23,6 +23,7 @@ import { seedAgentConfig } from "./seeding.js";
 import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { discoverPromptParts } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
+import { AsyncAgentNotifier } from "./async-agent-notifier.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
 import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
@@ -312,7 +313,26 @@ export function configureTaskToolForRuntime(
 				},
 			};
 
-			return controller.waitForAgent(wParams.agent_ids, { timeout: wParams.timeout, kill_on_timeout: wParams.kill_on_timeout }, executeContext);
+			const result = await controller.waitForAgent(
+				wParams.agent_ids,
+				{ timeout: wParams.timeout, kill_on_timeout: wParams.kill_on_timeout },
+				executeContext,
+			);
+
+			// Consume async notifications for completed agents so they are
+			// removed from the turn-boundary notification set.
+			const agents = (result.details as TaskDetails | undefined)?.agents;
+			if (agents) {
+				const consumed = agents
+					.filter((a) => a.status === "completed")
+					.map((a) => a.id);
+				if (consumed.length > 0) {
+					_asyncAgentNotifier.consume(consumed);
+				}
+			}
+
+			return result;
+			
 		},
 		renderCall(args, theme) {
 			const ids = Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : String(args.agent_ids ?? "");
@@ -354,12 +374,25 @@ export function configureTaskToolForRuntime(
 // share the same tracked sessions.
 let _sessionManager: SubagentSessionManager | undefined;
 
+// Module-level notifier singleton — injected at turn boundaries.
+const _asyncAgentNotifier = new AsyncAgentNotifier();
+
+export const __testing = {
+	asyncAgentNotifier: _asyncAgentNotifier,
+	resetAsyncAgentNotifier(): void {
+		_asyncAgentNotifier.clear();
+	},
+};
+
 function getOrCreateSessionManager(): SubagentSessionManager {
 	if (!_sessionManager) {
 		_sessionManager = new SubagentSessionManager(
 			new PiSessionManagerProvider(),
 			new PiAgentSessionFactory(),
 		);
+		_sessionManager.setOnAsyncAgentEnd((id) => {
+			_asyncAgentNotifier.markCompleted(id);
+		});
 	}
 	return _sessionManager;
 }
@@ -561,7 +594,7 @@ export default function (pi: ExtensionAPI) {
 		default: DEFAULT_ROOT_AGENT_NAME,
 	});
 
-	pi.on("input", async (_event, ctx) => {
+	pi.on("input", async (event, ctx) => {
 		const activeStore = store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
 		try {
 			activeStore.load();
@@ -570,6 +603,18 @@ export default function (pi: ExtensionAPI) {
 			showMessage(ctx, formatRootAgentResolutionError(error), "error");
 			return { action: "handled" as const };
 		}
+
+		if (event.source !== "extension" && _asyncAgentNotifier.hasPendingCompletion()) {
+			const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+			if (notification) {
+				return {
+					action: "transform" as const,
+					text: `${notification}\n\n${event.text}`,
+					images: event.images,
+				};
+			}
+		}
+
 		return { action: "continue" as const };
 	});
 
@@ -610,9 +655,27 @@ export default function (pi: ExtensionAPI) {
 		registerTaskTool(pi, mainRuntime);
 	});
 
+	// Inject async-agent completion notifications at turn boundaries.
+	// The notifier owns first-notification and reminder cadence; this hook only
+	// delivers whichever consolidated message is currently due.
+	pi.on("turn_end", () => {
+		const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+		if (notification) {
+			pi.sendMessage(
+				{
+					customType: "system",
+					content: notification,
+					display: true,
+				},
+				{ deliverAs: "nextTurn" },
+			);
+		}
+	});
+
 	pi.on("session_shutdown", async (event, ctx) => {
 		_sessionManager?.disposeAll();
 		_sessionManager = undefined;
+		_asyncAgentNotifier.clear();
 		if (event.reason === "new") {
 			store?.cleanup();
 			store = undefined;
@@ -730,8 +793,21 @@ export default function (pi: ExtensionAPI) {
 export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
 export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
-export const waitForAgent: TaskController["waitForAgent"] = (agentIds, opts, context) =>
-	new TaskController().waitForAgent(agentIds, opts, context);
+export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opts, context) => {
+	const result = await new TaskController().waitForAgent(agentIds, opts, context);
+	// Consume async notifications so completed agents are removed
+	// from the turn-boundary notification set (mirrors the tool handler).
+	const agents = (result.details as TaskDetails | undefined)?.agents;
+	if (agents) {
+		const consumed = agents
+			.filter((a) => a.status === "completed")
+			.map((a) => a.id);
+		if (consumed.length > 0) {
+			_asyncAgentNotifier.consume(consumed);
+		}
+	}
+	return result;
+};
 
 // Re-export types introduced by task-controller
 export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";
