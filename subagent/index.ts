@@ -631,7 +631,7 @@ export default function (pi: ExtensionAPI) {
 	// At each turn_end we check for unconsumed completed async agents and
 	// queue a consolidated [System] notification for delivery at the
 	// start of the next turn via deliverAs: "nextTurn".
-	pi.on("turn_end", async () => {
+	pi.on("turn_end", () => {
 		if (!_asyncAgentNotifier.hasUnconsumed()) return;
 		const notification = _asyncAgentNotifier.buildNotification();
 		if (notification) {
@@ -767,8 +767,21 @@ export default function (pi: ExtensionAPI) {
 export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
 export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
-export const waitForAgent: TaskController["waitForAgent"] = (agentIds, opts, context) =>
-	new TaskController().waitForAgent(agentIds, opts, context);
+export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opts, context) => {
+	const result = await new TaskController().waitForAgent(agentIds, opts, context);
+	// Consume async notifications so completed agents are removed
+	// from the turn-boundary notification set (mirrors the tool handler).
+	const agents = (result.details as TaskDetails | undefined)?.agents;
+	if (agents) {
+		const consumed = agents
+			.filter((a) => a.status === "completed")
+			.map((a) => a.id);
+		if (consumed.length > 0) {
+			_asyncAgentNotifier.consume(consumed);
+		}
+	}
+	return result;
+};
 
 // Re-export types introduced by task-controller
 export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";
