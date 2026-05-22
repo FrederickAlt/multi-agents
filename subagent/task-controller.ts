@@ -272,6 +272,30 @@ export class TaskController {
 		return "";
 	}
 
+	/**
+	 * Extract the best available output from a sub-agent session transcript,
+	 * regardless of outcome (success, crash, timeout, abort).
+	 *
+	 * Shared by blocking and async paths so output extraction stays consistent.
+	 *
+	 * 1. Last assistant text in messages → return it (partial output survives crash).
+	 * 2. No assistant text but error/abort diagnostic → return that.
+	 * 3. Neither → return empty string (caller supplies generic fallback).
+	 */
+	static extractOutput(
+		messages: any[],
+		error?: string,
+	): { text: string; source: 'assistant' | 'diagnostic' | 'none' } {
+		const assistantText = TaskController.getFinalTextFromMessages(messages);
+		if (assistantText) {
+			return { text: assistantText, source: 'assistant' };
+		}
+		if (error) {
+			return { text: error, source: 'diagnostic' };
+		}
+		return { text: '', source: 'none' };
+	}
+
 	// ---- Instance methods ----
 
 	/**
@@ -464,8 +488,8 @@ export class TaskController {
 						try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
 						try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
 						if (resolved) {
-							const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
-							sessionManager.storeAsyncResult(record!.id, { output, warnings });
+							const extracted = TaskController.extractOutput(session.messages as any[]);
+							sessionManager.storeAsyncResult(record!.id, { output: extracted.text, warnings });
 						}
 					};
 
@@ -473,7 +497,8 @@ export class TaskController {
 						() => finish(true),
 						(err: unknown) => {
 							const message = err instanceof Error ? err.message : String(err);
-							sessionManager.storeAsyncResult(record!.id, { output: "", error: message, warnings });
+							const extracted = TaskController.extractOutput(session.messages as any[], message);
+							sessionManager.storeAsyncResult(record!.id, { output: extracted.text, error: message, warnings });
 							finish(false);
 						},
 					);
@@ -538,7 +563,8 @@ export class TaskController {
 						};
 					}
 					await session.prompt(params.prompt);
-					const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
+					const extracted = TaskController.extractOutput(session.messages as any[]);
+					const output = extracted.text;
 					const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
 					const warningText =
 						warnings.length > 0
@@ -564,15 +590,24 @@ export class TaskController {
 					};
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
+					const extracted = TaskController.extractOutput(session.messages as any[], message);
 					const warningText =
 						warnings.length > 0
 							? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
 							: "";
+					let contentText: string;
+					if (extracted.source === 'assistant') {
+						contentText = `${record!.displayName} (${record!.id}) crashed but produced partial output. Use resume: "${record!.id}" to retry or continue.\n\n${extracted.text}${warningText}`;
+					} else if (extracted.source === 'diagnostic') {
+						contentText = `${record!.displayName} (${record!.id}) crashed. Use resume: "${record!.id}" to retry or continue this agent.\n\n${extracted.text}${warningText}`;
+					} else {
+						contentText = `${record!.displayName} (${record!.id}) crashed. Use resume: "${record!.id}" to retry or continue this agent.\n\nThe sub-agent stopped without producing any output.${warningText}`;
+					}
 					return {
 						content: [
 							{
 								type: "text",
-								text: `${record!.displayName} (${record!.id}) failed. Use resume: "${record!.id}" to retry or continue this agent.\n\n${message}${warningText}`,
+								text: contentText,
 							},
 						],
 						details: {
@@ -584,6 +619,7 @@ export class TaskController {
 							sessionFile: record!.sessionFile,
 							warnings,
 							error: message,
+							...(extracted.source === 'assistant' ? { output: extracted.text } : {}),
 						},
 					};
 				} finally {
@@ -696,13 +732,14 @@ export class TaskController {
 			// 1. Check in-memory async result (async agent that stored output in finish())
 			const asyncResult = sessionManager.getAsyncResult(agentId);
 			if (asyncResult) {
-				if (asyncResult.error) {
+				if (asyncResult.error !== undefined) {
 					return {
 						id: agentId,
 						displayName: record.displayName,
 						agentType: record.agentType,
 						status: "completed",
 						error: asyncResult.error,
+						output: asyncResult.output,
 						warnings: asyncResult.warnings,
 						sessionFile: record.sessionFile,
 					};
@@ -881,13 +918,22 @@ export class TaskController {
 			const a = agents[0];
 			const displayName = a.displayName || a.agentType || a.id;
 			if (a.status === "completed") {
-				if (a.error) {
+				if (a.error !== undefined) {
 					topLevel.error = a.error;
-					topLevel.output = a.output;
 					topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
-					lines.push(`${displayName} (${a.id}) failed. Use resume: "${a.id}" to retry or continue this agent.`);
-					lines.push("");
-					lines.push(a.error);
+					const hasPartialOutput = a.output && a.output.length > 0 && a.output !== a.error;
+					if (hasPartialOutput) {
+						topLevel.output = a.output;
+						lines.push(`${displayName} (${a.id}) crashed but produced partial output. Use resume: "${a.id}" to retry or continue this agent.`);
+						lines.push("");
+						lines.push(a.error);
+						lines.push("");
+						lines.push(a.output);
+					} else {
+						lines.push(`${displayName} (${a.id}) crashed. Use resume: "${a.id}" to retry or continue this agent.`);
+						lines.push("");
+						lines.push(a.error || "The sub-agent stopped without producing any output.");
+					}
 				} else {
 					topLevel.output = a.output;
 					topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
@@ -917,7 +963,7 @@ export class TaskController {
 				for (const a of completed) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
-					if (a.error) {
+					if (a.error !== undefined) {
 						lines.push(`  Error: ${a.error}`);
 					} else if (a.output) {
 						const preview = a.output.length > 200 ? a.output.slice(0, 200) + "..." : a.output;

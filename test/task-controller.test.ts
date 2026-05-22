@@ -240,6 +240,56 @@ describe("TaskController.getFinalTextFromMessages", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TaskController.extractOutput() — outcome-agnostic output extraction
+// ---------------------------------------------------------------------------
+
+describe("TaskController.extractOutput", () => {
+	it("returns assistant text when present", () => {
+		const messages = [
+			{ role: "user", content: "hello" },
+			{ role: "assistant", content: [{ type: "text", text: "partial result" }] },
+		];
+		const result = TaskController.extractOutput(messages);
+		expect(result.text).toBe("partial result");
+		expect(result.source).toBe("assistant");
+	});
+
+	it("returns diagnostic text when no assistant but error provided", () => {
+		const messages = [{ role: "user", content: "do something" }];
+		const result = TaskController.extractOutput(messages, "Connection refused");
+		expect(result.text).toBe("Connection refused");
+		expect(result.source).toBe("diagnostic");
+	});
+
+	it("returns 'none' source when no assistant and no error", () => {
+		const messages: any[] = [];
+		const result = TaskController.extractOutput(messages);
+		expect(result.text).toBe("");
+		expect(result.source).toBe("none");
+	});
+
+	it("returns assistant text even when error is also provided (partial output before crash)", () => {
+		const messages = [
+			{ role: "assistant", content: [{ type: "text", text: "here is the answer: 42" }] },
+		];
+		const result = TaskController.extractOutput(messages, "Model crashed mid-response");
+		expect(result.text).toBe("here is the answer: 42");
+		expect(result.source).toBe("assistant");
+	});
+
+	it("returns last assistant text when multiple assistant messages exist", () => {
+		const messages = [
+			{ role: "assistant", content: [{ type: "text", text: "first" }] },
+			{ role: "user", content: "prompt" },
+			{ role: "assistant", content: [{ type: "text", text: "second" }] },
+		];
+		const result = TaskController.extractOutput(messages);
+		expect(result.text).toBe("second");
+		expect(result.source).toBe("assistant");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // TaskController.execute() — full orchestration with adapter fakes
 // ---------------------------------------------------------------------------
 
@@ -515,7 +565,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("Model error");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("failed");
+		expect(text).toContain("crashed");
 		expect(text).toContain("Model error");
 		expect(text).toContain("Use resume:");
 	});
@@ -850,8 +900,9 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("async crash");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("failed");
+		expect(text).toContain("crashed");
 		expect(text).toContain("async crash");
+		expect(text).not.toContain("partial output");
 	});
 
 
@@ -943,6 +994,7 @@ describe("TaskController.execute", () => {
 
 		expect(mockSession.abort).toHaveBeenCalled();
 	});
+
 
 	// ---- Expanded waitForAgent (#23) ----
 
@@ -1195,5 +1247,186 @@ describe("TaskController.execute", () => {
 
 		// Async result should be cleared
 		expect(sessionManager.getAsyncResult(agentId)).toBeUndefined();
+	});
+	// ---- Shared outcome-agnostic extraction (blocking crash paths) ----
+
+	it("returns partial assistant output when session crashes after producing text (blocking)", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "here is a partial answer" }] },
+		];
+		mockSession.prompt = vi.fn().mockRejectedValue(new Error("Connection lost"));
+
+		const result = await controller.execute(makeParams(), makeContext());
+
+		expect(result.details.error).toBe("Connection lost");
+		expect(result.details.output).toBe("here is a partial answer");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed but produced partial output");
+		expect(text).toContain("here is a partial answer");
+		expect(text).toContain("Use resume:");
+	});
+
+	it("returns diagnostic content when session crashes with no assistant text (blocking)", async () => {
+		mockSession.messages = [];
+		mockSession.prompt = vi.fn().mockRejectedValue(new Error("Model error"));
+
+		const result = await controller.execute(makeParams(), makeContext());
+
+		expect(result.details.error).toBe("Model error");
+		expect(result.details.output).toBeUndefined();
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("Model error");
+		expect(text).not.toContain("partial output");
+	});
+
+	it("returns generic fallback when crash leaves no transcript and error is empty string", async () => {
+		mockSession.messages = [];
+		// Empty error message — extractor falls through to 'none'
+		mockSession.prompt = vi.fn().mockRejectedValue("");
+
+		const result = await controller.execute(makeParams(), makeContext());
+
+		expect(result.details.error).toBe("");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("without producing any output");
+	});
+
+	// ---- Shared outcome-agnostic extraction (async crash paths via waitForAgent) ----
+
+	it("returns partial output via waitForAgent when async agent crashed after producing text", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "partial async output" }] },
+		];
+		mockSession.prompt = vi.fn().mockRejectedValue(new Error("async boom"));
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(result.details.error).toBe("async boom");
+		expect(result.details.output).toBe("partial async output");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed but produced partial output");
+		expect(text).toContain("partial async output");
+		expect(text).toContain("async boom");
+	});
+
+	it("returns diagnostic via waitForAgent when async agent crashed with no assistant text", async () => {
+		mockSession.messages = [{ role: "user", content: "do work" }];
+		mockSession.prompt = vi.fn().mockRejectedValue(new Error("async crash"));
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(result.details.error).toBe("async crash");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("async crash");
+		expect(text).not.toContain("partial output");
+	});
+
+	// ---- Shared outcome-agnostic extraction (async empty error fallback) ----
+
+	it("returns generic fallback via waitForAgent when async crash leaves no transcript and error is empty string", async () => {
+		mockSession.messages = [];
+		// Empty error message — extractor falls through to 'none'
+		mockSession.prompt = vi.fn().mockRejectedValue("");
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(result.details.error).toBe("");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("without producing any output");
+	});
+
+	// ---- Consistent behavior between blocking and async ----
+
+	it("produces same output structure for blocking and async crash with partial text", async () => {
+		const partialText = "computed answer before crash";
+		const crashError = "Connection lost";
+
+		// Blocking crash
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: partialText }] },
+		];
+		mockSession.prompt = vi.fn().mockRejectedValue(new Error(crashError));
+
+		const blockingResult = await controller.execute(makeParams(), makeContext());
+
+		expect(blockingResult.details.output).toBe(partialText);
+		expect(blockingResult.details.error).toBe(crashError);
+		const blockingText = blockingResult.content[0]?.type === "text" ? blockingResult.content[0].text : "";
+		expect(blockingText).toContain(partialText);
+		expect(blockingText).toContain("crashed but produced partial output");
+
+		// Reset for async
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => vi.fn()),
+			prompt: vi.fn().mockRejectedValue(new Error(crashError)),
+			abort: vi.fn(),
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: partialText }] },
+			],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const asyncResult = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(asyncResult.details.output).toBe(partialText);
+		expect(asyncResult.details.error).toBe(crashError);
+		const asyncText = asyncResult.content[0]?.type === "text" ? asyncResult.content[0].text : "";
+		expect(asyncText).toContain(partialText);
+		expect(asyncText).toContain("crashed");
+	});
+
+	// ---- Successful output still works through shared path ----
+
+	it("successful blocking output still uses shared extraction path", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "task done" }] },
+		];
+
+		const result = await controller.execute(makeParams(), makeContext());
+
+		expect(result.details.output).toBe("task done");
+		expect(result.details.error).toBeUndefined();
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("completed");
+		expect(text).toContain("task done");
+
 	});
 });
