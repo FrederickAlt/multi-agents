@@ -13,7 +13,7 @@
  * adapter interfaces in TaskExecuteContext.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DefaultResourceLoader, Model } from "@mariozechner/pi-coding-agent";
 import type {
@@ -619,7 +619,6 @@ export class TaskController {
 	 */
 	static readOutputFromSessionFile(sessionFile: string): string | undefined {
 		try {
-			if (!existsSync(sessionFile)) return undefined;
 			const raw = readFileSync(sessionFile, "utf-8").trim();
 			if (!raw) return undefined;
 			const lines = raw.split("\n");

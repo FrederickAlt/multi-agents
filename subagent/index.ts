@@ -726,8 +726,8 @@ export default function (pi: ExtensionAPI) {
 export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
 export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
-export const waitForAgent: TaskController["waitForAgent"] = (agentId, context) =>
-	new TaskController().waitForAgent(agentId, context);
+export const waitForAgent: TaskController["waitForAgent"] = (agentIds, opts, context) =>
+	new TaskController().waitForAgent(agentIds, opts, context);
 
 // Re-export types introduced by task-controller
 export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";
