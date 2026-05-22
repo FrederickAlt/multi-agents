@@ -157,7 +157,32 @@ describe("Board", () => {
 		expect(children.length).toBeGreaterThan(0);
 	});
 
-	it("shows focused non-inline field context in expanded rows", () => {
+	it("shows current inline option keyboard hint in expanded rows", () => {
+		const result = AgentRow({
+			agent: agent("default"),
+			isFocused: true,
+			isExpanded: true,
+			focusedField: 4,
+			focusedOptionItem: 0,
+			optionColumnScrollOffset: 0,
+			options: {
+				...options,
+				models: [
+					{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "claude" },
+				],
+			},
+			status: undefined,
+		}) as React.ReactElement;
+
+		const text = collectText(result);
+		expect(text).toContain("←/→ columns");
+		expect(text).toContain("↑/↓ items");
+		expect(text).toContain("type to filter");
+		expect(text).toContain("Enter/Space select");
+		expect(text).toContain("Esc clear/collapse");
+	});
+
+	it("shows focused inline field context in expanded rows", () => {
 		const focusedAgent = {
 			...agent("default"),
 			frontmatter: {
@@ -182,10 +207,12 @@ describe("Board", () => {
 
 		const text = collectText(result);
 		expect(text).toContain("can_spawn");
-		expect(text).toContain("Enter/Space open/edit");
+		expect(text).toContain("←/→ columns");
+		expect(text).toContain("↑/↓ items");
+		expect(text).toContain("Esc clear/collapse");
 	});
 
-	it("keeps non-inline context visible when status is present", () => {
+	it("keeps inline context visible when status is present", () => {
 		const focusedAgent = {
 			...agent("default"),
 			frontmatter: {
@@ -210,7 +237,7 @@ describe("Board", () => {
 
 		const text = collectText(result);
 		expect(text).toContain("Saved default.md");
-		expect(text).toContain("Enter/Space open/edit");
+		expect(text).toContain("←/→ columns");
 	});
 
 	it("marks stale inline checkbox entries as missing", () => {
@@ -336,7 +363,7 @@ describe("Board", () => {
 		expect((text.match(/filter:/g) ?? []).length).toBe(1);
 	});
 
-	it("pins degraded model status outside the scroll window", () => {
+	it("pins degraded model status while respecting the scroll budget", () => {
 		const result = OptionColumn({
 			fieldName: "model",
 			items: [
@@ -345,8 +372,9 @@ describe("Board", () => {
 				"model-beta",
 				"model-gamma",
 				"model-delta",
+				"model-epsilon",
 			],
-			selectedValue: "model-delta",
+			selectedValue: "model-beta",
 			focusedItemIndex: 4,
 			isFocused: true,
 			maxVisibleItems: 3,
@@ -354,8 +382,24 @@ describe("Board", () => {
 		const text = collectText(result);
 
 		expect(text).toContain(MODEL_OPTION_DEGRADED_STATUS);
+		expect(text).not.toContain("model-gamma");
 		expect(text).toContain("model-delta");
-		expect(text).not.toContain("model-alpha");
+	});
+
+	it("uses full maxVisibleItems budget for ready model lists without pinned status", () => {
+		const result = OptionColumn({
+			fieldName: "model",
+			items: ["model-alpha", "model-beta", "model-gamma", "model-delta"],
+			selectedValue: "model-beta",
+			focusedItemIndex: 0,
+			isFocused: true,
+			maxVisibleItems: 3,
+		}) as React.ReactElement;
+		const text = collectText(result);
+
+		expect(text).toContain("model-beta");
+		expect(text).toContain("model-gamma");
+		expect(text).not.toContain("model-delta");
 	});
 
 	it("never trims the expanded agent when scroll indicators overflow", () => {

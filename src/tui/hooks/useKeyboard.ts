@@ -166,6 +166,28 @@ export function handleKeyboardInput(
 			return;
 		}
 
+		if (!isInlineOptionColumn) {
+			if (input === "h") {
+				actions.focusPrevField();
+				return;
+			}
+
+			if (input === "l") {
+				actions.focusNextField();
+				return;
+			}
+
+			if (input === "j") {
+				actions.focusNextField();
+				return;
+			}
+
+			if (input === "k") {
+				actions.focusPrevField();
+				return;
+			}
+		}
+
 		if (key.backspace || key.delete) {
 			if (isInlineOptionColumn) {
 				actions.setOptionColumnFilter(state.optionColumnFilter.slice(0, -1));
