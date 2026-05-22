@@ -394,6 +394,8 @@ describe("TaskController.execute", () => {
 			isAsyncRunning: vi.fn((id: string) => sessionManager.isAsyncRunning(id)),
 			isCompleted: vi.fn((id: string) => sessionManager.isCompleted(id)),
 			hasOpenSession: vi.fn((id: string) => sessionManager.hasOpenSession(id)),
+			sendKillMessage: vi.fn((id: string, timeoutMinutes: number) => sessionManager.sendKillMessage(id, timeoutMinutes)),
+			abortSession: vi.fn((id: string) => sessionManager.abortSession(id)),
 		};
 
 		controller = new TaskController();
@@ -1428,5 +1430,315 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("completed");
 		expect(text).toContain("task done");
 
+	});
+
+	// ---- Timeout escalation (#25) ----
+
+	it("kill_on_timeout defaults to false (non-destructive timeout)", async () => {
+		// Agent that never finishes
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Default: kill_on_timeout is false
+		const result = await controller.waitForAgent([agentId], { timeout: 0 }, makeContext());
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("timed_out_still_running");
+
+		// Agent should NOT be aborted (non-destructive)
+		expect(mockSession.abort).not.toHaveBeenCalled();
+	});
+
+	it("timeout with kill_on_timeout:false preserves non-destructive behavior", async () => {
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: false },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("timed_out_still_running");
+
+		// Agent should NOT be aborted and NOT receive kill message
+		expect(mockSession.abort).not.toHaveBeenCalled();
+		expect(fakeSessionManager.sendKillMessage).not.toHaveBeenCalled();
+	});
+
+	it("soft-kill: agent finishes within kill window and returns output", async () => {
+		// Agent that finishes after soft-kill
+		const subs: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Simulate soft-kill success: sendKillMessage stores fresh result,
+		// then waitForSessionEnd resolves
+		const origSendKill = fakeSessionManager.sendKillMessage;
+		fakeSessionManager.sendKillMessage = vi.fn((id: string, _mins: number) => {
+			// Simulate agent finishing after receiving kill message
+			sessionManager.storeAsyncResult(id, {
+				output: "final answer after soft-kill",
+				warnings: [],
+			});
+			// Mark session as completed so waitForSessionEnd resolves
+			// Use the real sessionManager method, not the fake
+			(sessionManager as any).completedSessions?.add?.(id);
+			// Fire agent_end manually
+			for (const cb of subs) cb({ type: "agent_end" });
+		});
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("completed");
+		expect(agents[0].output).toBe("final answer after soft-kill");
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("completed");
+		expect(text).toContain("final answer after soft-kill");
+
+		fakeSessionManager.sendKillMessage = origSendKill;
+	});
+
+	it("hard-abort: agent does not finish within kill window and is killed", async () => {
+		// Agent that never finishes
+		const subs: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// sendKillMessage is a no-op (agent doesn't respond to kill)
+		fakeSessionManager.sendKillMessage = vi.fn();
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("killed");
+
+		// Hard-abort should have been called
+		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(agentId);
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("hard-aborted");
+		expect(text).toContain("Use resume:");
+	});
+
+	it("hard-aborted agent has persisted session file for resume", async () => {
+		const subs: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		fakeSessionManager.sendKillMessage = vi.fn();
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("killed");
+
+		// Session file should still be present (for resume)
+		expect(agents[0].sessionFile).toBeDefined();
+		expect(agents[0].id).toBe(agentId);
+
+		// The resume ID is in the output text
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Use resume:");
+	});
+
+	it("per-agent status reporting for mixed outcomes (completed + killed)", async () => {
+		// Two agents both running — one will finish during kill, one will be killed
+		const subsA: Array<(e: any) => void> = [];
+		const mockSessionA = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subsA.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+
+		const subsB: Array<(e: any) => void> = [];
+		const mockSessionB = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+
+		let callCount = 0;
+		mockAgentSessionFactory.create = vi.fn(() => {
+			callCount++;
+			return Promise.resolve(callCount === 1 ? mockSessionA : mockSessionB);
+		});
+
+		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idA = (spawnA.details as TaskDetails).id!;
+
+		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idB = (spawnB.details as TaskDetails).id!;
+
+		// Agent A finishes during kill window: sendKillMessage stores fresh result
+		const origSendKill = fakeSessionManager.sendKillMessage;
+		fakeSessionManager.sendKillMessage = vi.fn((id: string) => {
+			if (id === idA) {
+				sessionManager.storeAsyncResult(id, {
+					output: "agent A final answer",
+					warnings: [],
+				});
+				(sessionManager as any).completedSessions?.add?.(id);
+				for (const cb of subsA) cb({ type: "agent_end" });
+			}
+			// Agent B: no response to kill (will be hard-aborted)
+		});
+
+		const result = await controller.waitForAgent(
+			[idA, idB],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(2);
+
+		const agentA = agents.find(a => a.id === idA)!;
+		expect(agentA.status).toBe("completed");
+		expect(agentA.output).toBe("agent A final answer");
+
+		const agentB = agents.find(a => a.id === idB)!;
+		expect(agentB.status).toBe("killed");
+
+		// Multi-agent text should show both statuses
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("## Completed");
+		expect(text).toContain("## Hard-Aborted");
+
+		fakeSessionManager.sendKillMessage = origSendKill;
+	});
+
+	it("single-agent killed status reports correctly", async () => {
+		const subs: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		fakeSessionManager.sendKillMessage = vi.fn();
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("killed");
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("hard-aborted");
+		expect(text).toContain("Use resume:");
+		expect(result.details.error).toBe("killed");
+	});
+
+	it("killed agent with partial output shows output in result", async () => {
+		const subs: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		// Simulate abortSession storing partial output before marking completed
+		const origAbortSession = fakeSessionManager.abortSession;
+		fakeSessionManager.abortSession = vi.fn((id: string) => {
+			// Store partial output simulating what the real session manager would do
+			sessionManager.storeAsyncResult(id, {
+				output: "partial work before kill",
+				error: "killed",
+				warnings: [],
+			});
+			// Then call the real abortSession
+			(sessionManager as any).completedSessions?.add?.(id);
+			try { mockSession.abort(); } catch {}
+		});
+
+		fakeSessionManager.sendKillMessage = vi.fn();
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("killed");
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Partial output may be available");
+		expect(text).toContain("partial work before kill");
+
+		fakeSessionManager.abortSession = origAbortSession;
 	});
 });

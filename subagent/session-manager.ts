@@ -423,6 +423,86 @@ export class SubagentSessionManager {
 		return this.completedSessions.has(id);
 	}
 
+	// ---- Kill / abort ----
+
+	/**
+	 * Send a soft-kill instruction to a running async session.
+	 *
+	 * Aborts the current prompt (the async error handler stores any partial
+	 * output), then sends a kill message as a new prompt giving the agent
+	 * one more turn to produce a final answer.
+	 */
+	sendKillMessage(id: string, timeoutMinutes: number): void {
+		const session = this.openSessions.get(id);
+		if (!session) return;
+
+		const killMessage = `[System] The parent agent requires you to finish within ${timeoutMinutes} minute(s). Please produce your final answer now.`;
+
+		// Abort the current prompt so the agent sees the kill instruction
+		try { session.abort(); } catch { /* best-effort */ }
+
+		// Send the kill message as a new prompt — gives the agent one last turn
+		session.prompt(killMessage).then(
+			() => {
+				// Agent finished: extract output from messages (shared extraction path)
+				// The messages include the kill message + agent's final response
+				// Store as fresh async result replacing any partial output from abort
+				const messages = session.messages as any[];
+				const lastAssistant = messages
+					.filter((m: any) => m.role === 'assistant')
+					.map((m: any) => {
+						if (typeof m.content === 'string') return m.content;
+						if (Array.isArray(m.content)) {
+							return m.content
+								.filter((b: any) => b.type === 'text')
+								.map((b: any) => b.text)
+								.join('\n');
+						}
+						return '';
+					})
+					.join('\n');
+				this.asyncResults.set(id, { output: lastAssistant || '', warnings: [] });
+				this.completedSessions.add(id);
+			},
+			(error: any) => {
+				// Kill prompt crashed — store error + any partial output from messages
+				const message = error instanceof Error ? error.message : String(error);
+				const messages = session.messages as any[];
+				const lastAssistant = messages
+					.filter((m: any) => m.role === 'assistant')
+					.map((m: any) => {
+						if (typeof m.content === 'string') return m.content;
+						if (Array.isArray(m.content)) {
+							return m.content
+								.filter((b: any) => b.type === 'text')
+								.map((b: any) => b.text)
+								.join('\n');
+						}
+						return '';
+					})
+					.join('\n');
+				this.asyncResults.set(id, { output: lastAssistant || '', error: message || 'The sub-agent stopped without producing any output.', warnings: [] });
+				this.completedSessions.add(id);
+			},
+		);
+	}
+
+	/**
+	 * Hard-abort a session immediately.
+	 * The session is disposed but the transcript persists on disk for resume.
+	 */
+	abortSession(id: string): void {
+		const session = this.openSessions.get(id);
+		if (!session) return;
+
+		try { session.abort(); } catch { /* best-effort */ }
+
+		// Mark as completed so waitForSessionEnd resolves and the
+		// buildResult picks up whatever asyncResult was stored by the
+		// original error handler.
+		this.completedSessions.add(id);
+	}
+
 	// ---- Run serialization ----
 
 	/**

@@ -86,6 +86,17 @@ export interface SessionAdapter {
 	isCompleted(id: string): boolean;
 	/** Check if there is an open session for the given record ID. */
 	hasOpenSession(id: string): boolean;
+	/**
+	 * Send a soft-kill instruction to a running async session.
+	 * Aborts the current prompt, then sends a kill message as a new prompt
+	 * giving the agent one more turn to produce a final answer.
+	 */
+	sendKillMessage(id: string, timeoutMinutes: number): void;
+	/**
+	 * Hard-abort a session immediately.
+	 * The transcript persists on disk for later resume.
+	 */
+	abortSession(id: string): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +149,7 @@ export interface TaskExecuteContext {
 }
 
 /** Status of a single agent within a wait_for_agent result. */
-export type AgentWaitStatus = 'completed' | 'running' | 'timed_out_still_running' | 'unknown';
+export type AgentWaitStatus = 'completed' | 'running' | 'timed_out_still_running' | 'killed' | 'unknown';
 
 /** Per-agent structured result returned by waitForAgent. */
 export interface AgentWaitResult {
@@ -686,6 +697,7 @@ export class TaskController {
 	 * - `completed`: finished and output was captured (async or from persisted session)
 	 * - `running`: still in-flight at the time of return
 	 * - `timed_out_still_running`: was still running when the timeout expired
+	 * - `killed`: hard-aborted after soft-kill window expired; transcript persists for resume
 	 * - `unknown`: the agent ID has no corresponding record
 	 *
 	 * When multiple IDs are supplied the call returns as soon as any listed
@@ -697,11 +709,14 @@ export class TaskController {
 	 *
 	 * @param agentIds  List of hex agent IDs to wait on (required).
 	 * @param opts.timeout  Minutes to wait before returning a status update (default 5).
+	 * @param opts.kill_on_timeout  When true, on timeout sends a soft-kill instruction to
+	 *   each still-running agent to finish within the same timeout duration.
+	 *   Agents that don't finish in that kill window are hard-aborted.
 	 * @param context  Injected runtime dependencies.
 	 */
 	async waitForAgent(
 		agentIds: string[],
-		opts: { timeout?: number },
+		opts: { timeout?: number; kill_on_timeout?: boolean },
 		context: TaskExecuteContext,
 	): Promise<TaskResult> {
 		const { metadataStore, sessionManager } = context;
@@ -852,7 +867,6 @@ export class TaskController {
 			await new Promise<void>((resolve) => { queueMicrotask(resolve); });
 
 			if (winner === "__timeout__") {
-				// Timeout: re-classify; agents that are still running become timed_out_still_running
 				const timeoutResults = uniqueIds.map(id => {
 					const r = buildResult(id);
 					if (r.status === "running") {
@@ -860,6 +874,75 @@ export class TaskController {
 					}
 					return r;
 				});
+
+				// If kill_on_timeout is enabled, escalate to soft-kill then hard-abort
+				const killOnTimeout = opts.kill_on_timeout === true;
+				if (killOnTimeout) {
+					const timedOutIds = timeoutResults
+						.filter(r => r.status === "timed_out_still_running")
+						.map(r => r.id);
+
+					if (timedOutIds.length > 0) {
+						// Send soft-kill instruction to each timed-out agent
+						for (const id of timedOutIds) {
+							try {
+								sessionManager.sendKillMessage(id, timeoutMinutes);
+							} catch { /* best-effort */ }
+						}
+
+						// Wait the kill window for agents to finish
+						const killWaitPromises = timedOutIds.map(id =>
+							sessionManager.waitForSessionEnd(id).then(() => id)
+						);
+						const killTimeoutPromise = new Promise<string>((resolve) => {
+							setTimeout(() => resolve("__kill_timeout__"), timeoutMs);
+						});
+
+						const killWinner = await Promise.race([...killWaitPromises, killTimeoutPromise]);
+
+						// Yield microtask queue
+						await new Promise<void>((resolve) => { queueMicrotask(resolve); });
+
+						// Track which agents were explicitly hard-aborted
+						const hardAbortedIds = new Set<string>();
+
+						if (killWinner === "__kill_timeout__") {
+							// Kill window expired — hard-abort still-running agents
+							for (const id of timedOutIds) {
+								const r = buildResult(id);
+								if (r.status === "running" || r.status === "timed_out_still_running") {
+									try {
+										sessionManager.abortSession(id);
+									} catch { /* best-effort */ }
+									hardAbortedIds.add(id);
+								}
+							}
+							// Yield after aborts so finish() handlers run
+							await new Promise<void>((resolve) => { queueMicrotask(resolve); });
+						}
+
+						// Re-classify: finished agents are completed, hard-aborted are killed
+						const escalationResults = uniqueIds.map(id => {
+							const r = buildResult(id);
+							if (hardAbortedIds.has(id)) {
+								return { ...r, status: "killed" as const };
+							}
+							if (r.status === "running" && timedOutIds.includes(id)) {
+								// Still running after kill window → killed
+								return { ...r, status: "killed" as const };
+							}
+							return r;
+						});
+						for (const r of escalationResults) {
+							if (r.status === "completed") {
+								sessionManager.clearAsyncResult(r.id);
+							}
+						}
+						return this._formatWaitResult(escalationResults, warnings);
+					}
+				}
+
+				// Non-escalation path (or no timed-out agents): return immediately
 				for (const r of timeoutResults) {
 					if (r.status === "completed") {
 						sessionManager.clearAsyncResult(r.id);
@@ -901,6 +984,7 @@ export class TaskController {
 		const completed = agents.filter(a => a.status === "completed");
 		const running = agents.filter(a => a.status === "running");
 		const timedOut = agents.filter(a => a.status === "timed_out_still_running");
+		const killed = agents.filter(a => a.status === "killed");
 		const unknown = agents.filter(a => a.status === "unknown");
 
 		// Top-level details (backwards-compatible with single-agent callers)
@@ -950,6 +1034,18 @@ export class TaskController {
 				lines.push(`${displayName} (${a.id}) is still running. Call wait_for_agent again to check.`);
 			} else if (a.status === "timed_out_still_running") {
 				lines.push(`${displayName} (${a.id}) is still running (timed out waiting). Call wait_for_agent again to check.`);
+			} else if (a.status === "killed") {
+				topLevel.error = "killed";
+				topLevel.output = a.output;
+				topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
+				const hasOutput = a.output && a.output.length > 0;
+				if (hasOutput) {
+					lines.push(`${displayName} (${a.id}) was hard-aborted after kill window expired. Partial output may be available. Use resume: "${a.id}" to continue this agent.`);
+					lines.push("");
+					lines.push(a.output);
+				} else {
+					lines.push(`${displayName} (${a.id}) was hard-aborted after kill window expired. Use resume: "${a.id}" to continue this agent.`);
+				}
 			} else {
 				topLevel.error = "unknown_agent_id";
 				lines.push(`Unknown agent ID "${a.id}".`);
@@ -987,6 +1083,14 @@ export class TaskController {
 				for (const a of timedOut) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
+				}
+			}
+
+			if (killed.length > 0) {
+				lines.push(`\n## Hard-Aborted (${killed.length})`);
+				for (const a of killed) {
+					const name = a.displayName || a.agentType || a.id;
+					lines.push(`- ${name} (${a.id}) [transcript saved, resumable]`);
 				}
 			}
 

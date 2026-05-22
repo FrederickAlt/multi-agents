@@ -260,6 +260,10 @@ export function configureTaskToolForRuntime(
 			default: 5,
 			description: "Minutes to wait before returning a status update. Default 5 minutes.",
 		})),
+		kill_on_timeout: Type.Optional(Type.Boolean({
+			default: false,
+			description: "When true, on timeout sends a soft-kill instruction to each still-running agent to finish within the same timeout duration. Agents that don't finish in that kill window are hard-aborted (transcripts persist for resume).",
+		})),
 	});
 
 	targetPi.registerTool({
@@ -308,7 +312,7 @@ export function configureTaskToolForRuntime(
 				},
 			};
 
-			return controller.waitForAgent(wParams.agent_ids, { timeout: wParams.timeout }, executeContext);
+			return controller.waitForAgent(wParams.agent_ids, { timeout: wParams.timeout, kill_on_timeout: wParams.kill_on_timeout }, executeContext);
 		},
 		renderCall(args, theme) {
 			const ids = Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : String(args.agent_ids ?? "");
