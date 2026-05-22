@@ -627,6 +627,12 @@ export class TaskController {
 			// Session may have been disposed; try to extract whatever is available
 		}
 
+
+		// Yield to the microtask queue so finish() can run storeAsyncResult
+		// before we try to read it.  Without this, the waitForSessionEnd
+		// resolution continuation runs before the session.prompt()
+		// completion handler and getAsyncResult() returns undefined.
+		await new Promise<void>((resolve) => { queueMicrotask(resolve); });
 		// Re-read record to pick up updated session file
 		try {
 			record = metadataStore.findRecord(agentId) ?? record;

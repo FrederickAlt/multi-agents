@@ -849,6 +849,54 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("async crash");
 	});
 
+
+	it("captures output when agent finishes during waitForAgent (microtask ordering)", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "mid-wait output" }] },
+		];
+
+		// Instrument subscribe to capture callbacks so we can fire agent_end.
+		// The default mock returns vi.fn() but never stores or invokes callbacks.
+		const subs: Array<(e: any) => void> = [];
+		mockSession.subscribe = vi.fn((cb) => {
+			subs.push(cb);
+			return () => {
+				const i = subs.indexOf(cb);
+				if (i >= 0) subs.splice(i, 1);
+			};
+		});
+
+		// Prompt never resolves — agent stays in-flight
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		// Spawn async (prompt not resolved yet)
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		expect(sessionManager.hasOpenSession(agentId)).toBe(true);
+
+		// Start waiting — subscribes to agent_end and awaits
+		const waitPromise = controller.waitForAgent(agentId, makeContext());
+
+		// Simulate the real event order: agent_end fires first (synchronously
+		// during session.prompt() resolution), then storeAsyncResult runs as
+		// a microtask inside the finish() callback.
+		for (const cb of subs) cb({ type: "agent_end" });
+		queueMicrotask(() => {
+			sessionManager.storeAsyncResult(agentId, { output: "mid-wait output", warnings: [] });
+		});
+
+		const result = await waitPromise;
+
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.id).toBe(agentId);
+		expect(result.details.output).toBe("mid-wait output");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("mid-wait output");
+	});
 	// ---- In-flight guard ----
 
 	it("blocks blocking call when async is already in-flight on same record", async () => {
