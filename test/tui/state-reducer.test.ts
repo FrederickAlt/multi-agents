@@ -1,6 +1,26 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { configReducer, createInitialState, resolveCheckboxSelection, computeCheckboxSaveValue } from "../../src/tui/state/reducer.js";
 import type { ConfigState, AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
+
+const originalRowsDescriptor = Object.getOwnPropertyDescriptor(
+	process.stdout,
+	"rows",
+);
+
+function setTerminalRows(rows: number): void {
+	Object.defineProperty(process.stdout, "rows", {
+		value: rows,
+		configurable: true,
+	});
+}
+
+afterEach(() => {
+	if (originalRowsDescriptor) {
+		Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
+	} else {
+		delete (process.stdout as { rows?: number }).rows;
+	}
+});
 
 function makeAgent(overrides: Partial<AgentConfigState> = {}): AgentConfigState {
 	return {
@@ -788,6 +808,7 @@ describe("vertical scrolling", () => {
 	});
 
 	it("focus navigation auto-scrolls to keep focused agent visible", () => {
+		setTerminalRows(24);
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [
@@ -800,14 +821,38 @@ describe("vertical scrolling", () => {
 			focus: { agentIndex: 0, fieldIndex: 0 },
 		};
 
-		// Navigate forward — should auto-scroll when needed
+		// Navigate forward — all 5 agents (15 lines) fit in 24, so no scroll needed.
 		let next = state;
 		for (let i = 0; i < 4; i++) {
 			next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
 		}
 		expect(next.focus.agentIndex).toBe(4);
-		// scrollOffset should have advanced to keep agent 4 visible
-		expect(next.scrollOffset).toBeGreaterThanOrEqual(0);
+		expect(next.scrollOffset).toBe(0);
+	});
+
+	it("focus navigation scrolls when focused agent goes beyond visible window", () => {
+		// Small terminal: only 2 compact agents (6 lines) fit
+		setTerminalRows(6);
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({ name: "a" }),
+				makeAgent({ name: "b" }),
+				makeAgent({ name: "c" }),
+				makeAgent({ name: "d" }),
+				makeAgent({ name: "e" }),
+			],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+		};
+
+		// Navigate to agent 4 — should trigger scroll
+		let next = state;
+		for (let i = 0; i < 4; i++) {
+			next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
+		}
+		expect(next.focus.agentIndex).toBe(4);
+		// Walk-back from agent 4: 4(3)+3(3)=6 fits, but 2(3)=9>6 → offset=3
+		expect(next.scrollOffset).toBe(3);
 	});
 
 	it("EXPAND resets scroll to keep expanded agent visible", () => {

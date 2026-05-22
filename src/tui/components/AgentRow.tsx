@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { AgentConfigState, DiscoveredOptions, StatusInfo } from "../state/types.js";
+import type { AgentConfigState, StatusInfo } from "../state/types.js";
 import { FIELDS_ORDER } from "../state/types.js";
 import { FieldRow } from "./FieldRow.js";
 import { StatusLine } from "./StatusLine.js";
@@ -8,7 +8,6 @@ import { ErrorColumn } from "./ErrorColumn.js";
 
 interface AgentRowProps {
 	agent: AgentConfigState;
-	options: DiscoveredOptions;
 	isFocused: boolean;
 	isExpanded: boolean;
 	focusedField: number;

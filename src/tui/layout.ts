@@ -52,7 +52,7 @@ export function clampVerticalScrollOffset(
 	}
 
 	// If focused agent is after the visible window, advance scroll
-	// so it fits.
+	// so the focused agent fits with as many preceding rows as possible.
 	let used = 0;
 	let visible = 0;
 	for (let i = nextOffset; i < agentCount; i++) {
@@ -63,12 +63,14 @@ export function clampVerticalScrollOffset(
 	}
 
 	if (focusedAgentIndex >= nextOffset + visible) {
-		// Advance until focused agent is the last (or only) visible
 		nextOffset = focusedAgentIndex;
-		// Walk back to fill remaining space
+		// Recompute fresh from the focused row — the forward-scan
+		// `used` value is stale and would cause the walk-back to
+		// break immediately, pinning the offset to focusedAgentIndex.
+		used = getAgentRowHeight(nextOffset, expandedAgentIndex);
 		while (nextOffset > 0) {
 			const h = getAgentRowHeight(nextOffset - 1, expandedAgentIndex);
-			if (h + used > termHeight) break;
+			if (used + h > termHeight) break;
 			used += h;
 			nextOffset--;
 		}
