@@ -229,7 +229,21 @@ export function useConfig() {
 				overlay.localSelected,
 				state.options.models,
 			);
-			if (ref) newValue = ref;
+			if (ref) {
+				newValue = ref;
+			} else {
+				dispatch({
+					type: "SAVE_COMPLETE",
+					agentIndex: overlay.agentIndex,
+					status: {
+						type: "error",
+						message: `Cannot resolve model "${overlay.localSelected}"`,
+						timestamp: Date.now(),
+					},
+				});
+				dispatch({ type: "CLOSE_OVERLAY" });
+				return;
+			}
 		}
 
 		// Dispatch saving status

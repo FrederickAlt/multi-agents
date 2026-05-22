@@ -39,7 +39,7 @@ export function resolveModelDisplayName(
 	// Try exact match by displayName
 	match = models.find((m) => m.displayName === value);
 	if (match) return match.displayName;
-	// Try prefix match: value = "provider/modelId" against canonicalRef
+	// Try constructed provider/modelId match (e.g. "deepseek/deepseek-v4")
 	match = models.find((m) => `${m.provider}/${m.modelId}` === value);
 	if (match) return match.displayName;
 	return undefined;
