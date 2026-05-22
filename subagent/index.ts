@@ -338,7 +338,7 @@ export function configureTaskToolForRuntime(
 			}
 
 			return result;
-			
+
 		},
 
 		renderCall(args, theme) {
