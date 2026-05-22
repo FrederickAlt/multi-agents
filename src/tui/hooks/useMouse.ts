@@ -113,7 +113,7 @@ function handleBoardClick(
 			return;
 		}
 		rowCursor += height;
-		if (rowCursor > process.stdout.rows ?? 24) break;
+		if (rowCursor > (process.stdout.rows ?? 24)) break;
 	}
 }
 

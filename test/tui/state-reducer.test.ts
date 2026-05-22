@@ -894,3 +894,95 @@ describe("vertical scrolling", () => {
 		expect(next.expandedAgentIndex).toBeNull();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Focus collapses expanded row when moving away
+// ---------------------------------------------------------------------------
+
+describe("focus collapses expanded row", () => {
+	it("FOCUS_AGENT collapses expansion when focus moves to different agent", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
+			focus: { agentIndex: 0, fieldIndex: 2 },
+			expandedAgentIndex: 0,
+		};
+		const next = configReducer(state, { type: "FOCUS_AGENT", direction: "next" });
+		expect(next.expandedAgentIndex).toBeNull();
+		expect(next.focus.agentIndex).toBe(1);
+	});
+
+	it("FOCUS_AGENT preserves expansion when focus wraps back to the expanded agent", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
+			focus: { agentIndex: 2, fieldIndex: 0 },
+			expandedAgentIndex: 0,
+		};
+		// prev from 2 → 1 (not expanded, collapse)
+		let next = configReducer(state, { type: "FOCUS_AGENT", direction: "prev" });
+		expect(next.expandedAgentIndex).toBeNull();
+		// prev from 1 → 0 (back to the formerly expanded agent, but it was already collapsed)
+		next = configReducer(next, { type: "FOCUS_AGENT", direction: "prev" });
+		expect(next.focus.agentIndex).toBe(0);
+	});
+
+	it("FOCUS_AGENT_AT collapses expansion when clicking a different agent", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
+			focus: { agentIndex: 0, fieldIndex: 3 },
+			expandedAgentIndex: 0,
+		};
+		const next = configReducer(state, { type: "FOCUS_AGENT_AT", agentIndex: 2 });
+		expect(next.expandedAgentIndex).toBeNull();
+		expect(next.focus.agentIndex).toBe(2);
+	});
+
+	it("FOCUS_AGENT_AT keeps expansion when clicking the same expanded agent", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 0, fieldIndex: 2 },
+			expandedAgentIndex: 0,
+		};
+		const next = configReducer(state, { type: "FOCUS_AGENT_AT", agentIndex: 0 });
+		expect(next.expandedAgentIndex).toBe(0);
+		expect(next.focus.agentIndex).toBe(0);
+	});
+
+	it("FOCUS_AGENT does not collapse when nothing is expanded", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" })],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+			expandedAgentIndex: null,
+		};
+		const next = configReducer(state, { type: "FOCUS_AGENT", direction: "next" });
+		expect(next.expandedAgentIndex).toBeNull();
+		expect(next.focus.agentIndex).toBe(1);
+	});
+
+	it("EXPAND on the same agent after a FOCUS_AGENT round-trip works", () => {
+		// Simulate: expand agent 0, navigate away, navigate back, expand again
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ name: "a" }), makeAgent({ name: "b" }), makeAgent({ name: "c" })],
+			focus: { agentIndex: 0, fieldIndex: 0 },
+		};
+		let next = configReducer(state, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(0);
+
+		// Navigate to agent 1 (collapses)
+		next = configReducer(next, { type: "FOCUS_AGENT", direction: "next" });
+		expect(next.expandedAgentIndex).toBeNull();
+
+		// Navigate back to agent 0
+		next = configReducer(next, { type: "FOCUS_AGENT", direction: "prev" });
+		expect(next.focus.agentIndex).toBe(0);
+
+		// Expand again
+		next = configReducer(next, { type: "EXPAND" });
+		expect(next.expandedAgentIndex).toBe(0);
+	});
+});

@@ -147,14 +147,20 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			if (len === 0) return state;
 			const delta = action.direction === "next" ? 1 : -1;
 			const newIdx = clamp(state.focus.agentIndex + delta, len);
+			// Collapse expanded row when focus leaves it
+			const nextExpanded =
+				state.expandedAgentIndex !== null && state.expandedAgentIndex !== newIdx
+					? null
+					: state.expandedAgentIndex;
 			return {
 				...state,
+				expandedAgentIndex: nextExpanded,
 				focus: { ...state.focus, agentIndex: newIdx },
 				scrollOffset: clampVerticalScrollOffset(
 					state.scrollOffset,
 					newIdx,
 					len,
-					state.expandedAgentIndex,
+					nextExpanded,
 				),
 			};
 		}
@@ -163,14 +169,20 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			const len = state.agents.length;
 			if (len === 0) return state;
 			const newIdx = clamp(action.agentIndex, len);
+			// Collapse expanded row when focus moves away from the expanded agent
+			const nextExpanded =
+				state.expandedAgentIndex !== null && state.expandedAgentIndex !== newIdx
+					? null
+					: state.expandedAgentIndex;
 			return {
 				...state,
+				expandedAgentIndex: nextExpanded,
 				focus: { ...state.focus, agentIndex: newIdx },
 				scrollOffset: clampVerticalScrollOffset(
 					state.scrollOffset,
 					newIdx,
 					len,
-					state.expandedAgentIndex,
+					nextExpanded,
 				),
 			};
 		}

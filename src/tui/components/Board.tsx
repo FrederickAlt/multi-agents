@@ -34,9 +34,12 @@ export function Board({ state }: BoardProps) {
 	const hasMoreBelow = scrollOffset + visibleAgents.length < state.agents.length;
 
 	// Trim from bottom if scroll indicators would cause overflow.
+	// Never trim the focused agent or expanded agent so focus remains visible.
 	const indicatorLines = (hasMoreAbove ? 1 : 0) + (hasMoreBelow ? 1 : 0);
 	while (indicatorLines > 0 && visibleAgents.length > 0 && consumed + indicatorLines > termHeight) {
-		const last = visibleAgents.pop()!;
+		const last = visibleAgents[visibleAgents.length - 1];
+		if (last.globalIdx === state.focus.agentIndex || last.globalIdx === state.expandedAgentIndex) break;
+		visibleAgents.pop();
 		consumed -= getAgentRowHeight(last.globalIdx, state.expandedAgentIndex);
 	}
 
