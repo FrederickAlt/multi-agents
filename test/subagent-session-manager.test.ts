@@ -677,6 +677,45 @@ describe("SubagentSessionManager", () => {
 			expect(onEnd).not.toHaveBeenCalled();
 		});
 
+		it("does not fire onAsyncAgentEnd callback during soft-kill", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("soft-kill-cb");
+			sm.markAsyncRunning(record.id);
+			const callbacks: Array<(e: any) => void> = [];
+			let rejectPrompt: ((err: any) => void) | null = null;
+			const mockSession = {
+				dispose: vi.fn(),
+				subscribe: vi.fn((cb: any) => {
+					callbacks.push(cb);
+					return vi.fn();
+				}),
+				prompt: vi.fn(() => {
+					return new Promise((_resolve, reject) => {
+						rejectPrompt = reject;
+					});
+				}),
+				abort: vi.fn(() => {
+					if (rejectPrompt) {
+						rejectPrompt(new Error("aborted"));
+						rejectPrompt = null;
+					}
+				}),
+				messages: [],
+				getActiveToolNames: () => [],
+				callbacks,
+			} as any;
+			(mockAgentSessionFactory as any).create = vi.fn().mockResolvedValue(mockSession);
+
+			await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+			sm.sendKillMessage(record.id, 5);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(onEnd).not.toHaveBeenCalled();
+		});
+
 		it("can clear the callback by setting undefined", async () => {
 			const sm = createManager();
 			const onEnd = vi.fn();

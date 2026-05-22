@@ -26,6 +26,7 @@ import {
 	type MetadataAdapter,
 	type SessionAdapter,
 } from "../subagent/task-controller.js";
+import { __testing, waitForAgent as waitForAgentTool } from "../subagent/index.js";
 import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "../subagent/depth-policy.js";
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
 import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
@@ -406,6 +407,7 @@ describe("TaskController.execute", () => {
 		if (tempDir) {
 			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
 		}
+		__testing.resetAsyncAgentNotifier();
 	});
 
 	function makeContext(overrides: Partial<TaskExecuteContext> = {}): TaskExecuteContext {
@@ -1656,6 +1658,9 @@ describe("TaskController.execute", () => {
 		const agentB = agents.find(a => a.id === idB)!;
 		expect(agentB.status).toBe("killed");
 
+		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(idB);
+		expect(sessionManager.hasOpenSession(idB)).toBe(false);
+
 		// Multi-agent text should show both statuses
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("## Completed");
@@ -1694,6 +1699,37 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("hard-aborted");
 		expect(text).toContain("Use resume:");
 		expect(result.details.error).toBe("killed");
+	});
+
+	it("waitForAgent consumes killed agents from notifier to avoid stale reminders", async () => {
+		const subs: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		fakeSessionManager.sendKillMessage = vi.fn();
+		__testing.asyncAgentNotifier.markCompleted(agentId);
+
+		const result = await waitForAgentTool(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("killed");
+		expect(__testing.asyncAgentNotifier.hasUnconsumed()).toBe(false);
+		// No stale boundary reminder should remain after consumed terminal status.
+		expect(__testing.asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
 	});
 
 	it("killed agent with partial output shows output in result", async () => {

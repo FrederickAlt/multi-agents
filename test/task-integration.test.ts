@@ -376,10 +376,14 @@ describe("extension loading", () => {
 			systemPromptOptions: { cwd: tempDir },
 		}, { cwd: tempDir, sessionManager });
 
-		// Verify Task was NOT registered (no spawnable agents)
+		// Verify Task was not registered for spawning, but wait_for_agent remains available.
 		const registeredTools = (pi as any)._registeredTools ?? [];
 		const taskTool = registeredTools.find((t: any) => t.name === "Task");
 		expect(taskTool).toBeUndefined();
+		const waitForAgentTool = registeredTools.find((t: any) => t.name === "wait_for_agent");
+		expect(waitForAgentTool).toBeDefined();
+		expect((pi as any)._getActiveTools()).not.toContain("Task");
+		expect((pi as any)._getActiveTools()).toContain("wait_for_agent");
 	});
 
 	it("hides Task when the resolved Root agent has empty can_spawn", async () => {
@@ -398,6 +402,10 @@ describe("extension loading", () => {
 		const registeredTools = (pi as any)._registeredTools ?? [];
 		const taskTool = registeredTools.find((t: any) => t.name === "Task");
 		expect(taskTool).toBeUndefined();
+		const waitForAgentTool = registeredTools.find((t: any) => t.name === "wait_for_agent");
+		expect(waitForAgentTool).toBeDefined();
+		expect((pi as any)._getActiveTools()).not.toContain("Task");
+		expect((pi as any)._getActiveTools()).toContain("wait_for_agent");
 	});
 
 	it("registers Task when the resolved Root agent has spawnable targets", async () => {

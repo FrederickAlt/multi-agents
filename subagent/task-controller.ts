@@ -854,7 +854,8 @@ export class TaskController {
 					return r;
 				});
 
-				// If kill_on_timeout is enabled, escalate to soft-kill then hard-abort
+				// If kill_on_timeout is enabled, escalate to soft-kill then hard-abort.
+				// Wait for all timed-out agents to finish OR until the kill window ends.
 				const killOnTimeout = opts.kill_on_timeout === true;
 				if (killOnTimeout) {
 					const timedOutIds = timeoutResults
@@ -862,52 +863,48 @@ export class TaskController {
 						.map(r => r.id);
 
 					if (timedOutIds.length > 0) {
-						// Send soft-kill instruction to each timed-out agent
+						// Send soft-kill instruction to each timed-out agent.
 						for (const id of timedOutIds) {
 							try {
 								sessionManager.sendKillMessage(id, timeoutMinutes);
 							} catch { /* best-effort */ }
 						}
 
-						// Wait the kill window for agents to finish
-						const killWaitPromises = timedOutIds.map(id =>
-							sessionManager.waitForSessionEnd(id).then(() => id)
-						);
-						const killTimeoutPromise = new Promise<string>((resolve) => {
+						// Wait for all agents to finish, or force kill when the window expires.
+						const killCompleted = Promise.all(
+							timedOutIds.map((id) => sessionManager.waitForSessionEnd(id).then(() => id)),
+						).then(() => "__kill_completed__" as const);
+						const killTimeoutPromise = new Promise<"__kill_timeout__">((resolve) => {
 							setTimeout(() => resolve("__kill_timeout__"), timeoutMs);
 						});
 
-						const killWinner = await Promise.race([...killWaitPromises, killTimeoutPromise]);
+						const killResult = await Promise.race([killCompleted, killTimeoutPromise]);
 
-						// Yield microtask queue
-						await new Promise<void>((resolve) => { queueMicrotask(resolve); });
-
-						// Track which agents were explicitly hard-aborted
+						// Track which agents were explicitly hard-aborted.
 						const hardAbortedIds = new Set<string>();
 
-						if (killWinner === "__kill_timeout__") {
-							// Kill window expired — hard-abort still-running agents
+						if (killResult === "__kill_timeout__") {
+							// Kill window expired — hard-abort still-running agents.
 							for (const id of timedOutIds) {
 								const r = buildResult(id);
 								if (r.status === "running" || r.status === "timed_out_still_running") {
 									try {
 										sessionManager.abortSession(id);
+										hardAbortedIds.add(id);
 									} catch { /* best-effort */ }
-									hardAbortedIds.add(id);
 								}
 							}
-							// Yield after aborts so finish() handlers run
+							// Yield after aborts so finish() handlers run.
 							await new Promise<void>((resolve) => { queueMicrotask(resolve); });
 						}
 
-						// Re-classify: finished agents are completed, hard-aborted are killed
-						const escalationResults = uniqueIds.map(id => {
+						// Yield while any pending handlers settle after either completion or timeout.
+						await new Promise<void>((resolve) => { queueMicrotask(resolve); });
+
+						// Re-classify: completed agents stay completed; hard-aborted agents become killed.
+						const escalationResults = uniqueIds.map((id) => {
 							const r = buildResult(id);
 							if (hardAbortedIds.has(id)) {
-								return { ...r, status: "killed" as const };
-							}
-							if (r.status === "running" && timedOutIds.includes(id)) {
-								// Still running after kill window → killed
 								return { ...r, status: "killed" as const };
 							}
 							return r;

@@ -469,6 +469,10 @@ export class SubagentSessionManager {
 
 		const killMessage = `[System] The parent agent requires you to finish within ${timeoutMinutes} minute(s). Please produce your final answer now.`;
 
+		// Clear async-in-flight before aborting so onAsyncAgentEnd callbacks do
+		// not treat the soft-kill prompt handoff as regular completion.
+		this.clearAsyncRunning(id);
+
 		// Mark kill-in-progress BEFORE abort so the original finish() skips disposal.
 		this.killInProgress.add(id);
 

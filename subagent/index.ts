@@ -145,14 +145,18 @@ function updateActiveTools(
 }
 
 function deactivateTaskTool(targetPi: ExtensionAPI): void {
-	updateActiveTools(targetPi, (activeTools) => activeTools.filter((name) => name !== "Task" && name !== "wait_for_agent"));
+	updateActiveTools(targetPi, (activeTools) => activeTools.filter((name) => name !== "Task"));
 }
 
-function activateTaskTool(targetPi: ExtensionAPI): void {
+function activateTaskTool(targetPi: ExtensionAPI, includeTaskTool: boolean): void {
 	updateActiveTools(targetPi, (activeTools) => {
 		let result = activeTools;
-		if (!result.includes("Task")) result = [...result, "Task"];
-		if (!result.includes("wait_for_agent")) result = [...result, "wait_for_agent"];
+		if (includeTaskTool && !result.includes("Task")) {
+			result = [...result, "Task"];
+		}
+		if (!result.includes("wait_for_agent")) {
+			result = [...result, "wait_for_agent"];
+		}
 		return result;
 	});
 }
@@ -169,40 +173,41 @@ export function configureTaskToolForRuntime(
 	// DepthPolicy is the single source of truth.
 	const policy = runtime.depthPolicy;
 	const allowed = discovery.agents.filter(a => checkTaskAllowed(policy, a.name).allowed);
+	const canSpawn = allowed.length > 0;
 
-	// If this runtime previously registered Task, leaving it active would let
-	// the model call a stale tool after the policy has changed. Pi has no
-	// unregisterTool API, so deactivate Task when the current policy exposes no
-	// spawnable targets.
-	if (allowed.length === 0) {
+	if (!canSpawn) {
+		// If this runtime previously registered Task, leaving it active would let
+		// the model call a stale tool after the policy has changed. Pi has no
+		// unregisterTool API, so deactivate Task when the current policy exposes
+		// no spawnable targets.
 		deactivateTaskTool(targetPi);
-		return;
 	}
 
-	const agentNames = allowed.map(a => a.name);
-	const descriptionText = allowed
-		.map(a => `${a.name}: ${a.description}`)
-		.join(". ");
+	if (canSpawn) {
+		const agentNames = allowed.map(a => a.name);
+		const descriptionText = allowed
+			.map(a => `${a.name}: ${a.description}`)
+			.join(". ");
 
-	const params = Type.Object({
-		description: Type.String({ description: "Short 3-5 word description of the task." }),
-		prompt: Type.String({
-			description: "Full task description for the agent to perform autonomously. The agent reports back once.",
-		}),
-		subagent_type: Type.Enum(agentNames, {
-			description: `Which sub-agent to delegate to. ${descriptionText}`,
-		}),
-		resume: Type.Optional(Type.String({
-			description: "Short hex ID of a previous sub-agent to continue.",
-		})),
-		cwd: Type.Optional(Type.String({
-			description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
-		})),
-		blocking: Type.Optional(Type.Boolean({
-			default: true,
-			description: "When false, spawns the sub-agent asynchronously and returns immediately. Default true.",
-		})),
-	});
+		const params = Type.Object({
+			description: Type.String({ description: "Short 3-5 word description of the task." }),
+			prompt: Type.String({
+				description: "Full task description for the agent to perform autonomously. The agent reports back once.",
+			}),
+			subagent_type: Type.Enum(agentNames, {
+				description: `Which sub-agent to delegate to. ${descriptionText}`,
+			}),
+			resume: Type.Optional(Type.String({
+				description: "Short hex ID of a previous sub-agent to continue.",
+			})),
+			cwd: Type.Optional(Type.String({
+				description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
+			})),
+			blocking: Type.Optional(Type.Boolean({
+				default: true,
+				description: "When false, spawns the sub-agent asynchronously and returns immediately. Default true.",
+			})),
+		});
 
 	targetPi.registerTool({
 		name: "Task",
@@ -250,7 +255,8 @@ export function configureTaskToolForRuntime(
 			return container;
 		},
 	});
-	activateTaskTool(targetPi);
+	}
+	activateTaskTool(targetPi, canSpawn);
 
 	// Register wait_for_agent alongside Task for async retrieval.
 	const waitForAgentParams = Type.Object({
@@ -319,12 +325,12 @@ export function configureTaskToolForRuntime(
 				executeContext,
 			);
 
-			// Consume async notifications for completed agents so they are
-			// removed from the turn-boundary notification set.
+			// Consume terminal async notifications so killed/completed agents are removed
+			// from the turn-boundary notification set.
 			const agents = (result.details as TaskDetails | undefined)?.agents;
 			if (agents) {
 				const consumed = agents
-					.filter((a) => a.status === "completed")
+					.filter((a) => a.status === "completed" || a.status === "killed")
 					.map((a) => a.id);
 				if (consumed.length > 0) {
 					_asyncAgentNotifier.consume(consumed);
@@ -334,6 +340,7 @@ export function configureTaskToolForRuntime(
 			return result;
 			
 		},
+
 		renderCall(args, theme) {
 			const ids = Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : String(args.agent_ids ?? "");
 			return new Text(
@@ -795,12 +802,12 @@ export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
 export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opts, context) => {
 	const result = await new TaskController().waitForAgent(agentIds, opts, context);
-	// Consume async notifications so completed agents are removed
+	// Consume terminal async notifications so killed/completed agents are removed
 	// from the turn-boundary notification set (mirrors the tool handler).
 	const agents = (result.details as TaskDetails | undefined)?.agents;
 	if (agents) {
 		const consumed = agents
-			.filter((a) => a.status === "completed")
+			.filter((a) => a.status === "completed" || a.status === "killed")
 			.map((a) => a.id);
 		if (consumed.length > 0) {
 			_asyncAgentNotifier.consume(consumed);
