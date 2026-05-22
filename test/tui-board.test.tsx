@@ -179,6 +179,59 @@ describe("Board", () => {
 		expect(text).toContain("Press Enter/Space to edit");
 	});
 
+	it("keeps non-inline context visible when status is present", () => {
+		const focusedAgent = {
+			...agent("default"),
+			frontmatter: {
+				model: "claude",
+			},
+		};
+		const result = AgentRow({
+			agent: focusedAgent,
+			isFocused: true,
+			isExpanded: true,
+			focusedField: 2,
+			focusedOptionItem: 2,
+			optionColumnScrollOffset: 0,
+			options: {
+				...options,
+				reasoningEfforts: ["low", "medium", "high"],
+				depths: [0, 1, 2],
+			},
+			status: { type: "saved", message: "Saved default.md", timestamp: 1 },
+		}) as React.ReactElement;
+
+		const text = collectText(result);
+		expect(text).toContain("Saved default.md");
+		expect(text).toContain("Focus: model");
+		expect(text).toContain("Press Enter/Space to edit");
+	});
+
+	it("keeps the focused last option item visible in expanded AgentRow rendering", () => {
+		const s = state({
+			focus: {
+				agentIndex: 0,
+				fieldIndex: 4,
+				optionItemIndex: 10,
+			},
+			expandedAgentIndex: 0,
+			options: {
+				...options,
+				reasoningEfforts: ["low", "medium", "high", "maximum"],
+				depths: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+			},
+		});
+
+		const result = Board({ state: s }) as React.ReactElement;
+		const row = renderedChildren(result).find(
+			(c: any) => c?.props?.agent?.name === "default",
+		) as React.ReactElement;
+		const text = collectText(row);
+
+		expect(text).toContain("10");
+		expect(text).not.toContain(" ○ 0");
+	});
+
 	it("keeps the focused option item visible when list scrolls vertically", () => {
 		const result = OptionColumn({
 			fieldName: "depth",

@@ -33,6 +33,8 @@ const INLINE_FIELD_LABELS: Record<string, string> = {
 	prompt_parts: "prompt_parts",
 };
 
+const MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW = 3;
+
 function getFocusedNonInlineSummary(agent: AgentConfigState, fieldName: string): string {
 	const fm = agent.frontmatter ?? {};
 	const raw = fm[fieldName];
@@ -79,6 +81,16 @@ export function AgentRow({
 	if (isExpanded) {
 		const focusedFieldName = getFieldName(focusedField);
 		const isFocusedFieldInline = isOptionColumnField(focusedFieldName);
+		const focusedFieldHint = isFocusedFieldInline ? (
+			<Text dimColor>↑/↓ fields · h/l columns · j/k items · Enter/Space open/edit</Text>
+		) : (
+			<Text dimColor>
+				Focus: {INLINE_FIELD_LABELS[focusedFieldName] ?? focusedFieldName} = {
+					getFocusedNonInlineSummary(agent, focusedFieldName)
+				}
+				 · Press Enter/Space to edit
+			</Text>
+		);
 		const visibleCount = getMaxVisibleOptionColumns(undefined, OPTION_COLUMN_FIELDS.length);
 		const visibleFields = OPTION_COLUMN_FIELDS.slice(
 			optionColumnScrollOffset,
@@ -104,18 +116,9 @@ export function AgentRow({
 					)}
 				</Box>
 				<Box flexDirection="row">
-					{status ? (
-						<StatusLine status={status} />
-					) : isFocusedFieldInline ? (
-						<Text dimColor>↑/↓ fields · h/l columns · j/k items · Enter/Space open/edit</Text>
-					) : (
-						<Text dimColor>
-							Focus: {INLINE_FIELD_LABELS[focusedFieldName] ?? focusedFieldName} = {
-							getFocusedNonInlineSummary(agent, focusedFieldName)
-						}
-							 · Press Enter/Space to edit
-						</Text>
-					)}
+					{status && <StatusLine status={status} />}
+					{status && <Text dimColor> · </Text>}
+					{focusedFieldHint}
 				</Box>
 				<Box flexDirection="row" height={6} overflow="hidden">
 					{hasMoreLeft && <Text dimColor>◀ </Text>}
@@ -128,6 +131,7 @@ export function AgentRow({
 								selectedValue={getOptionColumnSelectedValue(agent, fieldName)}
 								focusedItemIndex={focusedOptionItem}
 								isFocused={isFocused && getFieldName(focusedField) === fieldName}
+								maxVisibleItems={MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW}
 							/>
 						);
 					})}
