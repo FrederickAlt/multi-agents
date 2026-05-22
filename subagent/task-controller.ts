@@ -442,35 +442,55 @@ export class TaskController {
 						runtimeTimeoutHandle = undefined;
 					}
 				};
-				const abort = () => {
+				const abortTask = () => {
 					clearRuntimeTimeout();
 					void session?.abort();
 				};
 
-				const promptResult = session.prompt(params.prompt).then(
-					() => ({ type: "completed" as const }),
-					(error: unknown) => ({ type: "failed" as const, error }),
-				);
-				const timeoutResult = context.signal?.aborted
-					? undefined
-					: new Promise<{ type: "timeout" }>((resolve) => {
-						runtimeTimeoutHandle = setTimeout(() => {
-							abort();
-							resolve({ type: "timeout" });
-						}, DEFAULT_TASK_RUNTIME_TIMEOUT_MS);
-					});
-
-				if (context.signal?.aborted) {
-					abort();
-				} else {
-					context.signal?.addEventListener("abort", abort, { once: true });
-				}
+				let onAbort: (() => void) | undefined;
+				const externalAbortResult = context.signal
+					? new Promise<{ type: "aborted" }>((resolve) => {
+						onAbort = () => {
+							abortTask();
+							resolve({ type: "aborted" });
+						};
+						if (context.signal?.aborted) {
+							onAbort();
+						} else {
+							context.signal?.addEventListener("abort", onAbort, { once: true });
+						}
+					})
+					: undefined;
 
 				try {
 					emit(`${record!.displayName} (${record!.id}) running...`);
-					const promptOrTimeout = await (context.signal?.aborted
-						? promptResult
-						: Promise.race([promptResult, timeoutResult!]));
+					const promptRace = [] as Array<
+						Promise<
+							| { type: "completed" }
+							| { type: "failed"; error: unknown }
+							| { type: "timeout" }
+							| { type: "aborted" }
+						>
+					>;
+					if (!context.signal?.aborted) {
+						const promptResult = Promise.resolve().then(() => session.prompt(params.prompt)).then(
+							() => ({ type: "completed" as const }),
+							(error: unknown) => ({ type: "failed" as const, error }),
+						);
+						promptRace.push(promptResult);
+						const timeoutResult = new Promise<{ type: "timeout" }>((resolve) => {
+							runtimeTimeoutHandle = setTimeout(() => {
+								abortTask();
+								resolve({ type: "timeout" });
+							}, DEFAULT_TASK_RUNTIME_TIMEOUT_MS);
+						});
+						promptRace.push(timeoutResult);
+					}
+					if (externalAbortResult) {
+						promptRace.push(externalAbortResult);
+					}
+
+					const promptOrTimeout = await Promise.race(promptRace);
 					clearRuntimeTimeout();
 					if (promptOrTimeout.type === "timeout") {
 						const message =
@@ -492,6 +512,9 @@ export class TaskController {
 								error: TASK_RUNTIME_TIMEOUT_ERROR_CODE,
 							},
 						};
+					}
+					if (promptOrTimeout.type === "aborted") {
+						throw new Error("Task execution was aborted.");
 					}
 					if (promptOrTimeout.type === "failed") {
 						throw promptOrTimeout.error;
@@ -546,7 +569,9 @@ export class TaskController {
 						},
 					};
 				} finally {
-					context.signal?.removeEventListener("abort", abort);
+					if (context.signal && onAbort) {
+						context.signal.removeEventListener("abort", onAbort);
+					}
 					clearRuntimeTimeout();
 					try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
 					try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }

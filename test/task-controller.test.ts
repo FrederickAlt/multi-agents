@@ -549,6 +549,59 @@ describe("TaskController.execute", () => {
 		}
 	});
 
+	it("returns a non-timeout failure when signal aborts while prompt is pending", async () => {
+		vi.useFakeTimers();
+
+		try {
+			mockSession.prompt = vi.fn(() => new Promise(() => {}));
+			const ac = new AbortController();
+
+			const resultPromise = controller.execute(makeParams(), makeContext({ signal: ac.signal }));
+			await Promise.resolve();
+			ac.abort();
+
+			const result = await resultPromise;
+			expect(result.details.error).toBe("Task execution was aborted.");
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("failed");
+			expect(text).toContain("aborted");
+			expect(mockSession.abort).toHaveBeenCalledTimes(1);
+			expect(disposeSpy).toHaveBeenCalled();
+			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not classify prompt abort rejection as execution_timeout", async () => {
+		vi.useFakeTimers();
+
+		try {
+			const ac = new AbortController();
+			mockSession.prompt = vi.fn(() => {
+				return new Promise((_resolve, reject) => {
+					ac.signal.addEventListener("abort", () => {
+						reject(new Error("prompt aborted"));
+					}, { once: true });
+				});
+			});
+
+			const resultPromise = controller.execute(makeParams(), makeContext({ signal: ac.signal }));
+			await Promise.resolve();
+			ac.abort();
+
+			const result = await resultPromise;
+			expect(result.details.error).toBe("Task execution was aborted.");
+			expect(result.details.error).not.toBe(TASK_RUNTIME_TIMEOUT_ERROR_CODE);
+			expect(disposeSpy).toHaveBeenCalled();
+			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// ---- Empty output ----
 
 	it("returns (no output) when session has no assistant text", async () => {
@@ -725,17 +778,23 @@ describe("TaskController.execute", () => {
 	// ---- Abort signal ----
 
 	it("completes without throwing when signal is already aborted", async () => {
-		const ac = new AbortController();
-		ac.abort();
+		vi.useFakeTimers();
 
-		await new Promise((r) => setTimeout(r, 5));
+		try {
+			const ac = new AbortController();
+			ac.abort();
 
-		const result = await new TaskController().execute(
-			makeParams(),
-			makeContext({ signal: ac.signal }),
-		);
+			const result = await new TaskController().execute(
+				makeParams(),
+				makeContext({ signal: ac.signal }),
+			);
 
-		expect(result).toBeDefined();
-		expect(result.details.error).not.toBe(TASK_RUNTIME_TIMEOUT_ERROR_CODE);
+			expect(result).toBeDefined();
+			expect(result.details.error).toBe("Task execution was aborted.");
+			expect(result.details.error).not.toBe(TASK_RUNTIME_TIMEOUT_ERROR_CODE);
+			expect(fakeMetadataStore.touchRecord).toHaveBeenCalledWith(expect.any(String));
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
