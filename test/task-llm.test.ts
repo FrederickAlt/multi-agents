@@ -2,7 +2,10 @@
  * LLM integration tests for persistent-task-subagents.
  *
  * These tests verify actual Task execution with a real LLM.
- * Skipped if the opencode-go API key is not available.
+ *
+ * These tests are opt-in and run only when:
+ * - RUN_REAL_LLM_TESTS=1
+ * - the local ~/.pi/agent/auth.json contains an opencode-go API key
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -12,22 +15,25 @@ import { getModel } from "@mariozechner/pi-ai";
 import { AuthStorage, createAgentSession, DefaultResourceLoader, ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
 import taskExtension from "../subagent/index.js";
 
-function hasOpencodeAuth(): boolean {
+const RUN_REAL_LLM_TESTS = process.env.RUN_REAL_LLM_TESTS === "1";
+
+function getOpencodeApiKey(): string | undefined {
+	const authPath = join(homedir(), ".pi", "agent", "auth.json");
+	if (!existsSync(authPath)) return undefined;
+
 	try {
-		const authPath = join(homedir(), ".pi", "agent", "auth.json");
-		if (!existsSync(authPath)) return false;
 		const data = JSON.parse(readFileSync(authPath, "utf-8"));
-		return data["opencode-go"]?.type === "api_key" && !!data["opencode-go"].key;
+		const key = data["opencode-go"]?.type === "api_key" ? data["opencode-go"].key : undefined;
+		return typeof key === "string" && key.length > 0 ? key : undefined;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 
-const API_KEY = hasOpencodeAuth()
-	? JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf-8"))["opencode-go"].key
-	: undefined;
+const API_KEY = RUN_REAL_LLM_TESTS ? getOpencodeApiKey() : undefined;
+const SHOULD_RUN_REAL_LLM_TESTS = RUN_REAL_LLM_TESTS && !!API_KEY;
 
-describe.skipIf(!API_KEY)("Task with real LLM (deepseek-v4-flash)", () => {
+describe.skipIf(!SHOULD_RUN_REAL_LLM_TESTS)("Task with real LLM (deepseek-v4-flash) [opt-in]", () => {
 	let tempDir: string;
 	let projectDir: string;
 	let agentDir: string;

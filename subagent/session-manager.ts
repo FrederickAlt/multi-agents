@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
+import { extractOutput } from "./output-extraction.js";
 import type { AgentConfig } from "./agents.js";
 import type { MetadataStore, SubagentRecord } from "./metadata.js";
 
@@ -202,11 +203,27 @@ export interface SessionSetupContext {
 export class SubagentSessionManager {
 	private openSessions = new Map<string, AgentSession>();
 	private runLocks = new Map<string, Promise<void>>();
+	private completedSessions = new Set<string>();
+	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[] }>();
+	private asyncInFlight = new Set<string>();
+	private killInProgress = new Set<string>();
+	private _onAsyncAgentEnd: ((id: string) => void) | undefined;
 
 	constructor(
 		private sessionManagerProvider: SessionManagerProvider,
 		private agentSessionFactory: AgentSessionFactory,
 	) {}
+
+	// ---- Async agent end callback ----
+
+	/**
+	 * Register a callback invoked when a session marked async-in-flight
+	 * reaches `agent_end`. Called before the result is stored via
+	 * `storeAsyncResult`.
+	 */
+	setOnAsyncAgentEnd(cb: ((id: string) => void) | undefined): void {
+		this._onAsyncAgentEnd = cb;
+	}
 
 	// ---- Session tracking ----
 
@@ -296,11 +313,16 @@ export class SubagentSessionManager {
 			}
 		}
 
-		// 7. Subscribe to agent_end to update metadata timestamp
+		// 7. Subscribe to agent_end to update metadata timestamp and mark completion.
+		//    When the session was spawned asynchronously also notify the callback.
 		const unsubscribe = session.subscribe((event: any) => {
 			if (event.type === "agent_end") {
 				record.updatedAt = new Date().toISOString();
 				metadataStore.upsertRecord(record);
+				this.completedSessions.add(record.id);
+				if (this.asyncInFlight.has(record.id)) {
+					this._onAsyncAgentEnd?.(record.id);
+				}
 			}
 		});
 
@@ -326,6 +348,8 @@ export class SubagentSessionManager {
 			session.dispose();
 			this.openSessions.delete(id);
 		}
+		this.completedSessions.delete(id);
+		this.asyncInFlight.delete(id);
 	}
 
 	/**
@@ -342,6 +366,178 @@ export class SubagentSessionManager {
 			}
 		}
 		this.openSessions.clear();
+		this.completedSessions.clear();
+		this.asyncResults.clear();
+		this.asyncInFlight.clear();
+	}
+
+	// ---- Async completion ----
+
+	/**
+	 * Wait for a tracked session to reach `agent_end`.
+	 * Resolves immediately if the session already ended or is no longer tracked.
+	 */
+	async waitForSessionEnd(id: string): Promise<void> {
+		if (this.completedSessions.has(id)) return;
+
+		const session = this.openSessions.get(id);
+		if (!session) return;
+
+		return new Promise<void>((resolve) => {
+			const unsubscribe = session.subscribe((event: any) => {
+				if (event.type === "agent_end") {
+					unsubscribe();
+					resolve();
+				}
+			});
+		});
+	}
+
+	/** Store the output/error of a completed async sub-agent session. */
+	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[] }): void {
+		this.asyncResults.set(id, result);
+	}
+
+	/** Retrieve the stored output/error from a completed async sub-agent. */
+	getAsyncResult(id: string): { output: string; error?: string; warnings: string[] } | undefined {
+		return this.asyncResults.get(id);
+	}
+
+	/** Mark a session ID as having an in-flight async prompt. */
+	markAsyncRunning(id: string): void {
+		this.asyncInFlight.add(id);
+	}
+
+	/** Clear the in-flight marker for a session ID. */
+	clearAsyncRunning(id: string): void {
+		this.asyncInFlight.delete(id);
+	}
+
+	/** Clear a consumed async result from memory. */
+	clearAsyncResult(id: string): void {
+		this.asyncResults.delete(id);
+	}
+
+	/** Check whether a session has an in-flight async prompt. */
+	isAsyncRunning(id: string): boolean {
+		return this.asyncInFlight.has(id);
+	}
+
+	/** Check whether a tracked session has already reached agent_end. */
+	isCompleted(id: string): boolean {
+		return this.completedSessions.has(id);
+	}
+
+	// ---- Kill / abort ----
+
+	/**
+	 * Check whether a soft-kill is in progress for the given session ID.
+	 * Used by the async finish handler to avoid disposing a session that
+	 * the kill flow still needs.
+	 */
+	isKillInProgress(id: string): boolean {
+		return this.killInProgress.has(id);
+	}
+
+	/**
+	 * Send a soft-kill instruction to a running async session.
+	 *
+	 * Marks kill-in-progress before aborting the original prompt so that
+	 * the async finish handler skips disposal. After abort, sends a kill
+	 * message as a new prompt giving the agent one more turn.
+	 *
+	 * On completion (success or failure): clears kill-in-progress, stores
+	 * the final result using shared extraction, marks completed, clears
+	 * async-running, and disposes the session.
+	 */
+	sendKillMessage(id: string, timeoutMinutes: number): void {
+		const session = this.openSessions.get(id);
+		if (!session) return;
+
+		const killMessage = `[System] The parent agent requires you to finish within ${timeoutMinutes} minute(s). Please produce your final answer now.`;
+
+		// Clear async-in-flight before aborting so onAsyncAgentEnd callbacks do
+		// not treat the soft-kill prompt handoff as regular completion.
+		this.clearAsyncRunning(id);
+
+		// Mark kill-in-progress BEFORE abort so the original finish() skips disposal.
+		this.killInProgress.add(id);
+
+		// Abort the current prompt — the original error handler fires and stores
+		// partial output via storeAsyncResult, but finish() skips disposeSession
+		// because killInProgress is set.
+		try { session.abort(); } catch { /* best-effort */ }
+
+		// Give the agent one last turn with the kill instruction.
+		session.prompt(killMessage).then(
+			() => {
+				// Agent finished successfully — store fresh output.
+				const extracted = extractOutput(session.messages as any[]);
+				this.asyncResults.set(id, { output: extracted.text, warnings: [] });
+				this._cleanupAfterKill(id, session);
+			},
+			(error: any) => {
+				// Kill prompt crashed — store error + partial output.
+				const message = error instanceof Error ? error.message : String(error);
+				const extracted = extractOutput(session.messages as any[], message || undefined);
+				this.asyncResults.set(id, {
+					output: extracted.text,
+					error: message || 'The sub-agent stopped without producing any output.',
+					warnings: [],
+				});
+				this._cleanupAfterKill(id, session);
+			},
+		);
+	}
+
+	/**
+	 * Hard-abort a session immediately.
+	 *
+	 * Marks kill-in-progress before aborting so the original async reject
+	 * handler doesn't interfere. Extracts best available transcript content
+	 * via shared extraction, stores the result as async output with killed
+	 * status, marks the session completed, and disposes it. The transcript
+	 * file persists on disk for later resume.
+	 */
+	abortSession(id: string): void {
+		const session = this.openSessions.get(id);
+		if (!session) return;
+
+		// Mark kill-in-progress to prevent the original async reject handler
+		// from storing a competing result or disposing the session.
+		this.killInProgress.add(id);
+
+		// Capture partial output before abort using shared extraction.
+		const extracted = extractOutput(session.messages as any[], 'killed');
+
+		try { session.abort(); } catch { /* best-effort */ }
+
+		// Store partial output (or error) so wait_for_agent can return it.
+		this.asyncResults.set(id, {
+			output: extracted.text || '',
+			error: 'killed',
+			warnings: [],
+		});
+
+		// Clean up: mark completed, clear run flags, dispose session.
+		// Defer killInProgress cleanup so the microtask'd reject handler
+		// still sees it and skips storing a competing result.
+		this.completedSessions.add(id);
+		this.asyncInFlight.delete(id);
+		try { session.dispose(); } catch { /* best-effort */ }
+		this.openSessions.delete(id);
+		queueMicrotask(() => this.killInProgress.delete(id));
+	}
+
+	/**
+	 * Shared cleanup after a soft-kill prompt finishes (success or failure).
+	 */
+	private _cleanupAfterKill(id: string, session: AgentSession): void {
+		this.completedSessions.add(id);
+		this.killInProgress.delete(id);
+		this.asyncInFlight.delete(id);
+		try { session.dispose(); } catch { /* best-effort */ }
+		this.openSessions.delete(id);
 	}
 
 	// ---- Run serialization ----

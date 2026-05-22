@@ -385,6 +385,89 @@ describe("SubagentSessionManager", () => {
 		});
 	});
 
+	// ---- Async completion ----
+
+	describe("waitForSessionEnd", () => {
+		it("resolves immediately when the session is not tracked", async () => {
+			const sm = createManager();
+			await expect(sm.waitForSessionEnd("nope")).resolves.toBeUndefined();
+		});
+
+		it("resolves when agent_end event fires on tracked session", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			sm.trackSession("abc", session);
+
+			// Fire agent_end after a tick
+			setImmediate(() => {
+				for (const cb of session.callbacks) {
+					cb({ type: "agent_end" });
+				}
+			});
+
+			await expect(sm.waitForSessionEnd("abc")).resolves.toBeUndefined();
+		});
+
+		it("unsubscribes after agent_end fires", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			sm.trackSession("abc", session);
+
+			setImmediate(() => {
+				for (const cb of session.callbacks) {
+					cb({ type: "agent_end" });
+				}
+			});
+
+			await sm.waitForSessionEnd("abc");
+
+			// The unsubscribe returned by subscribe should have been called
+			expect(session.unsubscribe).toHaveBeenCalled();
+		});
+
+		it("only resolves on agent_end, not other events", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			sm.trackSession("abc", session);
+
+			let resolved = false;
+			const promise = sm.waitForSessionEnd("abc").then(() => { resolved = true; });
+
+			// Fire a non-agent_end event — should not resolve
+			for (const cb of session.callbacks) {
+				cb({ type: "token" });
+			}
+
+			await new Promise((r) => setTimeout(r, 10));
+			expect(resolved).toBe(false);
+
+			// Fire agent_end — should resolve
+			for (const cb of session.callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			await expect(promise).resolves.toBeUndefined();
+		});
+
+		it("resolves immediately when agent_end already fired (no race)", async () => {
+			const sm = createManager();
+			const record = makeRecord("race-test");
+
+			// Create session through getOrCreateSession so the agent_end
+			// subscription (which updates completedSessions) is set up.
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			// Fire agent_end before calling waitForSessionEnd
+			// The callbacks were stored by makeMockSession's subscribe impl
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			// Should resolve immediately — completedSessions tracks it
+			await expect(sm.waitForSessionEnd(record.id)).resolves.toBeUndefined();
+		});
+	});
+
 	describe("disposeAll", () => {
 		it("disposes all tracked sessions and clears the map", () => {
 			const sm = createManager();
@@ -535,6 +618,120 @@ describe("SubagentSessionManager", () => {
 			const values = await Promise.all(tasks);
 			expect(values.sort()).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 			expect(results).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+		});
+	});
+
+	// ---- Async agent end callback ----
+
+	describe("onAsyncAgentEnd callback", () => {
+		it("fires when agent_end event occurs on an async-in-flight session", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("async-cb");
+			// Mark as async-in-flight before creating session
+			sm.markAsyncRunning(record.id);
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			// Fire agent_end on the session's subscribe callbacks
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			expect(onEnd).toHaveBeenCalledWith(record.id);
+		});
+
+		it("does NOT fire when session is not async-in-flight", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("blocking-cb");
+			// Session is NOT marked async — this is a blocking agent
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			expect(onEnd).not.toHaveBeenCalled();
+		});
+
+		it("does not fire for non-agent_end events", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("non-end");
+			sm.markAsyncRunning(record.id);
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "token" });
+			}
+
+			expect(onEnd).not.toHaveBeenCalled();
+		});
+
+		it("does not fire onAsyncAgentEnd callback during soft-kill", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+
+			const record = makeRecord("soft-kill-cb");
+			sm.markAsyncRunning(record.id);
+			const callbacks: Array<(e: any) => void> = [];
+			let rejectPrompt: ((err: any) => void) | null = null;
+			const mockSession = {
+				dispose: vi.fn(),
+				subscribe: vi.fn((cb: any) => {
+					callbacks.push(cb);
+					return vi.fn();
+				}),
+				prompt: vi.fn(() => {
+					return new Promise((_resolve, reject) => {
+						rejectPrompt = reject;
+					});
+				}),
+				abort: vi.fn(() => {
+					if (rejectPrompt) {
+						rejectPrompt(new Error("aborted"));
+						rejectPrompt = null;
+					}
+				}),
+				messages: [],
+				getActiveToolNames: () => [],
+				callbacks,
+			} as any;
+			(mockAgentSessionFactory as any).create = vi.fn().mockResolvedValue(mockSession);
+
+			await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+			sm.sendKillMessage(record.id, 5);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(onEnd).not.toHaveBeenCalled();
+		});
+
+		it("can clear the callback by setting undefined", async () => {
+			const sm = createManager();
+			const onEnd = vi.fn();
+			sm.setOnAsyncAgentEnd(onEnd);
+			sm.setOnAsyncAgentEnd(undefined);
+
+			const record = makeRecord("cleared");
+			sm.markAsyncRunning(record.id);
+
+			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+
+			for (const cb of (session as any).callbacks) {
+				cb({ type: "agent_end" });
+			}
+
+			expect(onEnd).not.toHaveBeenCalled();
 		});
 	});
 });
