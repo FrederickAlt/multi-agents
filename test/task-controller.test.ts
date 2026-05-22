@@ -20,6 +20,7 @@ import {
 	type TaskExecuteContext,
 	type TaskExecuteParams,
 	type TaskDetails,
+	type AgentWaitResult,
 	type RuntimeContext,
 	type AgentDiscoveryAdapter,
 	type MetadataAdapter,
@@ -337,9 +338,12 @@ describe("TaskController.execute", () => {
 			waitForSessionEnd: vi.fn((id: string) => sessionManager.waitForSessionEnd(id)),
 			storeAsyncResult: vi.fn((id: string, result: any) => sessionManager.storeAsyncResult(id, result)),
 			getAsyncResult: vi.fn((id: string) => sessionManager.getAsyncResult(id)),
+			clearAsyncResult: vi.fn((id: string) => sessionManager.clearAsyncResult(id)),
 			markAsyncRunning: vi.fn((id: string) => sessionManager.markAsyncRunning(id)),
 			clearAsyncRunning: vi.fn((id: string) => sessionManager.clearAsyncRunning(id)),
 			isAsyncRunning: vi.fn((id: string) => sessionManager.isAsyncRunning(id)),
+			isCompleted: vi.fn((id: string) => sessionManager.isCompleted(id)),
+			hasOpenSession: vi.fn((id: string) => sessionManager.hasOpenSession(id)),
 		};
 
 		controller = new TaskController();
@@ -787,7 +791,8 @@ describe("TaskController.execute", () => {
 
 	it("returns error for unknown agent ID", async () => {
 		const result = await controller.waitForAgent(
-			"deadbeef",
+			["deadbeef"],
+			{},
 			makeContext(),
 		);
 
@@ -817,7 +822,7 @@ describe("TaskController.execute", () => {
 		expect(sessionManager.hasOpenSession(agentId)).toBe(false);
 
 		// Wait for the agent
-		const result = await controller.waitForAgent(agentId, makeContext());
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
 
 		expect(result.details.error).toBeUndefined();
 		expect(result.details.id).toBe(agentId);
@@ -841,7 +846,7 @@ describe("TaskController.execute", () => {
 
 		await new Promise((r) => setTimeout(r, 10));
 
-		const result = await controller.waitForAgent(agentId, makeContext());
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
 
 		expect(result.details.error).toBe("async crash");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -879,7 +884,7 @@ describe("TaskController.execute", () => {
 		expect(sessionManager.hasOpenSession(agentId)).toBe(true);
 
 		// Start waiting — subscribes to agent_end and awaits
-		const waitPromise = controller.waitForAgent(agentId, makeContext());
+		const waitPromise = controller.waitForAgent([agentId], {}, makeContext());
 
 		// Simulate the real event order: agent_end fires first (synchronously
 		// during session.prompt() resolution), then storeAsyncResult runs as
@@ -937,5 +942,258 @@ describe("TaskController.execute", () => {
 		ac.abort();
 
 		expect(mockSession.abort).toHaveBeenCalled();
+	});
+
+	// ---- Expanded waitForAgent (#23) ----
+
+	it("returns error when agent_ids is empty", async () => {
+		const result = await controller.waitForAgent([], {}, makeContext());
+
+		expect(result.details.error).toBe("missing_agent_ids");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("requires at least one agent_id");
+	});
+
+	it("returns per-agent statuses for multiple IDs (completed + running + unknown)", async () => {
+		// Make an async agent that has already completed
+		mockSession.messages = [
+			{ role: "user", content: "Do something" },
+			{ role: "assistant", content: [{ type: "text", text: "agent A output" }] },
+		];
+		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idA = (spawnA.details as TaskDetails).id!;
+		await new Promise((r) => setTimeout(r, 10)); // let async cleanup run
+
+		// Make another async agent that is still running (prompt never resolves)
+		const originalPrompt = mockSession.prompt;
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idB = (spawnB.details as TaskDetails).id!;
+
+		// Call waitForAgent with both IDs + an unknown
+		const result = await controller.waitForAgent(
+			[idA, idB, "deadbeef"],
+			{},
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(3);
+
+		const agentA = agents.find(a => a.id === idA)!;
+		expect(agentA.status).toBe("completed");
+		expect(agentA.output).toBe("agent A output");
+
+		const agentB = agents.find(a => a.id === idB)!;
+		expect(agentB.status).toBe("running");
+
+		const agentUnknown = agents.find(a => a.id === "deadbeef")!;
+		expect(agentUnknown.status).toBe("unknown");
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Completed");
+		expect(text).toContain("Still Running");
+		expect(text).toContain("Unknown IDs");
+
+		// Restore prompt for cleanup
+		mockSession.prompt = originalPrompt;
+	});
+
+	it("returns as soon as any listed running agent finishes", async () => {
+		// Create two sessions with different IDs
+		const subsA: Array<(e: any) => void> = [];
+		const mockSessionA = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subsA.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+
+		const subsB: Array<(e: any) => void> = [];
+		const mockSessionB = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+
+		// Override factory to create distinct sessions per call
+		let callCount = 0;
+		mockAgentSessionFactory.create = vi.fn(() => {
+			callCount++;
+			return Promise.resolve(callCount === 1 ? mockSessionA : mockSessionB);
+		});
+
+		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idA = (spawnA.details as TaskDetails).id!;
+
+		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idB = (spawnB.details as TaskDetails).id!;
+
+		expect(sessionManager.hasOpenSession(idA)).toBe(true);
+		expect(sessionManager.hasOpenSession(idB)).toBe(true);
+
+		// Start waiting on both — should wait for first to finish
+		const waitPromise = controller.waitForAgent([idA, idB], {}, makeContext());
+
+		// Fire agent_end on B first — should cause waitForAgent to resolve
+		await new Promise((r) => setTimeout(r, 5));
+		for (const cb of subsB) cb({ type: "agent_end" });
+		queueMicrotask(() => {
+			sessionManager.storeAsyncResult(idB, { output: "agent B finished first", warnings: [] });
+		});
+
+		const result = await waitPromise;
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(2);
+
+		const agentB = agents.find(a => a.id === idB)!;
+		expect(agentB.status).toBe("completed");
+		expect(agentB.output).toBe("agent B finished first");
+
+		// Agent A should still be "running" (not yet finished)
+		const agentA = agents.find(a => a.id === idA)!;
+		expect(agentA.status).toBe("running");
+
+		// Restore original factory
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+	});
+
+	it("reports timed_out_still_running when timeout expires", async () => {
+		// Agent never finishes (prompt hangs)
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		const spawn = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawn.details as TaskDetails).id!;
+
+		// Wait with a very short timeout (1ms)
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0 }, // 0 minutes = instant timeout for test
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(1);
+		expect(agents[0].status).toBe("timed_out_still_running");
+		expect(agents[0].id).toBe(agentId);
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("timed out");
+
+		// Agent should still be alive (not killed)
+		expect(mockSession.abort).not.toHaveBeenCalled();
+	});
+
+	it("retrieves output from a finished blocking session", async () => {
+		// Run a blocking agent to completion
+		mockSession.messages = [
+			{ role: "user", content: "Do something" },
+			{ role: "assistant", content: [{ type: "text", text: "blocking result output" }] },
+		];
+
+		const blockingResult = await controller.execute(
+			makeParams({ blocking: true }),
+			makeContext(),
+		);
+		const agentId = (blockingResult.details as TaskDetails).id!;
+		const sessionFile = (blockingResult.details as TaskDetails).sessionFile!;
+
+		// Write simulated session data so readOutputFromSessionFile can find it
+		const fs = await import("node:fs");
+		fs.writeFileSync(sessionFile, JSON.stringify({
+			type: "message",
+			id: "msg1",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: "Do something" },
+		}) + "\n");
+		fs.appendFileSync(sessionFile, JSON.stringify({
+			type: "message",
+			id: "msg2",
+			parentId: "msg1",
+			timestamp: new Date().toISOString(),
+			message: { role: "assistant", content: [{ type: "text", text: "blocking result output" }] },
+		}) + "\n");
+
+		// The blocking session has been disposed with output in the session file.
+		// waitForAgent should be able to read it from persisted state.
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.id).toBe(agentId);
+		expect(result.details.output).toBe("blocking result output");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("blocking result output");
+	});
+
+	it("re-calling waitForAgent retrieves output from persisted state", async () => {
+		// Spawn async and let it finish
+		mockSession.messages = [
+			{ role: "user", content: "Do something" },
+			{ role: "assistant", content: [{ type: "text", text: "first retrieval output" }] },
+		];
+
+		const spawn = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawn.details as TaskDetails).id!;
+		const sessionFile = (spawn.details as TaskDetails).sessionFile!;
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Write session data so persisted read works after async result is cleared
+		const fs = await import("node:fs");
+		fs.writeFileSync(sessionFile, JSON.stringify({
+			type: "message",
+			id: "msg1",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: "Do something" },
+		}) + "\n");
+		fs.appendFileSync(sessionFile, JSON.stringify({
+			type: "message",
+			id: "msg2",
+			parentId: "msg1",
+			timestamp: new Date().toISOString(),
+			message: { role: "assistant", content: [{ type: "text", text: "first retrieval output" }] },
+		}) + "\n");
+
+		// First call: consumes async result from memory
+		const result1 = await controller.waitForAgent([agentId], {}, makeContext());
+		expect(result1.details.output).toBe("first retrieval output");
+
+		// Verify async result was cleared from memory
+		expect(sessionManager.getAsyncResult(agentId)).toBeUndefined();
+
+		// Second call: should re-read from persisted session file
+		const result2 = await controller.waitForAgent([agentId], {}, makeContext());
+		expect(result2.details.output).toBe("first retrieval output");
+
+		// Verify the output is still retrievable
+		const text = result2.content[0]?.type === "text" ? result2.content[0].text : "";
+		expect(text).toContain("first retrieval output");
+	});
+
+	it("consumes and clears in-memory async result after retrieval", async () => {
+		mockSession.messages = [
+			{ role: "user", content: "Do something" },
+			{ role: "assistant", content: [{ type: "text", text: "consume me" }] },
+		];
+
+		const spawn = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawn.details as TaskDetails).id!;
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Verify async result exists before retrieval
+		expect(sessionManager.getAsyncResult(agentId)).toBeDefined();
+
+		// Retrieve
+		await controller.waitForAgent([agentId], {}, makeContext());
+
+		// Async result should be cleared
+		expect(sessionManager.getAsyncResult(agentId)).toBeUndefined();
 	});
 });

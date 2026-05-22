@@ -253,20 +253,26 @@ export function configureTaskToolForRuntime(
 
 	// Register wait_for_agent alongside Task for async retrieval.
 	const waitForAgentParams = Type.Object({
-		agent_id: Type.String({
-			description: "Short hex ID of a previously spawned async sub-agent to wait for.",
+		agent_ids: Type.Array(Type.String(), {
+			description: "List of short hex IDs of previously spawned sub-agents to wait for. The call returns as soon as any listed running agent finishes.",
 		}),
+		timeout: Type.Optional(Type.Number({
+			default: 5,
+			description: "Minutes to wait before returning a status update. Default 5 minutes.",
+		})),
 	});
 
 	targetPi.registerTool({
 		name: "wait_for_agent",
 		label: "Wait for Agent",
 		description:
-			"Wait for an asynchronously spawned sub-agent to finish and return its output. Use after Task with blocking: false.",
-		promptSnippet: "Wait for async sub-agent by ID to finish",
+			"Wait for one or more asynchronously spawned sub-agents to finish and return their output. Also retrieves output from finished blocking agents. Returns as soon as any listed agent finishes or timeout expires.",
+		promptSnippet: "Wait for async sub-agent(s) by ID to finish",
 		promptGuidelines: [
-			"Use wait_for_agent to retrieve output from a sub-agent spawned with Task blocking:false.",
-			"Provide the agent_id returned by the async Task call.",
+			"Use wait_for_agent to retrieve output from sub-agent(s) spawned with Task blocking:false.",
+			"Provide the agent_ids returned by the async Task calls as a list.",
+			"Pass multiple IDs to wait on several agents at once — returns when any finishes.",
+			"Pass timeout (in minutes, default 5) to bound the wait.",
 		],
 		parameters: waitForAgentParams,
 		async execute(_toolCallId, wParams, _signal, _onUpdate, ctx) {
@@ -302,11 +308,12 @@ export function configureTaskToolForRuntime(
 				},
 			};
 
-			return controller.waitForAgent(wParams.agent_id, executeContext);
+			return controller.waitForAgent(wParams.agent_ids, { timeout: wParams.timeout }, executeContext);
 		},
 		renderCall(args, theme) {
+			const ids = Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : String(args.agent_ids ?? "");
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("wait_for_agent "))}${theme.fg("muted", args.agent_id)}`,
+				`${theme.fg("toolTitle", theme.bold("wait_for_agent "))}${theme.fg("muted", ids)}`,
 				0,
 				0,
 			);
@@ -315,13 +322,23 @@ export function configureTaskToolForRuntime(
 			const details = result.details as TaskDetails | undefined;
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "(no output)";
 			const container = new Container();
-			container.addChild(
-				new Text(
-					`${theme.fg("toolTitle", theme.bold(details?.displayName ?? "Agent"))}${details?.id ? theme.fg("muted", ` ${details.id}`) : ""}`,
-					0,
-					0,
-				),
-			);
+			if (details?.agents && details.agents.length > 1) {
+				container.addChild(
+					new Text(
+						`${theme.fg("toolTitle", theme.bold("wait_for_agent"))}${theme.fg("muted", ` (${details.agents.length} agents)`)}`,
+						0,
+						0,
+					),
+				);
+			} else {
+				container.addChild(
+					new Text(
+						`${theme.fg("toolTitle", theme.bold(details?.displayName ?? "Agent"))}${details?.id ? theme.fg("muted", ` ${details.id}`) : ""}`,
+						0,
+						0,
+					),
+				);
+			}
 			container.addChild(new Spacer(1));
 			container.addChild(new Markdown(text, 0, 0, getMarkdownTheme()));
 			return container;

@@ -408,9 +408,19 @@ export class SubagentSessionManager {
 		this.asyncInFlight.delete(id);
 	}
 
+	/** Clear a consumed async result from memory. */
+	clearAsyncResult(id: string): void {
+		this.asyncResults.delete(id);
+	}
+
 	/** Check whether a session has an in-flight async prompt. */
 	isAsyncRunning(id: string): boolean {
 		return this.asyncInFlight.has(id);
+	}
+
+	/** Check whether a tracked session has already reached agent_end. */
+	isCompleted(id: string): boolean {
+		return this.completedSessions.has(id);
 	}
 
 	// ---- Run serialization ----

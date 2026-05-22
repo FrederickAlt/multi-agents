@@ -13,6 +13,7 @@
  * adapter interfaces in TaskExecuteContext.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DefaultResourceLoader, Model } from "@mariozechner/pi-coding-agent";
 import type {
@@ -75,10 +76,16 @@ export interface SessionAdapter {
 	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[] }): void;
 	/** Retrieve a previously stored async result. */
 	getAsyncResult(id: string): { output: string; error?: string; warnings: string[] } | undefined;
+	/** Clear a consumed async result from memory. */
+	clearAsyncResult(id: string): void;
 	/** Mark a session as having an in-flight async prompt. */
 	markAsyncRunning(id: string): void;
 	/** Check whether a session has an in-flight async prompt. */
 	isAsyncRunning(id: string): boolean;
+	/** Check whether a tracked session has already reached agent_end. */
+	isCompleted(id: string): boolean;
+	/** Check if there is an open session for the given record ID. */
+	hasOpenSession(id: string): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +137,21 @@ export interface TaskExecuteContext {
 	onUpdate?: (partial: TaskResult) => void;
 }
 
+/** Status of a single agent within a wait_for_agent result. */
+export type AgentWaitStatus = 'completed' | 'running' | 'timed_out_still_running' | 'unknown';
+
+/** Per-agent structured result returned by waitForAgent. */
+export interface AgentWaitResult {
+	id: string;
+	displayName?: string;
+	agentType?: string;
+	status: AgentWaitStatus;
+	output?: string;
+	error?: string;
+	warnings?: string[];
+	sessionFile?: string;
+}
+
 /** Per-execution metadata about a Task result. */
 export interface TaskDetails {
 	id?: string;
@@ -141,6 +163,8 @@ export interface TaskDetails {
 	warnings: string[];
 	error?: string;
 	output?: string;
+	/** Per-agent results from wait_for_agent (multi-agent retrieval). */
+	agents?: AgentWaitResult[];
 }
 
 /** Structured result returned by TaskController.execute(). */
@@ -588,118 +612,350 @@ export class TaskController {
 	}
 
 	/**
-	 * Wait for a previously spawned async sub-agent to finish and return its output.
+	 * Read the last assistant text from a persisted session file.
+	 * Parses the file as JSONL and walks backwards to find the last
+	 * assistant message. Returns undefined if the file is missing or
+	 * contains no assistant message.
+	 */
+	static readOutputFromSessionFile(sessionFile: string): string | undefined {
+		try {
+			if (!existsSync(sessionFile)) return undefined;
+			const raw = readFileSync(sessionFile, "utf-8").trim();
+			if (!raw) return undefined;
+			const lines = raw.split("\n");
+			for (let i = lines.length - 1; i >= 0; i--) {
+				try {
+					const entry = JSON.parse(lines[i]);
+					if (entry.type === "message" && entry.message?.role === "assistant") {
+						const content = entry.message.content;
+						if (typeof content === "string") return content;
+						if (Array.isArray(content)) {
+							const textPart = content.find((c: any) => c.type === "text");
+							return textPart?.text ?? "";
+						}
+						return "";
+					}
+				} catch { /* skip malformed lines */ }
+			}
+			return undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Wait for one or more previously spawned sub-agents to finish and return
+	 * their output.
 	 *
-	 * Looks up the record by ID, waits for the session to reach `agent_end`,
-	 * then returns the captured output (or error) from the async execution.
-	 * Returns an error result if the record cannot be found.
+	 * For each listed agent ID the result includes a structured status:
+	 * - `completed`: finished and output was captured (async or from persisted session)
+	 * - `running`: still in-flight at the time of return
+	 * - `timed_out_still_running`: was still running when the timeout expired
+	 * - `unknown`: the agent ID has no corresponding record
+	 *
+	 * When multiple IDs are supplied the call returns as soon as any listed
+	 * running agent finishes or the timeout expires. Already-completed agents
+	 * cause an immediate return.
+	 *
+	 * After async output is consumed any in-memory session resources held only
+	 * for that run are disposed; the session file remains on disk for resume.
+	 *
+	 * @param agentIds  List of hex agent IDs to wait on (required).
+	 * @param opts.timeout  Minutes to wait before returning a status update (default 5).
+	 * @param context  Injected runtime dependencies.
 	 */
 	async waitForAgent(
-		agentId: string,
+		agentIds: string[],
+		opts: { timeout?: number },
 		context: TaskExecuteContext,
 	): Promise<TaskResult> {
 		const { metadataStore, sessionManager } = context;
 		const warnings: string[] = [];
 
-		// Look up the record
-		let record: SubagentRecord | undefined;
-		try {
-			record = metadataStore.findRecord(agentId);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+		// Validate input
+		if (!agentIds || agentIds.length === 0) {
 			return {
-				content: [{ type: "text", text: `wait_for_agent failed while reading metadata: ${message}` }],
-				details: { warnings, error: message },
+				content: [{ type: "text", text: "wait_for_agent requires at least one agent_id." }],
+				details: { warnings, error: "missing_agent_ids" },
 			};
 		}
 
-		if (!record) {
-			return {
-				content: [{ type: "text", text: `Unknown agent ID "${agentId}".` }],
-				details: { warnings, error: "unknown_agent_id" },
-			};
-		}
+		const timeoutMinutes = opts.timeout ?? 5;
+		const timeoutMs = timeoutMinutes * 60 * 1000;
 
-		// Wait for the session to complete
-		try {
-			await sessionManager.waitForSessionEnd(agentId);
-		} catch {
-			// Session may have been disposed; try to extract whatever is available
-		}
+		// ---- Helpers ----
 
+		/** Build a single AgentWaitResult for a given agent ID. */
+		const buildResult = (agentId: string): AgentWaitResult => {
+			let record: SubagentRecord | undefined;
+			try { record = metadataStore.findRecord(agentId); } catch { /* fall through */ }
 
-		// Yield to the microtask queue so finish() can run storeAsyncResult
-		// before we try to read it.  Without this, the waitForSessionEnd
-		// resolution continuation runs before the session.prompt()
-		// completion handler and getAsyncResult() returns undefined.
-		await new Promise<void>((resolve) => { queueMicrotask(resolve); });
-		// Re-read record to pick up updated session file
-		try {
-			record = metadataStore.findRecord(agentId) ?? record;
-		} catch { /* use current record */ }
+			if (!record) {
+				return { id: agentId, status: "unknown" };
+			}
 
-		// Retrieve the captured async output
-		const asyncResult = sessionManager.getAsyncResult(agentId);
-		const displayName = record.displayName || record.agentType;
-
-		if (!asyncResult) {
-			// Agent ended before we could store the result (e.g. resumed/blocking agent
-			// for which no async result was captured). Return a placeholder.
-			return {
-				content: [
-					{
-						type: "text",
-						text: `${displayName} (${agentId}) has completed. Use resume: "${agentId}" to read full output or continue this agent.`,
-					},
-				],
-				details: {
+			// 1. Check in-memory async result (async agent that stored output in finish())
+			const asyncResult = sessionManager.getAsyncResult(agentId);
+			if (asyncResult) {
+				if (asyncResult.error) {
+					return {
+						id: agentId,
+						displayName: record.displayName,
+						agentType: record.agentType,
+						status: "completed",
+						error: asyncResult.error,
+						warnings: asyncResult.warnings,
+						sessionFile: record.sessionFile,
+					};
+				}
+				return {
 					id: agentId,
 					displayName: record.displayName,
 					agentType: record.agentType,
-					sessionFile: record.sessionFile,
-					warnings,
-				},
-			};
-		}
-
-		if (asyncResult.error) {
-			return {
-				content: [
-					{
-						type: "text",
-						text: `${displayName} (${agentId}) failed. Use resume: "${agentId}" to retry or continue this agent.\n\n${asyncResult.error}`,
-					},
-				],
-				details: {
-					id: agentId,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					description: record.displayName,
-					sessionFile: record.sessionFile,
+					status: "completed",
+					output: asyncResult.output,
 					warnings: asyncResult.warnings,
-					error: asyncResult.error,
-				},
-			};
+					sessionFile: record.sessionFile,
+				};
+			}
+
+			// 2. Check completedSessions (non-async agents or re-called agents)
+			if (sessionManager.isCompleted(agentId)) {
+				const persisted = TaskController.readOutputFromSessionFile(record.sessionFile);
+				return {
+					id: agentId,
+					displayName: record.displayName,
+					agentType: record.agentType,
+					status: "completed",
+					output: persisted,
+					sessionFile: record.sessionFile,
+				};
+			}
+
+			// 3. Check if session is open (still running)
+			if (sessionManager.hasOpenSession(agentId)) {
+				return {
+					id: agentId,
+					displayName: record.displayName,
+					agentType: record.agentType,
+					status: "running",
+					sessionFile: record.sessionFile,
+				};
+			}
+
+			// 4. No open session and not completed — may have been disposed
+			//    without storing asyncResult (edge case). Try persisted file.
+			if (record.sessionFile) {
+				const persisted = TaskController.readOutputFromSessionFile(record.sessionFile);
+				if (persisted !== undefined) {
+					return {
+						id: agentId,
+						displayName: record.displayName,
+						agentType: record.agentType,
+						status: "completed",
+						output: persisted,
+						sessionFile: record.sessionFile,
+					};
+				}
+				// Session file exists but no assistant output — treat as completed
+				// with no output rather than unknown
+				return {
+					id: agentId,
+					displayName: record.displayName,
+					agentType: record.agentType,
+					status: "completed",
+					sessionFile: record.sessionFile,
+				};
+			}
+
+			// 5. No record means unknown
+			return { id: agentId, status: "unknown" };
+		};
+
+		/** Deduplicate IDs while preserving order. */
+		const uniqueIds = [...new Set(agentIds)];
+
+		// ---- First pass: classify all agents ----
+		const firstResults = uniqueIds.map(buildResult);
+
+		const hasCompleted = firstResults.some(r => r.status === "completed");
+		const runningIds = firstResults
+			.filter(r => r.status === "running")
+			.map(r => r.id);
+
+		// If any agent is already completed, return immediately.
+		if (hasCompleted) {
+			// Consume async results so in-memory resources are released
+			for (const r of firstResults) {
+				if (r.status === "completed") {
+					sessionManager.clearAsyncResult(r.id);
+				}
+			}
+			return this._formatWaitResult(firstResults, warnings);
 		}
 
-		const output = asyncResult.output;
-		const header = `${displayName} (${agentId}) completed. Use resume: "${agentId}" to continue this agent.`;
+		// If no agents are running (all unknown), return immediately.
+		if (runningIds.length === 0) {
+			return this._formatWaitResult(firstResults, warnings);
+		}
+
+		// ---- Second pass: wait for the first running agent to finish ----
+		try {
+			const waitPromises = runningIds.map(id =>
+				sessionManager.waitForSessionEnd(id).then(() => id)
+			);
+
+			const timeoutPromise = new Promise<string>((resolve) => {
+				setTimeout(() => resolve("__timeout__"), timeoutMs);
+			});
+
+			const winner = await Promise.race([...waitPromises, timeoutPromise]);
+
+			// Yield to the microtask queue so finish() can run storeAsyncResult
+			// before we re-classify.
+			await new Promise<void>((resolve) => { queueMicrotask(resolve); });
+
+			if (winner === "__timeout__") {
+				// Timeout: re-classify; agents that are still running become timed_out_still_running
+				const timeoutResults = uniqueIds.map(id => {
+					const r = buildResult(id);
+					if (r.status === "running") {
+						return { ...r, status: "timed_out_still_running" as const };
+					}
+					return r;
+				});
+				for (const r of timeoutResults) {
+					if (r.status === "completed") {
+						sessionManager.clearAsyncResult(r.id);
+					}
+				}
+				return this._formatWaitResult(timeoutResults, warnings);
+			}
+
+			// An agent finished — re-classify all
+			const finalResults = uniqueIds.map(id => {
+				const r = buildResult(id);
+				// Still-open sessions that were running remain "running"
+				return r;
+			});
+			for (const r of finalResults) {
+				if (r.status === "completed") {
+					sessionManager.clearAsyncResult(r.id);
+				}
+			}
+			return this._formatWaitResult(finalResults, warnings);
+		} catch {
+			// Best-effort: return whatever we have
+			const fallbackResults = uniqueIds.map(id => {
+				try { return buildResult(id); } catch {
+					return { id, status: "unknown" as const };
+				}
+			});
+			return this._formatWaitResult(fallbackResults, warnings);
+		}
+	}
+
+	/** Format per-agent results into a TaskResult with a human-readable summary. */
+	private _formatWaitResult(
+		agents: AgentWaitResult[],
+		warnings: string[],
+	): TaskResult {
+		const lines: string[] = [];
+
+		const completed = agents.filter(a => a.status === "completed");
+		const running = agents.filter(a => a.status === "running");
+		const timedOut = agents.filter(a => a.status === "timed_out_still_running");
+		const unknown = agents.filter(a => a.status === "unknown");
+
+		// Top-level details (backwards-compatible with single-agent callers)
+		const first = agents[0];
+		const topLevel: TaskDetails = { warnings, agents };
+		if (first) {
+			topLevel.id = first.id;
+			topLevel.displayName = first.displayName;
+			topLevel.agentType = first.agentType;
+			topLevel.sessionFile = first.sessionFile;
+		}
+
+		if (agents.length === 1) {
+			// Single-agent: use the old-style detailed output for backwards compat
+			const a = agents[0];
+			const displayName = a.displayName || a.agentType || a.id;
+			if (a.status === "completed") {
+				if (a.error) {
+					topLevel.error = a.error;
+					topLevel.output = a.output;
+					topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
+					lines.push(`${displayName} (${a.id}) failed. Use resume: "${a.id}" to retry or continue this agent.`);
+					lines.push("");
+					lines.push(a.error);
+				} else {
+					topLevel.output = a.output;
+					topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
+					lines.push(`${displayName} (${a.id}) completed. Use resume: "${a.id}" to continue this agent.`);
+					if (a.output) {
+						lines.push("");
+						lines.push(a.output);
+					} else if (!a.output) {
+						lines.push("");
+						lines.push("(no output)");
+					}
+				}
+			} else if (a.status === "running") {
+				lines.push(`${displayName} (${a.id}) is still running. Call wait_for_agent again to check.`);
+			} else if (a.status === "timed_out_still_running") {
+				lines.push(`${displayName} (${a.id}) is still running (timed out waiting). Call wait_for_agent again to check.`);
+			} else {
+				topLevel.error = "unknown_agent_id";
+				lines.push(`Unknown agent ID "${a.id}".`);
+			}
+		} else {
+			// Multi-agent: structured summary
+			lines.push(`wait_for_agent results for ${agents.length} agent(s):`);
+
+			if (completed.length > 0) {
+				lines.push(`\n## Completed (${completed.length})`);
+				for (const a of completed) {
+					const name = a.displayName || a.agentType || a.id;
+					lines.push(`- ${name} (${a.id})`);
+					if (a.error) {
+						lines.push(`  Error: ${a.error}`);
+					} else if (a.output) {
+						const preview = a.output.length > 200 ? a.output.slice(0, 200) + "..." : a.output;
+						lines.push(`  ${preview}`);
+					} else {
+						lines.push(`  (no output captured)`);
+					}
+				}
+			}
+
+			if (running.length > 0) {
+				lines.push(`\n## Still Running (${running.length})`);
+				for (const a of running) {
+					const name = a.displayName || a.agentType || a.id;
+					lines.push(`- ${name} (${a.id})`);
+				}
+			}
+
+			if (timedOut.length > 0) {
+				lines.push(`\n## Timed Out, Still Running (${timedOut.length})`);
+				for (const a of timedOut) {
+					const name = a.displayName || a.agentType || a.id;
+					lines.push(`- ${name} (${a.id})`);
+				}
+			}
+
+			if (unknown.length > 0) {
+				lines.push(`\n## Unknown IDs (${unknown.length})`);
+				for (const a of unknown) {
+					lines.push(`- ${a.id}`);
+				}
+			}
+		}
+
 		return {
-			content: [
-				{
-					type: "text",
-					text: `${header}\n\n${output || "(no output)"}`,
-				},
-			],
-			details: {
-				id: agentId,
-				displayName: record.displayName,
-				agentType: record.agentType,
-				description: record.displayName,
-				sessionFile: record.sessionFile,
-				warnings: asyncResult.warnings,
-				output,
-			},
+			content: [{ type: "text", text: lines.join("\n") }],
+			details: topLevel,
 		};
 	}
 }
