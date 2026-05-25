@@ -26,6 +26,17 @@ export interface RenderContext {
 	parts: PromptParts;
 }
 
+export const SUBAGENT_REPORTING_NOTICE = `# Subagent reporting
+
+You are running as a subagent. Your parent agent will not see your full conversation or tool outputs; it will only receive your final assistant message.
+
+Work autonomously until the delegated task is complete, or until you encounter an unexpected blocker, ambiguity, or failure that the parent needs to know about. Do not stop early without explaining the outcome.
+
+Your final message should summarize:
+- what you accomplished,
+- key findings or changes,
+- any blockers, risks, or follow-up needed.`;
+
 function today(): string {
 	const now = new Date();
 	const yyyy = now.getFullYear();
@@ -139,6 +150,8 @@ export interface SystemPromptCompositionOptions {
 	baseSystemPrompt?: string;
 	/** Pi append-system prompt material. Intentionally ignored for Agent definitions. */
 	appendSystemPrompt?: string;
+	/** Inject the Task-specific child-agent reporting contract. */
+	includeSubagentReportingNotice?: boolean;
 }
 
 /**
@@ -151,9 +164,12 @@ export interface SystemPromptCompositionOptions {
 export function renderComposedAgentSystemPrompt(
 	context: RenderContext,
 	promptParts: PromptPartConfig[],
-	_options: SystemPromptCompositionOptions = {},
+	options: SystemPromptCompositionOptions = {},
 ): string {
-	return renderSubagentSystemPrompt(context, promptParts);
+	const prompt = renderSubagentSystemPrompt(context, promptParts);
+	return options.includeSubagentReportingNotice
+		? [prompt, SUBAGENT_REPORTING_NOTICE].join("\n\n")
+		: prompt;
 }
 
 export function buildPromptPartsFromOptions(options: any): PromptParts {

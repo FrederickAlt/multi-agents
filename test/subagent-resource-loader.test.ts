@@ -158,6 +158,8 @@ Explicit context:
 
 		expect(rendered.systemPrompt).toContain("Sub-agent prompt.");
 		expect(rendered.systemPrompt).toContain("PROJECT CONTEXT MARKER");
+		expect(rendered.systemPrompt).toContain("# Subagent reporting");
+		expect(rendered.systemPrompt).toContain("only receive your final assistant message");
 		expect(rendered.systemPrompt).not.toContain("Native Pi prompt");
 		expect(rendered.systemPrompt).not.toContain("APPEND_SYSTEM content");
 	});

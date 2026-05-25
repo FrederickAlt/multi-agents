@@ -19,7 +19,7 @@ import {
 	resolveTaskAgent,
 } from "../subagent/index.js";
 import type { SubagentRecord } from "../subagent/index.js";
-import { renderComposedAgentSystemPrompt, renderPromptTemplate } from "../subagent/prompt-composition.js";
+import { SUBAGENT_REPORTING_NOTICE, renderComposedAgentSystemPrompt, renderPromptTemplate } from "../subagent/prompt-composition.js";
 import type { PromptParts, RenderContext } from "../subagent/prompt-composition.js";
 import type { AgentConfig } from "../subagent/agents.js";
 
@@ -536,6 +536,20 @@ describe("renderPromptTemplate", () => {
 		expect(result).toContain("Agent TestAgent");
 		expect(result).not.toContain("APPEND_SYSTEM content");
 		expect(result).not.toContain("Default Pi prompt");
+	});
+
+	it("injects the subagent reporting notice only when requested", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, systemPrompt: "Agent {{agent_name}}" },
+		};
+		const rootPrompt = renderComposedAgentSystemPrompt(ctx, []);
+		const childPrompt = renderComposedAgentSystemPrompt(ctx, [], {
+			includeSubagentReportingNotice: true,
+		});
+
+		expect(rootPrompt).not.toContain(SUBAGENT_REPORTING_NOTICE);
+		expect(childPrompt).toBe(`Agent TestAgent\n\n${SUBAGENT_REPORTING_NOTICE}`);
 	});
 
 	it("renders the same Agent-definition prompt semantics for Root and Task sub-agent placements", () => {

@@ -524,6 +524,7 @@ export default function (pi: ExtensionAPI) {
 				const prompt = renderComposedAgentSystemPrompt(context, promptPartDefs, {
 					baseSystemPrompt: event.systemPrompt,
 					appendSystemPrompt: event.systemPromptOptions.appendSystemPrompt,
+					includeSubagentReportingNotice: true,
 				});
 				return { systemPrompt: prompt };
 			});
