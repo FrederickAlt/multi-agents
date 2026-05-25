@@ -33,6 +33,7 @@ import {
 	type PromptParts,
 	type RenderContext,
 } from "./prompt-composition.js";
+import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE, needsFinalResponsePrompt } from "./output-extraction.js";
 
 export {
 	buildTemplateValues,
@@ -412,6 +413,8 @@ export default function (pi: ExtensionAPI) {
 	let dumpNextProviderRequest = false;
 	let lastProviderSystemPrompt: string | undefined;
 	let lastRootPromptParts: PromptParts | undefined;
+	let rootFinalResponseGuardActive = false;
+	let rootFinalResponseGuardAttempts = 0;
 	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
 		treeDepth: 0,
@@ -611,6 +614,11 @@ export default function (pi: ExtensionAPI) {
 			return { action: "handled" as const };
 		}
 
+		if (event.source !== "extension") {
+			rootFinalResponseGuardActive = false;
+			rootFinalResponseGuardAttempts = 0;
+		}
+
 		if (event.source !== "extension" && _asyncAgentNotifier.hasPendingCompletion()) {
 			const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
 			if (notification) {
@@ -662,10 +670,44 @@ export default function (pi: ExtensionAPI) {
 		registerTaskTool(pi, mainRuntime);
 	});
 
+	const sendFinalResponseGuard = (options: { delayed?: boolean } = {}) => {
+		rootFinalResponseGuardActive = true;
+		rootFinalResponseGuardAttempts++;
+		const send = () => {
+			pi.sendMessage(
+				{
+					customType: "system",
+					content: FINAL_RESPONSE_REQUIRED_MESSAGE,
+					display: true,
+				},
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+		};
+		if (options.delayed) setTimeout(send, 0);
+		else send();
+	};
+
+	pi.on("agent_start", () => {
+		rootFinalResponseGuardActive = false;
+	});
+
+	pi.on("agent_end", (event: any) => {
+		if (!rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && needsFinalResponsePrompt(event?.messages ?? [])) {
+			sendFinalResponseGuard({ delayed: true });
+		}
+	});
+
 	// Inject async-agent completion notifications at turn boundaries.
 	// The notifier owns first-notification and reminder cadence; this hook only
 	// delivers whichever consolidated message is currently due.
-	pi.on("turn_end", () => {
+	pi.on("turn_end", (event: any) => {
+		const message = event?.message;
+		const content = Array.isArray(message?.content) ? message.content : [];
+		const hasToolCall = content.some((part: any) => part?.type === "toolCall");
+		if (message?.role === "assistant" && !rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && !hasToolCall && needsFinalResponsePrompt([message])) {
+			sendFinalResponseGuard();
+		}
+
 		const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
 		if (notification) {
 			pi.sendMessage(

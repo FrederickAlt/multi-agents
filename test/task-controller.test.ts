@@ -32,6 +32,7 @@ import { __testing, waitForAgent as waitForAgentTool } from "../subagent/index.j
 import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "../subagent/depth-policy.js";
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
 import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
+import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE } from "../subagent/output-extraction.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -826,11 +827,35 @@ describe("TaskController.execute", () => {
 
 	// ---- Empty output ----
 
-	it("returns (no output) when session has no assistant text", async () => {
-		mockSession.messages = [];
+	it("prompts once more when a blocking agent stops without a final assistant message", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "thinking", thinking: "almost done" }] },
+		];
+		mockSession.prompt = vi.fn()
+			.mockResolvedValueOnce(undefined)
+			.mockImplementationOnce(async () => {
+				mockSession.messages.push({ role: "assistant", content: [{ type: "text", text: "final after guard" }] });
+			});
 
 		const result = await controller.execute(makeParams(), makeContext());
 
+		expect(mockSession.prompt).toHaveBeenCalledTimes(2);
+		expect(mockSession.prompt).toHaveBeenNthCalledWith(2, FINAL_RESPONSE_REQUIRED_MESSAGE);
+		expect(result.details.output).toBe("final after guard");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("final after guard");
+	});
+
+	it("returns (no output) when the final-response retries still have no assistant text", async () => {
+		mockSession.messages = [];
+		mockSession.prompt = vi.fn().mockResolvedValue(undefined);
+
+		const result = await controller.execute(makeParams(), makeContext());
+
+		expect(mockSession.prompt).toHaveBeenCalledTimes(1 + FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS);
+		for (let call = 2; call <= 1 + FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS; call++) {
+			expect(mockSession.prompt).toHaveBeenNthCalledWith(call, FINAL_RESPONSE_REQUIRED_MESSAGE);
+		}
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("(no output)");
 	});
@@ -1150,6 +1175,31 @@ describe("TaskController.execute", () => {
 		expect(text).not.toContain("partial output");
 	});
 
+	it("prompts async agents once more before storing an empty successful result", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "thinking", thinking: "done?" }] },
+		];
+		mockSession.prompt = vi.fn()
+			.mockResolvedValueOnce(undefined)
+			.mockImplementationOnce(async () => {
+				mockSession.messages.push({ role: "assistant", content: [{ type: "text", text: "async final after guard" }] });
+			});
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(mockSession.prompt).toHaveBeenCalledTimes(2);
+		expect(mockSession.prompt).toHaveBeenNthCalledWith(2, FINAL_RESPONSE_REQUIRED_MESSAGE);
+		expect(result.details.output).toBe("async final after guard");
+	});
+
 
 	it("captures output when agent finishes during waitForAgent (microtask ordering)", async () => {
 		mockSession.messages = [
@@ -1294,6 +1344,50 @@ describe("TaskController.execute", () => {
 
 		// Restore prompt for cleanup
 		mockSession.prompt = originalPrompt;
+	});
+
+	it("returns full completed output for multiple agents", async () => {
+		const outputA = [
+			"Implemented on issue-35-type-to-filter-option-columns.",
+			"Updated keyboard handling so h/j/k/l still drive inline option-column filtering when appropriate.",
+			"Tests run:",
+			"npm test -- --run test/tui-board.test.tsx",
+			"Result: all assertions passed.",
+			"FULL_OUTPUT_SENTINEL_AGENT_A_TEST_RESULTS_VISIBLE",
+		].join("\n");
+		const outputB = [
+			"Implemented on issue-34-async-model-option-column.",
+			"Fixed stale async model discovery overwrite in useOptionDiscovery with a request-id guard.",
+			"Tests run:",
+			"npm test -- --run test/tui/useOptionDiscovery.test.tsx",
+			"Result: all assertions passed.",
+			"FULL_OUTPUT_SENTINEL_AGENT_B_TEST_RESULTS_VISIBLE",
+		].join("\n");
+
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: outputA }] },
+		];
+		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idA = (spawnA.details as TaskDetails).id!;
+		await new Promise((r) => setTimeout(r, 10));
+
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: outputB }] },
+		];
+		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idB = (spawnB.details as TaskDetails).id!;
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent([idA, idB], {}, makeContext());
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents.find(a => a.id === idA)?.output).toBe(outputA);
+		expect(agents.find(a => a.id === idB)?.output).toBe(outputB);
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain(outputA);
+		expect(text).toContain(outputB);
+		expect(text).not.toContain("...");
 	});
 
 	it("returns as soon as any listed running agent finishes", async () => {

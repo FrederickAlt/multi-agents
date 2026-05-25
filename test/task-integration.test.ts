@@ -19,6 +19,7 @@ import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozech
 import taskExtension, { __testing, configureTaskToolForRuntime, filterExtensionsForAgent } from "../subagent/index.js";
 import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
 import type { AgentConfig } from "../subagent/agents.js";
+import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE } from "../subagent/output-extraction.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -573,6 +574,93 @@ describe("extension loading", () => {
 			expect((pi as any)._sentMessages[1].message.content).toContain("Reminder");
 			expect((pi as any)._sentMessages[1].message.content).toContain("agent-a");
 			expect((pi as any)._sentMessages[1].message.content).toContain("agent-b");
+		});
+
+		it("asks the root agent to continue when a turn would end with thinking only", () => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+
+			handlers.get("agent_start")?.();
+			handlers.get("turn_end")?.({
+				message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }], stopReason: "stop" },
+				toolResults: [],
+			});
+
+			expect((pi as any)._sentMessages).toHaveLength(1);
+			expect((pi as any)._sentMessages[0].message).toEqual({
+				customType: "system",
+				content: FINAL_RESPONSE_REQUIRED_MESSAGE,
+				display: true,
+			});
+			expect((pi as any)._sentMessages[0].options).toEqual({ triggerTurn: true, deliverAs: "followUp" });
+		});
+
+		it("does not ask the root agent to continue when a turn ends with text or a tool call", () => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+
+			handlers.get("agent_start")?.();
+			handlers.get("turn_end")?.({
+				message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" },
+				toolResults: [],
+			});
+			handlers.get("turn_end")?.({
+				message: { role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {}, id: "call-1" }], stopReason: "toolUse" },
+				toolResults: [],
+			});
+
+			expect((pi as any)._sentMessages).toEqual([]);
+		});
+
+		it("asks the root agent to continue after agent_end if the transcript ends with a tool result", async () => {
+			vi.useFakeTimers();
+			try {
+				const { pi, handlers } = createFakeExtensionApi();
+				taskExtension(pi);
+
+				handlers.get("agent_start")?.();
+				handlers.get("agent_end")?.({
+					messages: [
+						{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {}, id: "call-1" }], stopReason: "toolUse" },
+						{ role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false },
+					],
+				});
+
+				expect((pi as any)._sentMessages).toEqual([]);
+				await vi.runAllTimersAsync();
+				expect((pi as any)._sentMessages).toHaveLength(1);
+				expect((pi as any)._sentMessages[0].message.content).toBe(FINAL_RESPONSE_REQUIRED_MESSAGE);
+				expect((pi as any)._sentMessages[0].options).toEqual({ triggerTurn: true, deliverAs: "followUp" });
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("caps root final-response guard at three attempts until a new user input", () => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+
+			for (let i = 0; i < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS + 2; i++) {
+				handlers.get("agent_start")?.();
+				handlers.get("turn_end")?.({
+					message: { role: "assistant", content: [{ type: "thinking", thinking: "still stuck" }], stopReason: "stop" },
+					toolResults: [],
+				});
+			}
+
+			expect((pi as any)._sentMessages).toHaveLength(FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS);
+
+			handlers.get("input")?.(
+				{ type: "input", text: "new request", source: "interactive" },
+				{ cwd: tempDir, sessionManager: makeSessionManager(tempDir, "guard-reset-session"), ui: { notify: () => {} } },
+			);
+			handlers.get("agent_start")?.();
+			handlers.get("turn_end")?.({
+				message: { role: "assistant", content: [{ type: "thinking", thinking: "again" }], stopReason: "stop" },
+				toolResults: [],
+			});
+
+			expect((pi as any)._sentMessages).toHaveLength(FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS + 1);
 		});
 	});
 

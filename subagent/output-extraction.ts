@@ -7,6 +7,18 @@
  * TaskController and SubagentSessionManager.
  */
 
+export const FINAL_RESPONSE_REQUIRED_MESSAGE = `[System] You stopped without returning a final message. If you intended to finish, emit a normal assistant message to the parent agent explaining your final result. If the token stream stopped unexpectedly, continue from where you left off and provide the final message now. Do not call tools unless they are required to produce that final message.`;
+export const FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS = 3;
+
+function textFromAssistantMessage(msg: any): string {
+	const content = Array.isArray(msg?.content) ? msg.content : [];
+	const text = content
+		.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+		.map((part: any) => part.text)
+		.join("");
+	return text.trim() ? text : "";
+}
+
 /**
  * Extract the last assistant text content from a message array.
  */
@@ -14,12 +26,46 @@ export function getFinalTextFromMessages(messages: any[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg?.role !== "assistant") continue;
-		const content = Array.isArray(msg.content) ? msg.content : [];
-		for (const part of content) {
-			if (part?.type === "text" && typeof part.text === "string") return part.text;
-		}
+		const text = textFromAssistantMessage(msg);
+		if (text) return text;
 	}
 	return "";
+}
+
+/**
+ * Extract text only when the terminal transcript message is an assistant reply.
+ */
+export function getTerminalTextFromMessages(messages: any[]): string {
+	const msg = messages[messages.length - 1];
+	if (msg?.role !== "assistant") return "";
+	return textFromAssistantMessage(msg);
+}
+
+export function getTerminalDiagnosticFromMessages(messages: any[]): string {
+	const msg = messages[messages.length - 1];
+	if (msg?.role !== "assistant") return "";
+	if ((msg.stopReason === "error" || msg.stopReason === "aborted") && typeof msg.errorMessage === "string") {
+		return msg.errorMessage.trim() ? msg.errorMessage : "";
+	}
+	return "";
+}
+
+export function extractTerminalOutput(
+	messages: any[],
+): { text: string; source: 'assistant' | 'diagnostic' | 'none' } {
+	const assistantText = getTerminalTextFromMessages(messages);
+	if (assistantText) {
+		return { text: assistantText, source: 'assistant' };
+	}
+	const diagnostic = getTerminalDiagnosticFromMessages(messages);
+	if (diagnostic) {
+		return { text: diagnostic, source: 'diagnostic' };
+	}
+	return { text: '', source: 'none' };
+}
+
+export function needsFinalResponsePrompt(messages: any[]): boolean {
+	return extractTerminalOutput(messages).source === 'none';
 }
 
 /**

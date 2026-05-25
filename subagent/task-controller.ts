@@ -31,7 +31,13 @@ import type {
 	ModelResolver,
 	SessionSetupContext,
 } from "./session-manager.js";
-import { extractOutput, getFinalTextFromMessages } from "./output-extraction.js";
+import {
+	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
+	FINAL_RESPONSE_REQUIRED_MESSAGE,
+	extractOutput,
+	extractTerminalOutput,
+	getFinalTextFromMessages,
+} from "./output-extraction.js";
 
 /**
  * Default maximum runtime for a Task sub-agent execution, in minutes.
@@ -293,6 +299,16 @@ export class TaskController {
 	// Re-exported from shared module for backward compatibility.
 	static getFinalTextFromMessages = getFinalTextFromMessages;
 	static extractOutput = extractOutput;
+	static extractTerminalOutput = extractTerminalOutput;
+
+	private static async _ensureFinalResponse(session: any): Promise<{ text: string; source: 'assistant' | 'diagnostic' | 'none' }> {
+		let terminal = extractTerminalOutput(session.messages as any[]);
+		for (let attempt = 0; terminal.source === 'none' && attempt < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS; attempt++) {
+			await session.prompt(FINAL_RESPONSE_REQUIRED_MESSAGE);
+			terminal = extractTerminalOutput(session.messages as any[]);
+		}
+		return terminal;
+	}
 
 	// ---- Instance methods ----
 
@@ -480,33 +496,36 @@ export class TaskController {
 					if (context.signal?.aborted) abort();
 					else context.signal?.addEventListener("abort", abort, { once: true });
 
-					const finish = (resolved: boolean) => {
+					const finish = (resolved: boolean, terminal?: { text: string; source: 'assistant' | 'diagnostic' | 'none' }) => {
 						context.signal?.removeEventListener("abort", abort);
 						sessionManager.clearAsyncRunning(record!.id);
 						try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
 						// If a soft-kill is in progress, the kill flow owns cleanup.
-						if (!sessionManager.isKillInProgress(record!.id)) {
+						if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.isCompleted(record!.id)) {
 							try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
 						}
 						if (resolved) {
-							const extracted = TaskController.extractOutput(session.messages as any[]);
+							const extracted = terminal ?? TaskController.extractTerminalOutput(session.messages as any[]);
 							sessionManager.storeAsyncResult(record!.id, { output: extracted.text, warnings });
 						}
 					};
 
-					session.prompt(params.prompt).then(
-						() => finish(true),
-						(err: unknown) => {
-							const message = err instanceof Error ? err.message : String(err);
-							// When a soft-kill or hard-abort is in progress, the kill/abort
-							// flow owns the result. Skip storing to avoid overwriting it.
-							if (!sessionManager.isKillInProgress(record!.id)) {
-								const extracted = TaskController.extractOutput(session.messages as any[], message);
-								sessionManager.storeAsyncResult(record!.id, { output: extracted.text, error: message, warnings });
-							}
-							finish(false);
-						},
-					);
+					Promise.resolve()
+						.then(() => session.prompt(params.prompt))
+						.then(() => TaskController._ensureFinalResponse(session))
+						.then(
+							(terminal) => finish(true, terminal),
+							(err: unknown) => {
+								const message = err instanceof Error ? err.message : String(err);
+								// When a soft-kill or hard-abort is in progress, the kill/abort
+								// flow owns the result. Skip storing to avoid overwriting it.
+								if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.isCompleted(record!.id)) {
+									const extracted = TaskController.extractOutput(session.messages as any[], message);
+									sessionManager.storeAsyncResult(record!.id, { output: extracted.text, error: message, warnings });
+								}
+								finish(false);
+							},
+						);
 
 					return {
 						content: [
@@ -592,17 +611,20 @@ export class TaskController {
 
 						const promptRace = [] as Array<
 							Promise<
-								| { type: "completed" }
+								| { type: "completed"; terminal: { text: string; source: 'assistant' | 'diagnostic' | 'none' } }
 								| { type: "failed"; error: unknown }
 								| { type: "timeout" }
 								| { type: "aborted" }
 							>
 						>;
 						if (!context.signal?.aborted) {
-							const promptResult = Promise.resolve().then(() => session.prompt(params.prompt)).then(
-								() => ({ type: "completed" as const }),
-								(error: unknown) => ({ type: "failed" as const, error }),
-							);
+							const promptResult = Promise.resolve()
+								.then(() => session.prompt(params.prompt))
+								.then(() => TaskController._ensureFinalResponse(session))
+								.then(
+									(terminal) => ({ type: "completed" as const, terminal }),
+									(error: unknown) => ({ type: "failed" as const, error }),
+								);
 							promptRace.push(promptResult);
 							const timeoutResult = new Promise<{ type: "timeout" }>((resolve) => {
 								runtimeTimeoutHandle = setTimeout(() => {
@@ -646,7 +668,7 @@ export class TaskController {
 							throw promptOrTimeout.error;
 						}
 
-						const output = TaskController.getFinalTextFromMessages(session.messages as any[]);
+						const output = promptOrTimeout.terminal.text;
 						const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
 						const warningText =
 							warnings.length > 0
@@ -733,31 +755,22 @@ export class TaskController {
 	}
 
 	/**
-	 * Read the last assistant text from a persisted session file.
-	 * Parses the file as JSONL and walks backwards to find the last
-	 * assistant message. Returns undefined if the file is missing or
-	 * contains no assistant message.
+	 * Read terminal assistant output from a persisted session file.
 	 */
 	static readOutputFromSessionFile(sessionFile: string): string | undefined {
 		try {
 			const raw = readFileSync(sessionFile, "utf-8").trim();
 			if (!raw) return undefined;
+			const messages: any[] = [];
 			const lines = raw.split("\n");
-			for (let i = lines.length - 1; i >= 0; i--) {
+			for (const line of lines) {
 				try {
-					const entry = JSON.parse(lines[i]);
-					if (entry.type === "message" && entry.message?.role === "assistant") {
-						const content = entry.message.content;
-						if (typeof content === "string") return content;
-						if (Array.isArray(content)) {
-							const textPart = content.find((c: any) => c.type === "text");
-							return textPart?.text ?? "";
-						}
-						return "";
-					}
+					const entry = JSON.parse(line);
+					if (entry.type === "message") messages.push(entry.message);
 				} catch { /* skip malformed lines */ }
 			}
-			return undefined;
+			const extracted = TaskController.extractTerminalOutput(messages);
+			return extracted.source === "none" ? undefined : extracted.text;
 		} catch {
 			return undefined;
 		}
@@ -1133,8 +1146,7 @@ export class TaskController {
 					if (a.error !== undefined) {
 						lines.push(`  Error: ${a.error}`);
 					} else if (a.output) {
-						const preview = a.output.length > 200 ? a.output.slice(0, 200) + "..." : a.output;
-						lines.push(`  ${preview}`);
+						lines.push(`  ${a.output}`);
 					} else {
 						lines.push(`  (no output captured)`);
 					}
