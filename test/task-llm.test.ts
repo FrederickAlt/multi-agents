@@ -5,7 +5,7 @@
  *
  * These tests are opt-in and run only when:
  * - RUN_REAL_LLM_TESTS=1
- * - the local ~/.pi/agent/auth.json contains an opencode-go API key
+ * - the local ~/.pi/agent/auth.json contains openai-codex auth
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -17,23 +17,21 @@ import taskExtension from "../subagent/index.js";
 
 const RUN_REAL_LLM_TESTS = process.env.RUN_REAL_LLM_TESTS === "1";
 
-function getOpencodeApiKey(): string | undefined {
+function hasOpenAICodexAuth(): boolean {
 	const authPath = join(homedir(), ".pi", "agent", "auth.json");
-	if (!existsSync(authPath)) return undefined;
+	if (!existsSync(authPath)) return false;
 
 	try {
 		const data = JSON.parse(readFileSync(authPath, "utf-8"));
-		const key = data["opencode-go"]?.type === "api_key" ? data["opencode-go"].key : undefined;
-		return typeof key === "string" && key.length > 0 ? key : undefined;
+		return data["openai-codex"]?.type === "oauth";
 	} catch {
-		return undefined;
+		return false;
 	}
 }
 
-const API_KEY = RUN_REAL_LLM_TESTS ? getOpencodeApiKey() : undefined;
-const SHOULD_RUN_REAL_LLM_TESTS = RUN_REAL_LLM_TESTS && !!API_KEY;
+const SHOULD_RUN_REAL_LLM_TESTS = RUN_REAL_LLM_TESTS && hasOpenAICodexAuth();
 
-describe.skipIf(!SHOULD_RUN_REAL_LLM_TESTS)("Task with real LLM (deepseek-v4-flash) [opt-in]", () => {
+describe.skipIf(!SHOULD_RUN_REAL_LLM_TESTS)("Task with real LLM (gpt-5.4-mini) [opt-in]", () => {
 	let tempDir: string;
 	let projectDir: string;
 	let agentDir: string;
@@ -54,11 +52,11 @@ describe.skipIf(!SHOULD_RUN_REAL_LLM_TESTS)("Task with real LLM (deepseek-v4-fla
 		// Write a simple README for the subagent to read
 		writeFileSync(join(projectDir, "README.md"), "# Test Project\n\nThis is a test project for persistent subagents.", "utf-8");
 
-		// Write a custom agent config: deepseek-v4-flash, read-only, depth 1
+		// Write a custom agent config: gpt-5.4-mini, read-only, depth 1
 		// Agent name is derived from the filename stem (testreader).
 		const agentConfig = `---
 description: A read-only test agent for safe file inspection
-model: opencode-go/deepseek-v4-flash
+model: openai-codex/gpt-5.4-mini
 tools: read
 depth: 1
 ---
@@ -96,7 +94,7 @@ CRITICAL SAFETY RULES:
 		});
 		await resourceLoader.reload();
 
-		const model = getModel("opencode-go", "deepseek-v4-flash")!;
+		const model = getModel("openai-codex", "gpt-5.4-mini")!;
 		const result = await createAgentSession({
 			cwd: projectDir,
 			agentDir: join(homedir(), ".pi", "agent"),
@@ -144,7 +142,7 @@ CRITICAL SAFETY RULES:
 		});
 		await resourceLoader.reload();
 
-		const model = getModel("opencode-go", "deepseek-v4-flash")!;
+		const model = getModel("openai-codex", "gpt-5.4-mini")!;
 		const result = await createAgentSession({
 			cwd: projectDir,
 			agentDir: join(homedir(), ".pi", "agent"),
