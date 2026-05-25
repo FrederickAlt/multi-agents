@@ -109,9 +109,9 @@ export function OptionColumn({
 			borderColor={isFocused ? "cyan" : "gray"}
 			paddingX={1}
 		>
-			<Text bold color={isFocused ? "cyan" : undefined}>{label}</Text>
+			<Text bold color={isFocused ? "cyan" : undefined} wrap="truncate">{label}</Text>
 			{showFilterBar && (
-				<Text dimColor>filter: {filterValue}</Text>
+				<Text dimColor wrap="truncate">filter: {filterValue}</Text>
 			)}
 
 			{pinnedStatus && (
@@ -125,6 +125,7 @@ export function OptionColumn({
 								: undefined
 					}
 					bold={isFocused && focusedItemIndex === 0}
+					wrap="truncate"
 				>
 					{isFocused && focusedItemIndex === 0 ? ">" : " "} {pinnedStatus === selectedValue ? "●" : "○"} {pinnedStatus}
 				</Text>
@@ -149,6 +150,7 @@ export function OptionColumn({
 						key={`${fieldName}-${item}-${absoluteIndex}`}
 						color={isFocusedItem ? "cyan" : isSelected ? "green" : undefined}
 						bold={isFocusedItem}
+						wrap="truncate"
 					>
 						{isFocusedItem ? ">" : " "} {mark} {item}
 						{isMissing ? " (missing)" : ""}

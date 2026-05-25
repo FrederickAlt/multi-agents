@@ -119,7 +119,7 @@ Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`
 
 Provides `renderToText(element, { columns, rows })`, which renders Ink components into a deterministic fake terminal and returns the visible frame as plain text. Use this when debugging `pi-agent-config` layout issues so an agent can inspect the actual boxed TUI output from shell/test output without screenshots or an interactive terminal.
 
-The related `npm run tui:dump` script runs `src/tui/dev/render-scenarios.tsx` and prints several fixed `Board` scenarios. This is the quickest way to see whether agent config columns are jumping, wrapping, or scrolling unexpectedly.
+The related `npm run tui:dump` script runs `src/tui/dev/render-scenarios.tsx` and prints several fixed `Board` scenarios. This is the quickest way to see whether agent config columns are jumping, wrapping, or scrolling unexpectedly. When manually testing config writes or the live TUI, use `pi-agent-config --debug` (or `--debug-dir <path>`) so changes are written to a dummy config path instead of real prompt files.
 
 ### `subagent/agents/*.md` — Built-in agent definitions
 
@@ -142,7 +142,7 @@ The related `npm run tui:dump` script runs `src/tui/dev/render-scenarios.tsx` an
 
 Run tests with `npm test` (vitest).
 
-For TUI diagnostics, run `npm run tui:dump` to print shell-visible `pi-agent-config` board snapshots. Tests can import `renderToText` from `src/tui/dev/render-to-text.ts` for focused layout assertions.
+For TUI diagnostics, run `npm run tui:dump` to print shell-visible `pi-agent-config` board snapshots. Tests can import `renderToText` from `src/tui/dev/render-to-text.ts` for focused layout assertions. When manually testing config writes or the live TUI, use `pi-agent-config --debug` (or `--debug-dir <path>`) so changes are written to a dummy config path instead of real prompt files.
 
 ## Key design decisions
 

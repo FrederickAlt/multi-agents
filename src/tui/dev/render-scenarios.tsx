@@ -72,7 +72,7 @@ const scenarios: Array<{ name: string; state: ConfigState }> = [
 	{
 		name: "expanded row, far option item focused",
 		state: state({
-			focus: { agentIndex: 0, fieldIndex: 4, optionItemIndex: 10 },
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 10 },
 			optionColumnScrollOffset: 0,
 		}),
 	},

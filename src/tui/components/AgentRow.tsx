@@ -8,6 +8,7 @@ import {
 	isCheckboxOptionColumnField,
 	isOptionColumnField,
 	getOptionColumnItems,
+	getOptionColumnItemIndex,
 	getOptionColumnSelectedValues,
 } from "../state/option-columns.js";
 import { OptionColumn } from "./OptionColumn.js";
@@ -71,7 +72,7 @@ export function AgentRow({
 	optionColumnFilter = "",
 }: AgentRowProps) {
 	if (agent.error) {
-		return <ErrorColumn agent={agent} isFocused={isFocused} />;
+		return <ErrorColumn agent={agent} isFocused={isFocused} isExpanded={isExpanded} />;
 	}
 
 	const missingDescription = !agent.description || agent.description.trim().length === 0;
@@ -141,13 +142,16 @@ export function AgentRow({
 							agent.name,
 							isFocusedField ? optionColumnFilter : "",
 						);
+						const optionFocusedItemIndex = isFocusedField
+							? focusedOptionItem
+							: getOptionColumnItemIndex(agent, options, fieldName, undefined, agent.name);
 						return (
 							<OptionColumn
 								key={fieldName}
 								fieldName={fieldName}
 								items={items}
 								selectedValues={selectedValues}
-								focusedItemIndex={focusedOptionItem}
+								focusedItemIndex={optionFocusedItemIndex}
 								isFocused={isFocusedField}
 								filterText={isFocusedField ? optionColumnFilter : undefined}
 								isCheckbox={isInlineCheckbox}

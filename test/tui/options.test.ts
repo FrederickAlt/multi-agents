@@ -9,6 +9,8 @@ import {
 	discoverAllAgentNames,
 	discoverSkills,
 	discoverPromptParts,
+	discoverModelsFromPiCli,
+	parsePiListModelsOutput,
 } from "../../src/tui/discovery/options.js";
 
 // ---------------------------------------------------------------------------
@@ -165,6 +167,43 @@ describe("discoverSkills", () => {
 	it("returns empty when skills dir does not exist", () => {
 		const skills = discoverSkills(tempDir);
 		expect(skills).toEqual([]);
+	});
+});
+
+describe("models discovery", () => {
+	it("parses the provider/model table from pi --list-models", () => {
+		const models = parsePiListModelsOutput(`provider            model                 context  max-out  thinking  images
+local-llama-server  llama-3.1-8b          8.2K     4.1K     no        no
+openrouter          openai/gpt-5.2        400K     128K     yes       yes
+`);
+
+		expect(models).toEqual([
+			{ provider: "local-llama-server", modelId: "llama-3.1-8b", displayName: "llama-3.1-8b", canonicalRef: "" },
+			{ provider: "openrouter", modelId: "openai/gpt-5.2", displayName: "openai/gpt-5.2", canonicalRef: "" },
+		]);
+	});
+
+	it("uses pi --list-models as a real fallback source", () => {
+		const fakePi = path.join(tempDir, "pi");
+		fs.writeFileSync(
+			fakePi,
+			`#!/usr/bin/env bash
+if [[ "$1" != "--list-models" ]]; then exit 2; fi
+printf 'provider            model                 context  max-out  thinking  images\\n'
+printf 'local-llama-server  llama-3.1-8b          8.2K     4.1K     no        no\\n'
+printf 'openrouter          openai/gpt-5.2        400K     128K     yes       yes\\n'
+`,
+		);
+		fs.chmodSync(fakePi, 0o755);
+
+		const result = discoverModelsFromPiCli(tempDir, fakePi);
+
+		expect(result.status).toBe("ready");
+		expect(result.models.map((m) => `${m.provider}/${m.modelId}`)).toEqual([
+			"local-llama-server/llama-3.1-8b",
+			"openrouter/openai/gpt-5.2",
+		]);
+		expect(result.defaultModelDisplayName).toBe("llama-3.1-8b");
 	});
 });
 

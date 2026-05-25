@@ -1,5 +1,7 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { DiscoveredOptions, ModelOption } from "../state/types.js";
 
 // ---------------------------------------------------------------------------
@@ -122,8 +124,10 @@ export function discoverExtensions(agentDir: string): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Discover models using ModelRegistry from @mariozechner/pi-coding-agent.
- * Falls back to built-in models if registry fails or package is unavailable.
+ * Discover models using Pi's ModelRegistry. The config TUI is standalone, so
+ * the Pi package may not be locally installed next to this extension. In that
+ * case, fall back to the installed `pi --list-models` command before using the
+ * tiny static built-in list.
  */
 export interface DiscoveredModelsResult {
 	models: ModelOption[];
@@ -132,79 +136,178 @@ export interface DiscoveredModelsResult {
 	error?: string;
 }
 
+type PiCodingAgentModule = {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	AuthStorage?: any;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	ModelRegistry?: any;
+};
+
 export async function discoverModels(agentDir: string): Promise<DiscoveredModelsResult> {
 	try {
-		const pcg = await import("@mariozechner/pi-coding-agent");
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const AuthStorage = (pcg as any).AuthStorage;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const ModelRegistry = (pcg as any).ModelRegistry;
-
-		if (!AuthStorage || !ModelRegistry) {
+		const pcg = await importPiCodingAgent();
+		return discoverModelsFromPiPackage(pcg, agentDir);
+	} catch (packageErr) {
+		try {
+			return discoverModelsFromPiCli(agentDir);
+		} catch (cliErr) {
 			const builtin = getBuiltInModels();
 			return {
 				models: builtin,
 				defaultModelDisplayName: builtin[0]?.displayName ?? "",
 				status: "degraded",
-				error: "Model discovery unavailable; using built-in defaults.",
+				error: `Pi model discovery failed: ${formatError(packageErr)}; pi --list-models failed: ${formatError(cliErr)}`,
 			};
 		}
-
-		const authStorage = AuthStorage.create(
-			path.join(agentDir, "auth.json"),
-		);
-		const registry = new ModelRegistry(
-			authStorage,
-			path.join(agentDir, "models.json"),
-		);
-		registry.refresh();
-
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const allModels: ModelOption[] = registry.getAll().map((m: any) => ({
-			provider: m.provider ?? "",
-			modelId: m.id ?? "",
-			displayName: m.name ?? `${m.provider}/${m.id}`,
-			canonicalRef: "", // populated below
-		}));
-		computeCanonicalModelRefs(allModels);
-
-		// Determine default: first model with configured auth, or first model.
-		// NOTE: "first available model with configured auth" is a heuristic proxy
-		// for Pi's runtime default. It is not guaranteed to match if Pi has
-		// separate default-model configuration outside the auth scope.
-		let defaultModelDisplayName = "";
-		try {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const available = (registry as any).getAvailable?.() as any[] | undefined;
-			if (available && available.length > 0) {
-				const firstId: string = available[0].id ?? available[0].modelId;
-				const match = allModels.find(m => m.modelId === firstId);
-				if (match) defaultModelDisplayName = match.displayName;
-			}
-		} catch {
-			// getAvailable may not exist on older registry versions
-		}
-
-		if (!defaultModelDisplayName && allModels.length > 0) {
-			defaultModelDisplayName = allModels[0].displayName;
-		}
-
-		return {
-			models: allModels,
-			defaultModelDisplayName,
-			status: "ready",
-			error: undefined,
-		};
-	} catch (err) {
-		// Fall back to built-in models
-		const builtin = getBuiltInModels();
-		return {
-			models: builtin,
-			defaultModelDisplayName: builtin[0]?.displayName ?? "",
-			status: "degraded",
-			error: (err as Error).message ?? String(err),
-		};
 	}
+}
+
+async function importPiCodingAgent(): Promise<PiCodingAgentModule> {
+	const errors: string[] = [];
+	for (const specifier of [
+		"@earendil-works/pi-coding-agent",
+		"@mariozechner/pi-coding-agent",
+	]) {
+		try {
+			return await import(specifier);
+		} catch (err) {
+			errors.push(`${specifier}: ${formatError(err)}`);
+		}
+	}
+
+	const installedIndex = resolveInstalledPiIndex();
+	if (installedIndex) {
+		try {
+			return await import(pathToFileURL(installedIndex).href);
+		} catch (err) {
+			errors.push(`${installedIndex}: ${formatError(err)}`);
+		}
+	}
+
+	throw new Error(errors.join("; ") || "Pi package not found");
+}
+
+function resolveInstalledPiIndex(): string | undefined {
+	try {
+		const piPath = execFileSync("which", ["pi"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim().split(/\r?\n/)[0];
+		if (!piPath) return undefined;
+
+		const realPiPath = fs.realpathSync(piPath);
+		const packageRoot = path.dirname(path.dirname(realPiPath));
+		const indexPath = path.join(packageRoot, "dist", "index.js");
+		return fs.existsSync(indexPath) ? indexPath : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function discoverModelsFromPiPackage(
+	pcg: PiCodingAgentModule,
+	agentDir: string,
+): DiscoveredModelsResult {
+	const AuthStorage = pcg.AuthStorage;
+	const ModelRegistry = pcg.ModelRegistry;
+	if (!AuthStorage || !ModelRegistry) {
+		throw new Error("Pi package does not export AuthStorage and ModelRegistry");
+	}
+
+	const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
+	const modelsJsonPath = path.join(agentDir, "models.json");
+	const registry = typeof ModelRegistry.create === "function"
+		? ModelRegistry.create(authStorage, modelsJsonPath)
+		: new ModelRegistry(authStorage, modelsJsonPath);
+	registry.refresh?.();
+
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const allModels: ModelOption[] = registry.getAll().map((m: any) => ({
+		provider: m.provider ?? "",
+		modelId: m.id ?? m.modelId ?? "",
+		displayName: m.name ?? m.id ?? `${m.provider}/${m.id}`,
+		canonicalRef: "", // populated below
+	})).filter((m: ModelOption) => m.modelId.length > 0);
+	computeCanonicalModelRefs(allModels);
+
+	let defaultModelDisplayName = "";
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const available = registry.getAvailable?.() as any[] | undefined;
+		if (available && available.length > 0) {
+			const firstProvider: string = available[0].provider ?? "";
+			const firstId: string = available[0].id ?? available[0].modelId;
+			const match = allModels.find(
+				(m) => m.provider === firstProvider && m.modelId === firstId,
+			) ?? allModels.find((m) => m.modelId === firstId);
+			if (match) defaultModelDisplayName = match.displayName;
+		}
+	} catch {
+		// getAvailable may not exist on older registry versions
+	}
+
+	if (!defaultModelDisplayName && allModels.length > 0) {
+		defaultModelDisplayName = allModels[0].displayName;
+	}
+
+	return {
+		models: allModels,
+		defaultModelDisplayName,
+		status: "ready",
+		error: undefined,
+	};
+}
+
+export function discoverModelsFromPiCli(
+	agentDir: string,
+	piCommand = "pi",
+): DiscoveredModelsResult {
+	const result = spawnSync(piCommand, ["--list-models"], {
+		encoding: "utf8",
+		env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+		maxBuffer: 10 * 1024 * 1024,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(result.stderr || result.stdout || `pi --list-models exited ${result.status}`);
+	}
+	// Pi's list-models renderer writes to stderr in some terminal modes; parse both.
+	const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+	const models = parsePiListModelsOutput(output);
+	if (models.length === 0) {
+		throw new Error("pi --list-models returned no parseable models");
+	}
+	computeCanonicalModelRefs(models);
+	return {
+		models,
+		defaultModelDisplayName: models[0]?.displayName ?? "",
+		status: "ready",
+		error: undefined,
+	};
+}
+
+export function parsePiListModelsOutput(output: string): ModelOption[] {
+	const models: ModelOption[] = [];
+	for (const rawLine of output.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "").split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line || line.startsWith("Warning:")) continue;
+		const match = line.match(/^(\S+)\s+(\S+)(?:\s+|$)/);
+		if (!match) continue;
+		const [, provider, modelId] = match;
+		if (provider === "provider" && modelId === "model") continue;
+		models.push({
+			provider,
+			modelId,
+			displayName: modelId,
+			canonicalRef: "",
+		});
+	}
+	return models;
+}
+
+function formatError(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 function getBuiltInModels(): ModelOption[] {

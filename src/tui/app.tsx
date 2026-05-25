@@ -9,6 +9,23 @@ import { DropdownOverlay } from "./components/DropdownOverlay.js";
 import { HelpFooter } from "./components/HelpFooter.js";
 import { EmptyState } from "./components/EmptyState.js";
 import { getFieldName } from "./state/option-columns.js";
+import type { AgentConfigDebugInfo } from "./debug.js";
+
+interface AppProps {
+	debugInfo?: AgentConfigDebugInfo;
+}
+
+function DebugBanner({ debugInfo }: { debugInfo?: AgentConfigDebugInfo }) {
+	if (!debugInfo) return null;
+
+	return (
+		<Box paddingX={1}>
+			<Text color="yellow">
+				DEBUG: editing dummy config at {debugInfo.debugDir}; source unchanged at {debugInfo.sourceDir}
+			</Text>
+		</Box>
+	);
+}
 
 /**
  * Root Ink component — state hub and layout orchestration.
@@ -16,7 +33,7 @@ import { getFieldName } from "./state/option-columns.js";
  * Owns useConfig() for state, useKeyboard() for input, and
  * manages an overlay-focused index for navigation within overlays.
  */
-export function App() {
+export function App({ debugInfo }: AppProps = {}) {
 	const {
 		state,
 		loading,
@@ -140,6 +157,7 @@ export function App() {
 				<Box flexGrow={1} justifyContent="center" alignItems="center">
 					<Text>Loading agent definitions...</Text>
 				</Box>
+				<DebugBanner debugInfo={debugInfo} />
 			</Box>
 		);
 	}
@@ -153,6 +171,7 @@ export function App() {
 						<Text color="red">Error: {state.globalError}</Text>
 					</Box>
 				</Box>
+				<DebugBanner debugInfo={debugInfo} />
 				<HelpFooter />
 			</Box>
 		);
@@ -165,6 +184,7 @@ export function App() {
 				<Box flexGrow={1}>
 					<EmptyState />
 				</Box>
+				<DebugBanner debugInfo={debugInfo} />
 				<HelpFooter />
 			</Box>
 		);
@@ -190,6 +210,7 @@ export function App() {
 				/>
 			)}
 
+			<DebugBanner debugInfo={debugInfo} />
 			<HelpFooter />
 		</Box>
 	);

@@ -25,6 +25,8 @@ Built-in prompt parts:
 
 Use `npm run tui:dump` to render deterministic `pi-agent-config` board scenarios into plain terminal text. This gives coding agents and tests a shell-visible view of Ink layout changes without screenshots or a real terminal session.
 
+For live config debugging without touching real prompts, run `pi-agent-config --debug`. The CLI copies the current agent config root to a temporary dummy path, points the TUI at that copy, and shows the dummy/source paths in a yellow debug banner. Use `--debug-dir <path>` to choose the dummy path explicitly.
+
 For focused layout checks, import `renderToText` from `src/tui/dev/render-to-text.ts` and render the component with fixed `columns` / `rows`.
 
 ## Default Root Agent

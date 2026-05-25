@@ -5,8 +5,30 @@
 import { render } from "ink";
 import React from "react";
 import { App } from "./app.js";
+import {
+	formatAgentConfigUsage,
+	parseAgentConfigArgs,
+	prepareDebugAgentDir,
+} from "./debug.js";
+import type { AgentConfigDebugInfo } from "./debug.js";
 
-render(React.createElement(App), {
+let debugInfo: AgentConfigDebugInfo | undefined;
+try {
+	const cliOptions = parseAgentConfigArgs(process.argv.slice(2));
+	if (cliOptions.help) {
+		console.log(formatAgentConfigUsage());
+		process.exit(0);
+	}
+	if (cliOptions.debug) {
+		debugInfo = prepareDebugAgentDir({ debugDir: cliOptions.debugDir });
+	}
+} catch (err) {
+	console.error((err as Error).message);
+	console.error(formatAgentConfigUsage());
+	process.exit(1);
+}
+
+render(React.createElement(App, { debugInfo }), {
 	exitOnCtrlC: true,
 	patchConsole: false,
 });
