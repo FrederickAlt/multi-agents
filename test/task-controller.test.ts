@@ -423,6 +423,7 @@ describe("TaskController.execute", () => {
 			waitForSessionEnd: vi.fn((id: string) => sessionManager.waitForSessionEnd(id)),
 			storeAsyncResult: vi.fn((id: string, result: any) => sessionManager.storeAsyncResult(id, result)),
 			getAsyncResult: vi.fn((id: string) => sessionManager.getAsyncResult(id)),
+			waitForAsyncResult: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForAsyncResult(id, signal)),
 			clearAsyncResult: vi.fn((id: string) => sessionManager.clearAsyncResult(id)),
 			markAsyncRunning: vi.fn((id: string) => sessionManager.markAsyncRunning(id)),
 			clearAsyncRunning: vi.fn((id: string) => sessionManager.clearAsyncRunning(id)),
@@ -1340,21 +1341,48 @@ describe("TaskController.execute", () => {
 		// handler has extracted/stored the final assistant text.
 		for (const cb of [...subs]) cb({ type: "agent_end" });
 
-		const pendingResult = await waitPromise;
-		const pendingAgent = (pendingResult.details.agents as AgentWaitResult[])[0];
-		const pendingText = pendingResult.content[0]?.type === "text" ? pendingResult.content[0].text : "";
+		const pendingCheck = await Promise.race([
+			waitPromise.then(() => "resolved" as const),
+			new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 10)),
+		]);
+		expect(pendingCheck).toBe("pending");
 
-		expect(pendingAgent.status).toBe("completed_output_pending");
-		expect(pendingResult.details.output).toBeUndefined();
-		expect(pendingText).not.toContain("(no output)");
-
-		// Once finalization stores output, a later wait should return the real result.
+		// Once finalization stores output, the same wait returns the real result.
 		sessionManager.storeAsyncResult(agentId, { output: "delayed final output", warnings: [] });
-		const completedResult = await controller.waitForAgent([agentId], {}, makeContext());
+		const completedResult = await waitPromise;
 
 		expect(completedResult.details.output).toBe("delayed final output");
 		const completedText = completedResult.content[0]?.type === "text" ? completedResult.content[0].text : "";
 		expect(completedText).toContain("delayed final output");
+		expect(completedText).not.toContain("final output is still being finalized");
+	});
+
+	it("times out as still running when agent_end fires before async result storage", async () => {
+		const subs: Array<(e: any) => void> = [];
+		mockSession.subscribe = vi.fn((cb) => {
+			subs.push(cb);
+			return () => {
+				const i = subs.indexOf(cb);
+				if (i >= 0) subs.splice(i, 1);
+			};
+		});
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		for (const cb of [...subs]) cb({ type: "agent_end" });
+
+		const result = await controller.waitForAgent([agentId], { timeout: 0 }, makeContext());
+		const agent = (result.details.agents as AgentWaitResult[])[0];
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(agent.status).toBe("timed_out_still_running");
+		expect(text).toContain("timed out waiting");
+		expect(text).not.toContain("final output is still being finalized");
 	});
 	// ---- In-flight guard ----
 

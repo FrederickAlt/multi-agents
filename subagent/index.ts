@@ -398,7 +398,7 @@ function getOrCreateSessionManager(): SubagentSessionManager {
 			new PiSessionManagerProvider(),
 			new PiAgentSessionFactory(),
 		);
-		_sessionManager.setOnAsyncAgentEnd((id) => {
+		_sessionManager.setOnAsyncResultReady((id) => {
 			_asyncAgentNotifier.markCompleted(id);
 		});
 	}

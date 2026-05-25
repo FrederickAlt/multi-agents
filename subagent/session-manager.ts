@@ -205,24 +205,21 @@ export class SubagentSessionManager {
 	private runLocks = new Map<string, Promise<void>>();
 	private completedSessions = new Set<string>();
 	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[]; abortReason?: string }>();
+	private asyncResultWaiters = new Map<string, Set<() => void>>();
 	private asyncInFlight = new Set<string>();
 	private killInProgress = new Set<string>();
-	private _onAsyncAgentEnd: ((id: string) => void) | undefined;
+	private _onAsyncResultReady: ((id: string) => void) | undefined;
 
 	constructor(
 		private sessionManagerProvider: SessionManagerProvider,
 		private agentSessionFactory: AgentSessionFactory,
 	) {}
 
-	// ---- Async agent end callback ----
+	// ---- Async result-ready callback ----
 
-	/**
-	 * Register a callback invoked when a session marked async-in-flight
-	 * reaches `agent_end`. Called before the result is stored via
-	 * `storeAsyncResult`.
-	 */
-	setOnAsyncAgentEnd(cb: ((id: string) => void) | undefined): void {
-		this._onAsyncAgentEnd = cb;
+	/** Register a callback invoked after an async result has been stored. */
+	setOnAsyncResultReady(cb: ((id: string) => void) | undefined): void {
+		this._onAsyncResultReady = cb;
 	}
 
 	// ---- Session tracking ----
@@ -313,16 +310,12 @@ export class SubagentSessionManager {
 			}
 		}
 
-		// 7. Subscribe to agent_end to update metadata timestamp and mark completion.
-		//    When the session was spawned asynchronously also notify the callback.
+		// 7. Subscribe to agent_end to update metadata timestamp and mark session completion.
 		const unsubscribe = session.subscribe((event: any) => {
 			if (event.type === "agent_end") {
 				record.updatedAt = new Date().toISOString();
 				metadataStore.upsertRecord(record);
 				this.completedSessions.add(record.id);
-				if (this.asyncInFlight.has(record.id)) {
-					this._onAsyncAgentEnd?.(record.id);
-				}
 			}
 		});
 
@@ -368,6 +361,7 @@ export class SubagentSessionManager {
 		this.openSessions.clear();
 		this.completedSessions.clear();
 		this.asyncResults.clear();
+		this.asyncResultWaiters.clear();
 		this.asyncInFlight.clear();
 	}
 
@@ -396,11 +390,60 @@ export class SubagentSessionManager {
 	/** Store the output/error of a completed async sub-agent session. */
 	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void {
 		this.asyncResults.set(id, result);
+		const waiters = this.asyncResultWaiters.get(id);
+		if (waiters) {
+			this.asyncResultWaiters.delete(id);
+			for (const resolve of waiters) resolve();
+		}
+		this._onAsyncResultReady?.(id);
 	}
 
 	/** Retrieve the stored output/error from a completed async sub-agent. */
 	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string } | undefined {
 		return this.asyncResults.get(id);
+	}
+
+	/** Wait until a completed async sub-agent result has been stored. */
+	async waitForAsyncResult(id: string, signal?: AbortSignal): Promise<void> {
+		if (this.asyncResults.has(id)) return;
+		return new Promise<void>((resolve, reject) => {
+			let settled = false;
+			let resolveWaiter: () => void = () => {};
+			let onAbort: () => void = () => {};
+			const cleanup = () => {
+				signal?.removeEventListener("abort", onAbort);
+				const waiters = this.asyncResultWaiters.get(id);
+				if (waiters) {
+					waiters.delete(resolveWaiter);
+					if (waiters.size === 0) this.asyncResultWaiters.delete(id);
+				}
+			};
+			resolveWaiter = () => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				resolve();
+			};
+			onAbort = () => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				reject(new Error("wait_for_async_result_cancelled"));
+			};
+
+			if (signal?.aborted) {
+				onAbort();
+				return;
+			}
+
+			let waiters = this.asyncResultWaiters.get(id);
+			if (!waiters) {
+				waiters = new Set();
+				this.asyncResultWaiters.set(id, waiters);
+			}
+			waiters.add(resolveWaiter);
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
 	}
 
 	/** Mark a session ID as having an in-flight async prompt. */
@@ -452,35 +495,36 @@ export class SubagentSessionManager {
 	 */
 	sendKillMessage(id: string, timeoutMinutes: number): void {
 		const session = this.openSessions.get(id);
-		if (!session) return;
+		if (!session || this.asyncResults.has(id)) return;
 
 		const killMessage = `[System] The parent agent requires you to finish within ${timeoutMinutes} minute(s). Please produce your final answer now.`;
 
-		// Clear async-in-flight before aborting so onAsyncAgentEnd callbacks do
-		// not treat the soft-kill prompt handoff as regular completion.
+		// Clear async-in-flight before aborting so the soft-kill prompt handoff
+		// is not treated as regular async completion.
 		this.clearAsyncRunning(id);
 
 		// Mark kill-in-progress BEFORE abort so the original finish() skips disposal.
 		this.killInProgress.add(id);
 
-		// Abort the current prompt — the original error handler fires and stores
-		// partial output via storeAsyncResult, but finish() skips disposeSession
-		// because killInProgress is set.
+		// Abort the current prompt; the original async handler observes
+		// killInProgress and leaves result ownership to this kill flow.
 		try { session.abort(); } catch { /* best-effort */ }
 
 		// Give the agent one last turn with the kill instruction.
 		session.prompt(killMessage).then(
 			() => {
+				if (this.asyncResults.has(id)) return;
 				// Agent finished successfully — store fresh output.
 				const extracted = extractOutput(session.messages as any[]);
-				this.asyncResults.set(id, { output: extracted.text, warnings: [] });
+				this.storeAsyncResult(id, { output: extracted.text, warnings: [] });
 				this._cleanupAfterKill(id, session);
 			},
 			(error: any) => {
+				if (this.asyncResults.has(id)) return;
 				// Kill prompt crashed — store error + partial output.
 				const message = error instanceof Error ? error.message : String(error);
 				const extracted = extractOutput(session.messages as any[], message || undefined);
-				this.asyncResults.set(id, {
+				this.storeAsyncResult(id, {
 					output: extracted.text,
 					error: message || 'The sub-agent stopped without producing any output.',
 					warnings: [],
@@ -513,7 +557,7 @@ export class SubagentSessionManager {
 		try { session.abort(); } catch { /* best-effort */ }
 
 		// Store partial output (or error) so wait_for_agent can return it.
-		this.asyncResults.set(id, {
+		this.storeAsyncResult(id, {
 			output: extracted.text || '',
 			error: 'killed',
 			warnings: [],

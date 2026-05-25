@@ -98,6 +98,8 @@ export interface SessionAdapter {
 	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void;
 	/** Retrieve a previously stored async result. */
 	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string } | undefined;
+	/** Wait until a completed async session result has been stored. */
+	waitForAsyncResult(id: string, signal?: AbortSignal): Promise<void>;
 	/** Clear a consumed async result from memory. */
 	clearAsyncResult(id: string): void;
 	/** Mark a session as having an in-flight async prompt. */
@@ -177,7 +179,7 @@ export interface TaskExecuteContext {
 }
 
 /** Status of a single agent within a wait_for_agent result. */
-export type AgentWaitStatus = 'completed' | 'completed_output_pending' | 'running' | 'timed_out_still_running' | 'killed' | 'unknown';
+export type AgentWaitStatus = 'completed' | 'running' | 'timed_out_still_running' | 'killed' | 'unknown';
 
 /** Per-agent structured result returned by waitForAgent. */
 export interface AgentWaitResult {
@@ -500,19 +502,19 @@ export class TaskController {
 
 					const finish = (resolved: boolean, terminal?: { text: string; source: 'assistant' | 'diagnostic' | 'none' }) => {
 						context.signal?.removeEventListener("abort", abort);
-						sessionManager.clearAsyncRunning(record!.id);
 						try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
-						// If a soft-kill is in progress, the kill flow owns cleanup.
-						if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.isCompleted(record!.id)) {
-							try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
-						}
-						if (resolved) {
+						if (resolved && !sessionManager.isKillInProgress(record!.id) && !sessionManager.getAsyncResult(record!.id)) {
 							const extracted = terminal ?? TaskController.extractTerminalOutput(session.messages as any[]);
 							sessionManager.storeAsyncResult(record!.id, {
 								output: extracted.text,
 								...(extracted.source === 'diagnostic' ? { error: extracted.text } : {}),
 								warnings,
 							});
+						}
+						sessionManager.clearAsyncRunning(record!.id);
+						// If a soft-kill is in progress, the kill flow owns cleanup.
+						if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.isCompleted(record!.id)) {
+							try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
 						}
 					};
 
@@ -525,7 +527,7 @@ export class TaskController {
 								const message = err instanceof Error ? err.message : String(err);
 								// When a soft-kill or hard-abort is in progress, the kill/abort
 								// flow owns the result. Skip storing to avoid overwriting it.
-								if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.isCompleted(record!.id)) {
+								if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.getAsyncResult(record!.id)) {
 									const extracted = TaskController.extractOutput(session.messages as any[], message);
 									sessionManager.storeAsyncResult(record!.id, { output: extracted.text, error: message, warnings });
 								}
@@ -875,22 +877,19 @@ export class TaskController {
 				};
 			}
 
-			// 2. Check completedSessions (non-async agents or re-called agents).
-			// An async session can emit agent_end before TaskController's async
-			// finalizer has extracted and stored output. While the async prompt is
-			// still in flight, expose an explicit pending state instead of reporting
-			// completed with `(no output)` from a not-yet-finalized transcript.
-			if (sessionManager.isCompleted(agentId)) {
-				if (sessionManager.isAsyncRunning(agentId)) {
-					return {
-						id: agentId,
-						displayName: record.displayName,
-						agentType: record.agentType,
-						status: "completed_output_pending",
-						sessionFile: record.sessionFile,
-					};
-				}
+			// 2. Async agents are not ready until finalization stores an async result.
+			if (sessionManager.isAsyncRunning(agentId)) {
+				return {
+					id: agentId,
+					displayName: record.displayName,
+					agentType: record.agentType,
+					status: "running",
+					sessionFile: record.sessionFile,
+				};
+			}
 
+			// 3. Check completedSessions (non-async agents or re-called agents).
+			if (sessionManager.isCompleted(agentId)) {
 				const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
 				return {
 					id: agentId,
@@ -903,7 +902,7 @@ export class TaskController {
 				};
 			}
 
-			// 3. Check if session is open (still running)
+			// 4. Check if session is open (still running)
 			if (sessionManager.hasOpenSession(agentId)) {
 				return {
 					id: agentId,
@@ -914,7 +913,7 @@ export class TaskController {
 				};
 			}
 
-			// 4. No open session and not completed — may have been disposed
+			// 5. No open session and not completed — may have been disposed
 			//    without storing asyncResult (edge case). Try persisted file.
 			if (record.sessionFile) {
 				const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
@@ -940,7 +939,7 @@ export class TaskController {
 				};
 			}
 
-			// 5. No record means unknown
+			// 6. No record means unknown
 			return { id: agentId, status: "unknown" };
 		};
 
@@ -951,14 +950,12 @@ export class TaskController {
 		const firstResults = uniqueIds.map(buildResult);
 
 		const hasCompleted = firstResults.some(r => r.status === "completed");
-		const hasOutputPending = firstResults.some(r => r.status === "completed_output_pending");
 		const runningIds = firstResults
 			.filter(r => r.status === "running")
 			.map(r => r.id);
 
-		// If any agent is already completed or has finished but is still finalizing
-		// output extraction, return immediately so callers can poll the pending ID.
-		if (hasCompleted || hasOutputPending) {
+		// If any agent is already completed, return immediately.
+		if (hasCompleted) {
 			// Consume async results so in-memory resources are released
 			for (const r of firstResults) {
 				if (r.status === "completed") {
@@ -975,15 +972,21 @@ export class TaskController {
 
 		// ---- Second pass: wait for the first running agent to finish ----
 		try {
-			const waitPromises = runningIds.map(id =>
-				sessionManager.waitForSessionEnd(id).then(() => id)
-			);
+			const waitAbortController = new AbortController();
+			const waitForReady = (id: string) => (
+				sessionManager.isAsyncRunning(id)
+					? sessionManager.waitForAsyncResult(id, waitAbortController.signal)
+					: sessionManager.waitForSessionEnd(id)
+			).then(() => id);
+
+			const waitPromises = runningIds.map(waitForReady);
 
 			const timeoutPromise = new Promise<string>((resolve) => {
 				setTimeout(() => resolve("__timeout__"), timeoutMs);
 			});
 
 			const winner = await Promise.race([...waitPromises, timeoutPromise]);
+			waitAbortController.abort();
 
 			// Yield to the microtask queue so finish() can run storeAsyncResult
 			// before we re-classify.
@@ -1015,14 +1018,16 @@ export class TaskController {
 						}
 
 						// Wait for all agents to finish, or force kill when the window expires.
+						const killAbortController = new AbortController();
 						const killCompleted = Promise.all(
-							timedOutIds.map((id) => sessionManager.waitForSessionEnd(id).then(() => id)),
+							timedOutIds.map((id) => sessionManager.waitForAsyncResult(id, killAbortController.signal).then(() => id)),
 						).then(() => "__kill_completed__" as const);
 						const killTimeoutPromise = new Promise<"__kill_timeout__">((resolve) => {
 							setTimeout(() => resolve("__kill_timeout__"), timeoutMs);
 						});
 
 						const killResult = await Promise.race([killCompleted, killTimeoutPromise]);
+						killAbortController.abort();
 
 						// Track which agents were explicitly hard-aborted.
 						const hardAbortedIds = new Set<string>();
@@ -1107,7 +1112,6 @@ export class TaskController {
 		const lines: string[] = [];
 
 		const completed = agents.filter(a => a.status === "completed");
-		const outputPending = agents.filter(a => a.status === "completed_output_pending");
 		const running = agents.filter(a => a.status === "running");
 		const timedOut = agents.filter(a => a.status === "timed_out_still_running");
 		const killed = agents.filter(a => a.status === "killed");
@@ -1157,8 +1161,6 @@ export class TaskController {
 						lines.push("(no output)");
 					}
 				}
-			} else if (a.status === "completed_output_pending") {
-				lines.push(`${displayName} (${a.id}) completed, but final output is still being finalized. Call wait_for_agent again to retrieve it.`);
 			} else if (a.status === "running") {
 				lines.push(`${displayName} (${a.id}) is still running. Call wait_for_agent again to check.`);
 			} else if (a.status === "timed_out_still_running") {
@@ -1196,14 +1198,6 @@ export class TaskController {
 					} else {
 						lines.push(`  (no output captured)`);
 					}
-				}
-			}
-
-			if (outputPending.length > 0) {
-				lines.push(`\n## Output Pending (${outputPending.length})`);
-				for (const a of outputPending) {
-					const name = a.displayName || a.agentType || a.id;
-					lines.push(`- ${name} (${a.id}) [final output is still being finalized]`);
 				}
 			}
 

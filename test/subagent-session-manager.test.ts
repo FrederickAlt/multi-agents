@@ -468,6 +468,42 @@ describe("SubagentSessionManager", () => {
 		});
 	});
 
+	describe("waitForAsyncResult", () => {
+		it("resolves immediately when async result is already stored", async () => {
+			const sm = createManager();
+			sm.storeAsyncResult("ready", { output: "done", warnings: [] });
+
+			await expect(sm.waitForAsyncResult("ready")).resolves.toBeUndefined();
+		});
+
+		it("waits until storeAsyncResult is called", async () => {
+			const sm = createManager();
+			let resolved = false;
+			const promise = sm.waitForAsyncResult("pending").then(() => { resolved = true; });
+
+			await new Promise((r) => setTimeout(r, 10));
+			expect(resolved).toBe(false);
+
+			sm.storeAsyncResult("pending", { output: "final", warnings: [] });
+
+			await expect(promise).resolves.toBeUndefined();
+			expect(resolved).toBe(true);
+		});
+
+		it("removes pending waiters when the wait is cancelled", async () => {
+			const sm = createManager();
+			const abortController = new AbortController();
+
+			const promise = sm.waitForAsyncResult("pending", abortController.signal);
+			expect((sm as any).asyncResultWaiters.get("pending")?.size).toBe(1);
+
+			abortController.abort();
+
+			await expect(promise).rejects.toThrow("wait_for_async_result_cancelled");
+			expect((sm as any).asyncResultWaiters.has("pending")).toBe(false);
+		});
+	});
+
 	describe("disposeAll", () => {
 		it("disposes all tracked sessions and clears the map", () => {
 			const sm = createManager();
@@ -621,49 +657,40 @@ describe("SubagentSessionManager", () => {
 		});
 	});
 
-	// ---- Async agent end callback ----
+	// ---- Async result ready callback ----
 
-	describe("onAsyncAgentEnd callback", () => {
-		it("fires when agent_end event occurs on an async-in-flight session", async () => {
+	describe("onAsyncResultReady callback", () => {
+		it("does not fire when agent_end occurs before async result storage", async () => {
 			const sm = createManager();
-			const onEnd = vi.fn();
-			sm.setOnAsyncAgentEnd(onEnd);
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
 
 			const record = makeRecord("async-cb");
-			// Mark as async-in-flight before creating session
 			sm.markAsyncRunning(record.id);
 
 			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
 
-			// Fire agent_end on the session's subscribe callbacks
 			for (const cb of (session as any).callbacks) {
 				cb({ type: "agent_end" });
 			}
 
-			expect(onEnd).toHaveBeenCalledWith(record.id);
+			expect(onReady).not.toHaveBeenCalled();
 		});
 
-		it("does NOT fire when session is not async-in-flight", async () => {
+		it("fires when storeAsyncResult is called", () => {
 			const sm = createManager();
-			const onEnd = vi.fn();
-			sm.setOnAsyncAgentEnd(onEnd);
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
 
-			const record = makeRecord("blocking-cb");
-			// Session is NOT marked async — this is a blocking agent
+			sm.storeAsyncResult("async-cb", { output: "done", warnings: [] });
 
-			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
-
-			for (const cb of (session as any).callbacks) {
-				cb({ type: "agent_end" });
-			}
-
-			expect(onEnd).not.toHaveBeenCalled();
+			expect(onReady).toHaveBeenCalledWith("async-cb");
 		});
 
 		it("does not fire for non-agent_end events", async () => {
 			const sm = createManager();
-			const onEnd = vi.fn();
-			sm.setOnAsyncAgentEnd(onEnd);
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
 
 			const record = makeRecord("non-end");
 			sm.markAsyncRunning(record.id);
@@ -674,13 +701,13 @@ describe("SubagentSessionManager", () => {
 				cb({ type: "token" });
 			}
 
-			expect(onEnd).not.toHaveBeenCalled();
+			expect(onReady).not.toHaveBeenCalled();
 		});
 
-		it("does not fire onAsyncAgentEnd callback during soft-kill", async () => {
+		it("does not fire result-ready callback during the original soft-kill abort", async () => {
 			const sm = createManager();
-			const onEnd = vi.fn();
-			sm.setOnAsyncAgentEnd(onEnd);
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
 
 			const record = makeRecord("soft-kill-cb");
 			sm.markAsyncRunning(record.id);
@@ -713,25 +740,43 @@ describe("SubagentSessionManager", () => {
 			sm.sendKillMessage(record.id, 5);
 			await new Promise((resolve) => setTimeout(resolve, 10));
 
-			expect(onEnd).not.toHaveBeenCalled();
+			expect(onReady).not.toHaveBeenCalled();
 		});
 
-		it("can clear the callback by setting undefined", async () => {
+		it("can clear the callback by setting undefined", () => {
 			const sm = createManager();
-			const onEnd = vi.fn();
-			sm.setOnAsyncAgentEnd(onEnd);
-			sm.setOnAsyncAgentEnd(undefined);
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
+			sm.setOnAsyncResultReady(undefined);
 
-			const record = makeRecord("cleared");
-			sm.markAsyncRunning(record.id);
+			sm.storeAsyncResult("cleared", { output: "done", warnings: [] });
 
-			const session = await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+			expect(onReady).not.toHaveBeenCalled();
+		});
 
-			for (const cb of (session as any).callbacks) {
-				cb({ type: "agent_end" });
-			}
+		it("does not overwrite or re-notify after a soft-kill prompt rejects following hard abort", async () => {
+			const sm = createManager();
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
 
-			expect(onEnd).not.toHaveBeenCalled();
+			let rejectKillPrompt: ((error: Error) => void) | undefined;
+			const session = makeMockSession();
+			session.prompt = vi.fn(() => new Promise<void>((_resolve, reject) => {
+				rejectKillPrompt = reject;
+			})) as any;
+			sm.trackSession("kill-late", session);
+
+			sm.sendKillMessage("kill-late", 1);
+			sm.abortSession("kill-late");
+
+			expect(sm.getAsyncResult("kill-late")?.error).toBe("killed");
+			expect(onReady).toHaveBeenCalledTimes(1);
+
+			rejectKillPrompt?.(new Error("late kill prompt failure"));
+			await Promise.resolve();
+
+			expect(sm.getAsyncResult("kill-late")?.error).toBe("killed");
+			expect(onReady).toHaveBeenCalledTimes(1);
 		});
 	});
 });
