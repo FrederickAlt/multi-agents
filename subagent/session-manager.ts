@@ -204,7 +204,7 @@ export class SubagentSessionManager {
 	private openSessions = new Map<string, AgentSession>();
 	private runLocks = new Map<string, Promise<void>>();
 	private completedSessions = new Set<string>();
-	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[] }>();
+	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[]; abortReason?: string }>();
 	private asyncInFlight = new Set<string>();
 	private killInProgress = new Set<string>();
 	private _onAsyncAgentEnd: ((id: string) => void) | undefined;
@@ -394,12 +394,12 @@ export class SubagentSessionManager {
 	}
 
 	/** Store the output/error of a completed async sub-agent session. */
-	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[] }): void {
+	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void {
 		this.asyncResults.set(id, result);
 	}
 
 	/** Retrieve the stored output/error from a completed async sub-agent. */
-	getAsyncResult(id: string): { output: string; error?: string; warnings: string[] } | undefined {
+	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string } | undefined {
 		return this.asyncResults.get(id);
 	}
 

@@ -95,9 +95,9 @@ export interface SessionAdapter {
 	 */
 	waitForSessionEnd(id: string): Promise<void>;
 	/** Store the output/error result of a completed async session. */
-	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[] }): void;
+	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void;
 	/** Retrieve a previously stored async result. */
-	getAsyncResult(id: string): { output: string; error?: string; warnings: string[] } | undefined;
+	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string } | undefined;
 	/** Clear a consumed async result from memory. */
 	clearAsyncResult(id: string): void;
 	/** Mark a session as having an in-flight async prompt. */
@@ -187,6 +187,7 @@ export interface AgentWaitResult {
 	status: AgentWaitStatus;
 	output?: string;
 	error?: string;
+	abortReason?: string;
 	warnings?: string[];
 	sessionFile?: string;
 }
@@ -201,6 +202,7 @@ export interface TaskDetails {
 	sessionFile?: string;
 	warnings: string[];
 	error?: string;
+	abortReason?: string;
 	output?: string;
 	/** Per-agent results from wait_for_agent (multi-agent retrieval). */
 	agents?: AgentWaitResult[];
@@ -506,7 +508,11 @@ export class TaskController {
 						}
 						if (resolved) {
 							const extracted = terminal ?? TaskController.extractTerminalOutput(session.messages as any[]);
-							sessionManager.storeAsyncResult(record!.id, { output: extracted.text, warnings });
+							sessionManager.storeAsyncResult(record!.id, {
+								output: extracted.text,
+								...(extracted.source === 'diagnostic' ? { error: extracted.text } : {}),
+								warnings,
+							});
 						}
 					};
 
@@ -668,6 +674,10 @@ export class TaskController {
 							throw promptOrTimeout.error;
 						}
 
+						if (promptOrTimeout.terminal.source === 'diagnostic') {
+							throw new Error(promptOrTimeout.terminal.text || "The sub-agent stopped with a diagnostic.");
+						}
+
 						const output = promptOrTimeout.terminal.text;
 						const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
 						const warningText =
@@ -755,9 +765,16 @@ export class TaskController {
 	}
 
 	/**
-	 * Read terminal assistant output from a persisted session file.
+	 * Read terminal output or diagnostics from a persisted session file.
 	 */
 	static readOutputFromSessionFile(sessionFile: string): string | undefined {
+		const extracted = TaskController.extractOutputFromSessionFile(sessionFile);
+		return extracted?.text;
+	}
+
+	private static extractOutputFromSessionFile(
+		sessionFile: string,
+	): { text: string; source: 'assistant' | 'diagnostic' } | undefined {
 		try {
 			const raw = readFileSync(sessionFile, "utf-8").trim();
 			if (!raw) return undefined;
@@ -770,7 +787,7 @@ export class TaskController {
 				} catch { /* skip malformed lines */ }
 			}
 			const extracted = TaskController.extractTerminalOutput(messages);
-			return extracted.source === "none" ? undefined : extracted.text;
+			return extracted.source === "none" ? undefined : extracted;
 		} catch {
 			return undefined;
 		}
@@ -841,6 +858,7 @@ export class TaskController {
 						agentType: record.agentType,
 						status: "completed",
 						error: asyncResult.error,
+						abortReason: asyncResult.abortReason,
 						output: asyncResult.output,
 						warnings: asyncResult.warnings,
 						sessionFile: record.sessionFile,
@@ -873,13 +891,14 @@ export class TaskController {
 					};
 				}
 
-				const persisted = TaskController.readOutputFromSessionFile(record.sessionFile);
+				const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
 				return {
 					id: agentId,
 					displayName: record.displayName,
 					agentType: record.agentType,
 					status: "completed",
-					output: persisted,
+					output: persisted?.text,
+					...(persisted?.source === "diagnostic" ? { error: persisted.text } : {}),
 					sessionFile: record.sessionFile,
 				};
 			}
@@ -898,14 +917,15 @@ export class TaskController {
 			// 4. No open session and not completed — may have been disposed
 			//    without storing asyncResult (edge case). Try persisted file.
 			if (record.sessionFile) {
-				const persisted = TaskController.readOutputFromSessionFile(record.sessionFile);
+				const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
 				if (persisted !== undefined) {
 					return {
 						id: agentId,
 						displayName: record.displayName,
 						agentType: record.agentType,
 						status: "completed",
-						output: persisted,
+						output: persisted.text,
+						...(persisted.source === "diagnostic" ? { error: persisted.text } : {}),
 						sessionFile: record.sessionFile,
 					};
 				}
@@ -1029,7 +1049,12 @@ export class TaskController {
 						const escalationResults = uniqueIds.map((id) => {
 							const r = buildResult(id);
 							if (hardAbortedIds.has(id)) {
-								return { ...r, status: "killed" as const };
+								return {
+									...r,
+									status: "killed" as const,
+									error: r.error ?? "killed",
+									abortReason: "wait_for_agent_kill_timeout",
+								};
 							}
 							return r;
 						});
@@ -1105,6 +1130,7 @@ export class TaskController {
 			if (a.status === "completed") {
 				if (a.error !== undefined) {
 					topLevel.error = a.error;
+					topLevel.abortReason = a.abortReason;
 					topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
 					const hasPartialOutput = a.output && a.output.length > 0 && a.output !== a.error;
 					if (hasPartialOutput) {
@@ -1138,7 +1164,8 @@ export class TaskController {
 			} else if (a.status === "timed_out_still_running") {
 				lines.push(`${displayName} (${a.id}) is still running (timed out waiting). Call wait_for_agent again to check.`);
 			} else if (a.status === "killed") {
-				topLevel.error = "killed";
+				topLevel.error = a.error ?? "killed";
+				topLevel.abortReason = a.abortReason;
 				topLevel.output = a.output;
 				topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
 				const hasOutput = a.output && a.output.length > 0;

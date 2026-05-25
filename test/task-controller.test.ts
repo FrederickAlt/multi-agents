@@ -265,6 +265,37 @@ describe("TaskController.extractOutput", () => {
 		expect(result.source).toBe("diagnostic");
 	});
 
+	it("returns terminal assistant diagnostics without an external error", () => {
+		const messages = [
+			{ role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" },
+		];
+		const result = TaskController.extractOutput(messages);
+		expect(result.text).toBe("Request was aborted");
+		expect(result.source).toBe("diagnostic");
+	});
+
+	it("returns terminal tool-result errors as diagnostics", () => {
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "git rebase --continue" } }],
+				stopReason: "toolUse",
+			},
+			{
+				role: "toolResult",
+				toolCallId: "c1",
+				toolName: "bash",
+				content: [{ type: "text", text: "Command aborted" }],
+				isError: true,
+			},
+		];
+		const result = TaskController.extractOutput(messages);
+		expect(result.source).toBe("diagnostic");
+		expect(result.text).toContain("Command aborted");
+		expect(result.text).toContain("bash");
+		expect(result.text).toContain("git rebase --continue");
+	});
+
 	it("returns 'none' source when no assistant and no error", () => {
 		const messages: any[] = [];
 		const result = TaskController.extractOutput(messages);
@@ -593,6 +624,20 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("crashed");
 		expect(text).toContain("Model error");
 		expect(text).toContain("Use resume:");
+	});
+
+	it("treats resolved terminal assistant diagnostics as failed blocking execution", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [], stopReason: "error", errorMessage: "529 overloaded" },
+		];
+
+		const result = await controller.execute(makeParams(), makeContext());
+
+		expect(result.details.error).toBe("529 overloaded");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("529 overloaded");
+		expect(text).not.toContain("completed");
 	});
 
 	it("cleans up resources when session.prompt rejects", async () => {
@@ -1175,6 +1220,27 @@ describe("TaskController.execute", () => {
 		expect(text).not.toContain("partial output");
 	});
 
+	it("stores resolved terminal assistant diagnostics as async errors", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" },
+		];
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(result.details.error).toBe("Request was aborted");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("Request was aborted");
+	});
+
 	it("prompts async agents once more before storing an empty successful result", async () => {
 		mockSession.messages = [
 			{ role: "assistant", content: [{ type: "thinking", thinking: "done?" }] },
@@ -1565,6 +1631,40 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("blocking result output");
 	});
 
+	it("surfaces terminal persisted tool-result errors", async () => {
+		const fs = await import("node:fs");
+		const record = makeRecord("feedbabe", "explorer");
+		record.sessionFile = join(tempDir, "tool-error.jsonl");
+		metadataStore.upsertRecord(record);
+		fs.writeFileSync(record.sessionFile, JSON.stringify({
+			type: "message",
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "git rebase --continue" } }],
+				stopReason: "toolUse",
+			},
+		}) + "\n");
+		fs.appendFileSync(record.sessionFile, JSON.stringify({
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolCallId: "c1",
+				toolName: "bash",
+				content: [{ type: "text", text: "Command aborted" }],
+				isError: true,
+			},
+		}) + "\n");
+
+		const result = await controller.waitForAgent([record.id], {}, makeContext());
+
+		expect(result.details.error).toContain("Command aborted");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("crashed");
+		expect(text).toContain("Command aborted");
+		expect(text).toContain("bash");
+		expect(text).toContain("git rebase --continue");
+	});
+
 	it("re-calling waitForAgent retrieves output from persisted state", async () => {
 		// Spawn async and let it finish
 		mockSession.messages = [
@@ -1926,6 +2026,8 @@ describe("TaskController.execute", () => {
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("killed");
+		expect(agents[0].abortReason).toBe("wait_for_agent_kill_timeout");
+		expect(result.details.abortReason).toBe("wait_for_agent_kill_timeout");
 
 		// Hard-abort should have been called
 		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(agentId);

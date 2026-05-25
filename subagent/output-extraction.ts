@@ -19,6 +19,44 @@ function textFromAssistantMessage(msg: any): string {
 	return text.trim() ? text : "";
 }
 
+function textFromToolResultMessage(msg: any): string {
+	if (typeof msg?.content === "string") return msg.content.trim();
+	const content = Array.isArray(msg?.content) ? msg.content : [];
+	const text = content
+		.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+		.map((part: any) => part.text)
+		.join("");
+	return text.trim() ? text : "";
+}
+
+function findMatchingToolCall(messages: any[], toolResultIndex: number): any | undefined {
+	const toolCallId = messages[toolResultIndex]?.toolCallId;
+	if (!toolCallId) return undefined;
+	for (let i = toolResultIndex - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg?.role !== "assistant" || !Array.isArray(msg.content)) continue;
+		const toolCall = msg.content.find((part: any) => part?.type === "toolCall" && part.id === toolCallId);
+		if (toolCall) return toolCall;
+	}
+	return undefined;
+}
+
+function getTerminalToolResultDiagnosticFromMessages(messages: any[]): string {
+	const index = messages.length - 1;
+	const msg = messages[index];
+	if (msg?.role !== "toolResult" || msg.isError !== true) return "";
+	const text = textFromToolResultMessage(msg);
+	if (!text) return "";
+
+	const toolCall = findMatchingToolCall(messages, index);
+	const toolName = typeof msg.toolName === "string" ? msg.toolName : toolCall?.name;
+	const prefix = toolName ? `${toolName} tool failed: ${text}` : text;
+	const command = toolName === "bash" && typeof toolCall?.arguments?.command === "string"
+		? toolCall.arguments.command.trim()
+		: "";
+	return command ? `${prefix}\nCommand: ${command}` : prefix;
+}
+
 /**
  * Extract the last assistant text content from a message array.
  */
@@ -43,11 +81,13 @@ export function getTerminalTextFromMessages(messages: any[]): string {
 
 export function getTerminalDiagnosticFromMessages(messages: any[]): string {
 	const msg = messages[messages.length - 1];
-	if (msg?.role !== "assistant") return "";
-	if ((msg.stopReason === "error" || msg.stopReason === "aborted") && typeof msg.errorMessage === "string") {
-		return msg.errorMessage.trim() ? msg.errorMessage : "";
+	if (msg?.role === "assistant") {
+		if ((msg.stopReason === "error" || msg.stopReason === "aborted") && typeof msg.errorMessage === "string") {
+			return msg.errorMessage.trim() ? msg.errorMessage : "";
+		}
+		return "";
 	}
-	return "";
+	return getTerminalToolResultDiagnosticFromMessages(messages);
 }
 
 export function extractTerminalOutput(
@@ -83,6 +123,10 @@ export function extractOutput(
 	const assistantText = getFinalTextFromMessages(messages);
 	if (assistantText) {
 		return { text: assistantText, source: 'assistant' };
+	}
+	const terminalDiagnostic = getTerminalDiagnosticFromMessages(messages);
+	if (terminalDiagnostic) {
+		return { text: terminalDiagnostic, source: 'diagnostic' };
 	}
 	if (error) {
 		return { text: error, source: 'diagnostic' };
