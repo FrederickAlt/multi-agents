@@ -177,7 +177,7 @@ export interface TaskExecuteContext {
 }
 
 /** Status of a single agent within a wait_for_agent result. */
-export type AgentWaitStatus = 'completed' | 'running' | 'timed_out_still_running' | 'killed' | 'unknown';
+export type AgentWaitStatus = 'completed' | 'completed_output_pending' | 'running' | 'timed_out_still_running' | 'killed' | 'unknown';
 
 /** Per-agent structured result returned by waitForAgent. */
 export interface AgentWaitResult {
@@ -857,8 +857,22 @@ export class TaskController {
 				};
 			}
 
-			// 2. Check completedSessions (non-async agents or re-called agents)
+			// 2. Check completedSessions (non-async agents or re-called agents).
+			// An async session can emit agent_end before TaskController's async
+			// finalizer has extracted and stored output. While the async prompt is
+			// still in flight, expose an explicit pending state instead of reporting
+			// completed with `(no output)` from a not-yet-finalized transcript.
 			if (sessionManager.isCompleted(agentId)) {
+				if (sessionManager.isAsyncRunning(agentId)) {
+					return {
+						id: agentId,
+						displayName: record.displayName,
+						agentType: record.agentType,
+						status: "completed_output_pending",
+						sessionFile: record.sessionFile,
+					};
+				}
+
 				const persisted = TaskController.readOutputFromSessionFile(record.sessionFile);
 				return {
 					id: agentId,
@@ -917,12 +931,14 @@ export class TaskController {
 		const firstResults = uniqueIds.map(buildResult);
 
 		const hasCompleted = firstResults.some(r => r.status === "completed");
+		const hasOutputPending = firstResults.some(r => r.status === "completed_output_pending");
 		const runningIds = firstResults
 			.filter(r => r.status === "running")
 			.map(r => r.id);
 
-		// If any agent is already completed, return immediately.
-		if (hasCompleted) {
+		// If any agent is already completed or has finished but is still finalizing
+		// output extraction, return immediately so callers can poll the pending ID.
+		if (hasCompleted || hasOutputPending) {
 			// Consume async results so in-memory resources are released
 			for (const r of firstResults) {
 				if (r.status === "completed") {
@@ -1066,6 +1082,7 @@ export class TaskController {
 		const lines: string[] = [];
 
 		const completed = agents.filter(a => a.status === "completed");
+		const outputPending = agents.filter(a => a.status === "completed_output_pending");
 		const running = agents.filter(a => a.status === "running");
 		const timedOut = agents.filter(a => a.status === "timed_out_still_running");
 		const killed = agents.filter(a => a.status === "killed");
@@ -1114,6 +1131,8 @@ export class TaskController {
 						lines.push("(no output)");
 					}
 				}
+			} else if (a.status === "completed_output_pending") {
+				lines.push(`${displayName} (${a.id}) completed, but final output is still being finalized. Call wait_for_agent again to retrieve it.`);
 			} else if (a.status === "running") {
 				lines.push(`${displayName} (${a.id}) is still running. Call wait_for_agent again to check.`);
 			} else if (a.status === "timed_out_still_running") {
@@ -1150,6 +1169,14 @@ export class TaskController {
 					} else {
 						lines.push(`  (no output captured)`);
 					}
+				}
+			}
+
+			if (outputPending.length > 0) {
+				lines.push(`\n## Output Pending (${outputPending.length})`);
+				for (const a of outputPending) {
+					const name = a.displayName || a.agentType || a.id;
+					lines.push(`- ${name} (${a.id}) [final output is still being finalized]`);
 				}
 			}
 

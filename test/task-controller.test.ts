@@ -1248,6 +1248,48 @@ describe("TaskController.execute", () => {
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("mid-wait output");
 	});
+
+	it("does not report completed with no output while async finalization is pending", async () => {
+		const subs: Array<(e: any) => void> = [];
+		mockSession.subscribe = vi.fn((cb) => {
+			subs.push(cb);
+			return () => {
+				const i = subs.indexOf(cb);
+				if (i >= 0) subs.splice(i, 1);
+			};
+		});
+
+		// Keep the background prompt unresolved so no async result has been stored yet.
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const waitPromise = controller.waitForAgent([agentId], {}, makeContext());
+
+		// The Pi session can emit agent_end before TaskController's async finish
+		// handler has extracted/stored the final assistant text.
+		for (const cb of [...subs]) cb({ type: "agent_end" });
+
+		const pendingResult = await waitPromise;
+		const pendingAgent = (pendingResult.details.agents as AgentWaitResult[])[0];
+		const pendingText = pendingResult.content[0]?.type === "text" ? pendingResult.content[0].text : "";
+
+		expect(pendingAgent.status).toBe("completed_output_pending");
+		expect(pendingResult.details.output).toBeUndefined();
+		expect(pendingText).not.toContain("(no output)");
+
+		// Once finalization stores output, a later wait should return the real result.
+		sessionManager.storeAsyncResult(agentId, { output: "delayed final output", warnings: [] });
+		const completedResult = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(completedResult.details.output).toBe("delayed final output");
+		const completedText = completedResult.content[0]?.type === "text" ? completedResult.content[0].text : "";
+		expect(completedText).toContain("delayed final output");
+	});
 	// ---- In-flight guard ----
 
 	it("blocks blocking call when async is already in-flight on same record", async () => {
