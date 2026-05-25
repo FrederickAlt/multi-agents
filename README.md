@@ -21,6 +21,12 @@ Built-in prompt parts:
 - `010-tools.md` — shared tool info (`{{tools}}`, `{{guidelines}}`)
 - `020-runtime-context.md` — runtime context (`{{cwd}}`, `{{date}}`, `{{agent_name}}`, `{{agent_description}}`)
 
+## Agent Config TUI Diagnostics
+
+Use `npm run tui:dump` to render deterministic `pi-agent-config` board scenarios into plain terminal text. This gives coding agents and tests a shell-visible view of Ink layout changes without screenshots or a real terminal session.
+
+For focused layout checks, import `renderToText` from `src/tui/dev/render-to-text.ts` and render the component with fixed `columns` / `rows`.
+
 ## Default Root Agent
 
 The Root agent always resolves through a markdown Agent definition. If no session-local `/agent <name>` selection exists, the extension uses the configured `defaultRootAgent` flag, which defaults to `default`. The built-in `subagent/agents/default.md` can be overridden from `~/.pi/agent/agents/default.md` or the nearest `.pi/agents/default.md` like any other Agent definition.

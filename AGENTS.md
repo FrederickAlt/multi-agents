@@ -115,6 +115,12 @@ Internally calls `discoverMarkdownDefinitions` and maps `RawMarkdownDefinition` 
 
 Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`.
 
+### `src/tui/dev/render-to-text.ts` — Agent config TUI diagnostics
+
+Provides `renderToText(element, { columns, rows })`, which renders Ink components into a deterministic fake terminal and returns the visible frame as plain text. Use this when debugging `pi-agent-config` layout issues so an agent can inspect the actual boxed TUI output from shell/test output without screenshots or an interactive terminal.
+
+The related `npm run tui:dump` script runs `src/tui/dev/render-scenarios.tsx` and prints several fixed `Board` scenarios. This is the quickest way to see whether agent config columns are jumping, wrapping, or scrolling unexpectedly.
+
 ### `subagent/agents/*.md` — Built-in agent definitions
 
 | Agent | Model | Tools | Depth | can_spawn | Purpose |
@@ -135,6 +141,8 @@ Key functions: `discoverAgents(cwd, scope)`, `formatAgentList(agents, maxItems)`
 - **`test/task-llm.test.ts`** — End-to-end tests with a real LLM (deepseek-v4-flash). Tests spawning a subagent that reads a file, and resuming a subagent to verify conversation memory. Skipped when no API key is available.
 
 Run tests with `npm test` (vitest).
+
+For TUI diagnostics, run `npm run tui:dump` to print shell-visible `pi-agent-config` board snapshots. Tests can import `renderToText` from `src/tui/dev/render-to-text.ts` for focused layout assertions.
 
 ## Key design decisions
 

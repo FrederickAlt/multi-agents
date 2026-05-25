@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest --run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tui:dump": "tsx src/tui/dev/render-scenarios.tsx"
   },
   "bin": {
     "pi-agent-config": "./pi-agent-config.ts"
