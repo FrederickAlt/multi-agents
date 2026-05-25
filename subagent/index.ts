@@ -699,7 +699,9 @@ export default function (pi: ExtensionAPI) {
 
 	// Inject async-agent completion notifications at turn boundaries.
 	// The notifier owns first-notification and reminder cadence; this hook only
-	// delivers whichever consolidated message is currently due.
+	// delivers whichever consolidated message is currently due. Use an immediate
+	// follow-up turn rather than queueing nextTurn text, so retrieved results do
+	// not leave stale completion messages waiting in the runtime queue.
 	pi.on("turn_end", (event: any) => {
 		const message = event?.message;
 		const content = Array.isArray(message?.content) ? message.content : [];
@@ -716,7 +718,7 @@ export default function (pi: ExtensionAPI) {
 					content: notification,
 					display: true,
 				},
-				{ deliverAs: "nextTurn" },
+				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		}
 	});

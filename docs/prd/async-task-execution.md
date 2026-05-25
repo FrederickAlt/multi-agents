@@ -19,7 +19,7 @@ Add a `blocking` parameter to the `Task` tool (default `true`, preserving backwa
 5. As a root agent, I want notifications for multiple finishing agents to be consolidated into a single message, so that I am not spammed with one notification per agent.
 6. As a root agent, I want to be reminded every ~5 turns about unconsumed agents, so that I do not forget to retrieve results.
 7. As a root agent, I want the 5-turn reminder counter to reset whenever a new agent finishes, so that I see fresh completions immediately.
-8. As a root agent, I want async notifications batched with the user's message if the user is mid-typing, so that the user's turn is not interrupted by an extra system message.
+8. As a root agent, I want a still-pending async notification batched into the next submitted user input, so that the user's turn is not interrupted by an extra system message when the input arrives before the separate notification is emitted.
 9. As a root agent, I want the `wait_for_agent` tool to accept a list of sub-agent IDs, so that I can wait on multiple agents at once.
 10. As a root agent, I want `wait_for_agent` to return as soon as any listed agent has finished, so that I can consume results incrementally and decide whether to keep waiting for the rest.
 11. As a root agent, I want `wait_for_agent` to return structured per-agent output, so that I can distinguish which agent produced which result.
@@ -62,11 +62,11 @@ On timeout, still-running agents are reported as "timed out, still running." If 
 
 A new module `AsyncAgentNotifier` owns the notification lifecycle:
 
-- When an async agent's session fires `agent_end`, the notifier records the agent as completed-but-unconsumed.
-- At the next turn boundary, a consolidated `[System]` message is injected listing all unconsumed completed agents and instructing the parent to call `wait_for_agent` with their IDs.
+- When an async agent's final result has been stored, the notifier records the agent as completed-but-unconsumed.
+- At the next turn boundary, a consolidated `[System]` message is injected as an immediate follow-up turn listing all unconsumed completed agents and instructing the parent to call `wait_for_agent` with their IDs.
 - If any agents remain unconsumed after 5 turns with no new completions, the message is re-injected.
 - If a new agent finishes during this window, the message is injected immediately on the next turn and the counter resets.
-- If the user is mid-typing when a turn boundary arrives, the notification is batched with the user's message rather than injecting a separate turn.
+- If user input is submitted while a completion notification is still pending, the notification is prepended to that submitted input rather than injected as a separate follow-up turn.
 
 ### 4. Outcome-agnostic output extraction
 
@@ -84,7 +84,7 @@ Async sessions follow the same lifecycle as blocking sessions. After `wait_for_a
 
 ### 6. `SubagentSessionManager` changes
 
-The session manager exposes the ability to wait on a session's completion via `agent_end` events, shared by both the blocking path (which already does this via `await session.prompt()`) and the async `wait_for_agent` tool. The `agent_end` subscription is extended to invoke the `AsyncAgentNotifier` callback for async agents.
+The session manager exposes the ability to wait for async result storage, so `wait_for_agent` does not report terminal completion before final output extraction has finished. The async result-ready callback invokes `AsyncAgentNotifier` only after output is available.
 
 ### 7. `TaskController` changes
 
@@ -99,13 +99,14 @@ Registers the `wait_for_agent` tool and adds the `blocking` parameter to the `Ta
 
 ## Testing Decisions
 
-Tests should verify external behavior — what the parent agent observes — not internal implementation details.
+Tests should verify external behavior — what the parent agent observes — not internal implementation details. For notification delivery, prefer behavior-level tests that model the extension's public runtime interface and assert observable outcomes (for example, whether a stale notification reaches the parent), not tests that only assert the exact `sendMessage` option object used internally.
 
 ### Modules to test
 
 - **`TaskController`** (existing test file): Add tests for `blocking: false` (returns immediately with agent ID), `blocking: true` (unchanged), `waitForAgents()` (returns per-agent output, handles timeout, handles unknown IDs, handles kill_on_timeout escalation), shared outcome-agnostic extraction (returns partial output on crash, returns error when transcript empty).
-- **`SubagentSessionManager`** (existing test file): Add tests for `agent_end` notification callback registration, ability to wait on session completion without blocking the parent session.
+- **`SubagentSessionManager`** (existing test file): Add tests for async result-ready notification callback registration and waiting for result storage without blocking the parent session.
 - **`AsyncAgentNotifier`** (new test file): Test the notification state machine in isolation — consolidated message content, 5-turn counter, counter reset on new completion, empty state produces no notification, multiple agents in one message. These tests operate on pure state transitions with no Pi runtime dependency.
+- **Async notification runtime integration**: Add a behavior-level regression test for stale notification delivery. Through the extension-facing `sendMessage`/`input`/`turn_end` interface, simulate an async completion notification becoming due, retrieve the result with `wait_for_agent`, then submit the next user input. The parent should not observe the previously consumed agent ID in a later notification. This test should fail if notifications are queued as deferred `nextTurn` text and pass when they are delivered as immediate follow-up turns or otherwise revalidated before delivery.
 
 ### Test patterns
 

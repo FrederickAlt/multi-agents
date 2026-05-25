@@ -123,6 +123,14 @@ describe("command registration docs contract", () => {
 		expect([...registered.keys()].sort()).toEqual(documented);
 	});
 
+	it("documents async Task usage in subagent/README.md", () => {
+		const content = readText(SUBAGENT_README_PATH);
+
+		expect(content).toContain("wait_for_agent");
+		expect(content).toContain("blocking:false");
+		expect(content).toContain("## wait_for_agent");
+	});
+
 	it("registers /agent with command metadata and completions", async () => {
 		const registered = await captureRegisteredCommands(tempDir, agentDir);
 		const agentCmd = registered.get("agent");

@@ -1,6 +1,6 @@
 ## What this project does
 
-This is a **Pi extension** that adds a `Task` tool to Pi. The `Task` tool lets the model delegate autonomous work to **persistent sub-agents** — real Pi `AgentSession` instances with their own transcripts, tools, and config. Each sub-agent survives across Pi restarts, is identified by a short hex ID, and can be resumed later for follow-up work.
+This is a **Pi extension** that adds `Task` and `wait_for_agent` tools to Pi. The `Task` tool lets the model delegate autonomous work to **persistent sub-agents** — real Pi `AgentSession` instances with their own transcripts, tools, and config. Each sub-agent survives across Pi restarts, is identified by a short hex ID, and can be resumed later for follow-up work.
 
 Agents are configured via **agent definition files** — markdown files with YAML frontmatter. The project ships five built-in agents (`default`, `explorer`, `planner`, `reviewer`, `coder`), and users or projects can add their own.
 
@@ -13,7 +13,7 @@ multi-agents/
 ├── CONTEXT.md                # Domain vocabulary (root agent, sub-agent, depth, etc.)
 ├── vitest.config.ts          # Vitest config with path aliases into pi-mono monorepo
 ├── subagent/
-│   ├── index.ts              # Extension entry point — Task tool, commands, lifecycle
+│   ├── index.ts              # Extension entry point — Task and wait_for_agent tools, commands, lifecycle
 │   ├── agents.ts             # Agent discovery & config parsing from markdown files
 │   ├── markdown-definitions.ts # Generic markdown-definition loader (shared by agents + prompt-parts)
 │   ├── prompt-parts.ts       # Prompt-part discovery (calls markdown-definitions.ts)
@@ -41,7 +41,7 @@ multi-agents/
 
 ### `subagent/index.ts` — Extension entry point
 
-Registers the `Task` tool plus the `/agent` and `/dump-prompt` commands. Handles the full sub-agent lifecycle:
+Registers the `Task` and `wait_for_agent` tools plus the `/agent` and `/dump-prompt` commands. Handles the full sub-agent lifecycle:
 
 - **Task tool execution** (`runTask`): resolves agent config, checks spawn permissions, allocates hex IDs, creates or resumes sessions, runs the prompt, returns results.
 - **Prompt composition**: delegates to `prompt-composition.ts` so Root agents and Task sub-agents use the same Agent-definition rendering path.

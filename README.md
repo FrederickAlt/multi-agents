@@ -1,6 +1,6 @@
 # Persistent Task Subagents
 
-Pi extension for persistent configured sub-agents via the `Task` tool.
+Pi extension for persistent configured sub-agents via the `Task` and `wait_for_agent` tools.
 
 ## Prompt Parts
 
@@ -59,6 +59,10 @@ A sub-agent with `depth: 0` cannot call Task at all, including `resume`. New Tas
 
 Task executions are bounded by a default runtime timeout of **30 minutes**.
 If the limit is exceeded, Task fails with `execution_timeout` and the sub-agent transcript is retained for `resume`.
+
+## Async Task Retrieval
+
+Use `Task` with `blocking: false` to spawn a sub-agent immediately. Call `wait_for_agent` with one or more IDs to retrieve output later, including from finished blocking agents. Async completions remain visible at turn boundaries until they are consumed.
 
 `can_spawn` examples:
 - field absent → any agent name may be spawned if depth allows it

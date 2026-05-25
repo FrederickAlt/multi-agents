@@ -16,7 +16,7 @@ import {
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
-import taskExtension, { __testing, configureTaskToolForRuntime, filterExtensionsForAgent } from "../subagent/index.js";
+import taskExtension, { __testing, configureTaskToolForRuntime, filterExtensionsForAgent, waitForAgent as waitForAgentTool } from "../subagent/index.js";
 import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
 import type { AgentConfig } from "../subagent/agents.js";
 import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE } from "../subagent/output-extraction.js";
@@ -40,18 +40,27 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 	const flags = new Map<string, string | boolean | undefined>();
 	const registeredTools: any[] = [];
 	const sentMessages: Array<{ message: any; options?: any }> = [];
+	const nextTurnMessages: any[] = [];
 	let activeTools = [...(options.activeTools ?? ["read", "bash", "edit", "write"])];
 	const pi = {
 		on: (event: string, handler: any) => handlers.set(event, handler),
 		registerTool: (tool: any) => { registeredTools.push(tool); },
 		registerCommand: (name: string, command: any) => commands.set(name, command),
-		sendMessage: (message: any, options?: any) => { sentMessages.push({ message, options }); },
+		sendMessage: (message: any, options?: any) => {
+			sentMessages.push({ message, options });
+			if (options?.deliverAs === "nextTurn") nextTurnMessages.push(message);
+		},
 		registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
 		getFlag: (name: string) => flags.get(name),
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (names: string[]) => { activeTools = [...names]; },
 		_registeredTools: registeredTools,
 		_sentMessages: sentMessages,
+		_nextTurnMessages: nextTurnMessages,
+		_promptTextForNextUserInput: (text: string) => {
+			const queued = nextTurnMessages.splice(0);
+			return [text, ...queued.map((message) => String(message.content ?? ""))].join("\n\n");
+		},
 		_getActiveTools: () => [...activeTools],
 	} as any;
 	return { pi, handlers, commands, flags };
@@ -158,6 +167,10 @@ describe("extension loading", () => {
 		expect(taskTool).toBeDefined();
 		expect(taskTool?.description).toContain("Delegate");
 
+		const waitForAgentTool = allTools.find((t) => t.name === "wait_for_agent");
+		expect(waitForAgentTool).toBeDefined();
+		expect(waitForAgentTool?.description).toContain("Wait for one or more");
+
 		// Verify parameters schema has required fields
 		const params = taskTool?.parameters as any;
 		expect(params).toBeDefined();
@@ -165,6 +178,12 @@ describe("extension loading", () => {
 		expect(params.properties.prompt).toBeDefined();
 		expect(params.properties.subagent_type).toBeDefined();
 		expect(params.properties.resume).toBeDefined();
+
+		const waitParams = waitForAgentTool?.parameters as any;
+		expect(waitParams).toBeDefined();
+		expect(waitParams.properties.agent_ids).toBeDefined();
+		expect(waitParams.properties.timeout).toBeDefined();
+		expect(waitParams.properties.kill_on_timeout).toBeDefined();
 
 		session.dispose();
 	});
@@ -553,7 +572,7 @@ describe("extension loading", () => {
 			expect((pi as any)._sentMessages).toEqual([]);
 		});
 
-		it("emits reminders at the extension turn boundary without duplicate spam", () => {
+		it("emits turn-boundary notifications and reminders without duplicate spam", () => {
 			const { pi, handlers } = createFakeExtensionApi();
 			taskExtension(pi);
 			__testing.asyncAgentNotifier.markCompleted("agent-a");
@@ -564,7 +583,6 @@ describe("extension loading", () => {
 			expect((pi as any)._sentMessages).toHaveLength(1);
 			expect((pi as any)._sentMessages[0].message.content).toContain("agent-a");
 			expect((pi as any)._sentMessages[0].message.content).toContain("agent-b");
-			expect((pi as any)._sentMessages[0].options).toEqual({ deliverAs: "nextTurn" });
 
 			for (let i = 0; i < 4; i++) turnEnd();
 			expect((pi as any)._sentMessages).toHaveLength(1);
@@ -574,6 +592,52 @@ describe("extension loading", () => {
 			expect((pi as any)._sentMessages[1].message.content).toContain("Reminder");
 			expect((pi as any)._sentMessages[1].message.content).toContain("agent-a");
 			expect((pi as any)._sentMessages[1].message.content).toContain("agent-b");
+		});
+
+		it("does not deliver a stale completion notification after wait_for_agent retrieves the result", async () => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+			__testing.asyncAgentNotifier.markCompleted("agent-a");
+
+			handlers.get("turn_end")?.();
+
+			const asyncResults = new Map([
+				["agent-a", { output: "retrieved output", warnings: [] }],
+			]);
+			const waitResult = await waitForAgentTool(
+				["agent-a"],
+				{},
+				{
+					metadataStore: {
+						findRecord: () => ({
+							id: "agent-a",
+							humanName: "Ava",
+							displayName: "explorer Ava",
+							agentType: "explorer",
+							sessionFile: "",
+							depth: 1,
+							createdAt: "2024-01-01T00:00:00.000Z",
+							updatedAt: "2024-01-01T00:00:00.000Z",
+						}),
+					},
+					sessionManager: {
+						getAsyncResult: (id: string) => asyncResults.get(id),
+						clearAsyncResult: (id: string) => { asyncResults.delete(id); },
+					},
+				} as any,
+			);
+			const waitText = waitResult.content[0]?.type === "text" ? waitResult.content[0].text : "";
+			expect(waitText).toContain("retrieved output");
+
+			const inputResult = await handlers.get("input")(
+				{ type: "input", text: "next user request", source: "interactive" },
+				{ cwd: tempDir, sessionManager: makeSessionManager(tempDir, "stale-notification-session"), ui: { notify: () => {} } },
+			);
+			const submittedText = inputResult?.action === "transform" ? inputResult.text : "next user request";
+			const promptText = (pi as any)._promptTextForNextUserInput(submittedText);
+
+			expect(promptText).toContain("next user request");
+			expect(promptText).not.toContain("agent-a");
 		});
 
 		it("asks the root agent to continue when a turn would end with thinking only", () => {

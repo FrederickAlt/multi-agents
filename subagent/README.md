@@ -4,7 +4,9 @@ Pi extension for delegating work to persistent configured sub-agents.
 
 ## Features
 
-- One model-facing tool: `Task`
+- Two model-facing tools: `Task` and `wait_for_agent`
+- `Task` can spawn blocking or asynchronous sub-agents via `blocking:false`
+- Async completions are surfaced at turn boundaries until consumed
 - Each sub-agent is a real Pi session in normal session storage
 - Sub-agents can be resumed with short hex IDs
 - Human-readable display names such as `Explore Tom`
@@ -21,15 +23,32 @@ Pi extension for delegating work to persistent configured sub-agents.
   "description": "short task label",
   "prompt": "full autonomous task description",
   "subagent_type": "explorer",
-  "resume": "fad96168"
+  "resume": "fad96168",
+  "blocking": false
 }
 ```
 
-`resume` is optional. Omit it to start a new persistent sub-agent. Use the returned ID to continue the same transcript later.
+`blocking` defaults to `true`. Set it to `false` to spawn a persistent sub-agent asynchronously and return immediately with its ID. `resume` is optional. Omit it to start a new persistent sub-agent. Use the returned ID to continue the same transcript later.
+
+Blocking calls still wait for the sub-agent and return its output inline. Async calls return immediately; use `wait_for_agent` to retrieve results once they are ready.
 
 Each `Task` execution has a production runtime timeout of **30 minutes**. If an execution exceeds this limit, it fails with a timeout error (`execution_timeout`) and the sub-agent is cleaned up so the same `resume` ID stays valid.
 
 Parallel work does not need a special mode. Pi can execute sibling tool calls concurrently when the model emits multiple `Task` calls in one turn. Sequential chains happen naturally by calling `Task`, reading the result, then calling `Task` again.
+
+## wait_for_agent
+
+```json
+{
+  "agent_ids": ["fad96168"],
+  "timeout": 5,
+  "kill_on_timeout": false
+}
+```
+
+`wait_for_agent` accepts one or more sub-agent IDs. It returns completed output when available, reports still-running agents, and can escalate with `kill_on_timeout` to soft-kill then hard-abort agents that do not finish within the wait window. Structured results report `completed`, `running`, `timed_out_still_running`, `killed`, and `unknown` statuses.
+
+Use it for async `Task(blocking:false)` calls, and for finished blocking agents when you want to re-read persisted output.
 
 ## Agent Definitions
 
