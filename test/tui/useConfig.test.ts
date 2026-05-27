@@ -33,11 +33,11 @@ function makeOptions(
 }
 
 describe("computeInlineCheckboxSaveValue", () => {
-	it("excludes current agent when saving inline can_spawn values", () => {
+	it("includes current agent when saving inline can_spawn values", () => {
 		const options = makeOptions();
 		const agent = makeAgent({
 			name: "agent-a",
-			frontmatter: { description: "A test agent" },
+			frontmatter: { description: "A test agent", depth: 1 },
 		});
 
 		const result = computeInlineCheckboxSaveValue(
@@ -47,9 +47,9 @@ describe("computeInlineCheckboxSaveValue", () => {
 			"agent-b",
 		);
 
-		// Missing can_spawn is implicit (all available after filtering self), then toggling
-		// removes agent-b and keeps explicit single-item save path.
-		expect(result).toEqual(["agent-c"]);
+		// Missing can_spawn is implicit (all available, including self), then toggling
+		// removes agent-b and keeps an explicit save value.
+		expect(result).toEqual(["agent-a", "agent-c"]);
 	});
 
 	it("keeps explicit stale checkbox values when toggling inline can_spawn selections", () => {
@@ -58,6 +58,7 @@ describe("computeInlineCheckboxSaveValue", () => {
 			name: "agent-a",
 			frontmatter: {
 				description: "A test agent",
+				depth: 1,
 				can_spawn: ["agent-b", "legacy-agent"],
 			},
 		});
@@ -72,12 +73,13 @@ describe("computeInlineCheckboxSaveValue", () => {
 		expect(result).toEqual(["agent-b", "legacy-agent", "agent-c"]);
 	});
 
-	it("filters self from explicit can_spawn selections before computing save value", () => {
+	it("keeps self in explicit can_spawn selections when computing save value", () => {
 		const options = makeOptions();
 		const agent = makeAgent({
 			name: "agent-a",
 			frontmatter: {
 				description: "A test agent",
+				depth: 1,
 				can_spawn: ["agent-a", "agent-b"],
 			},
 		});
@@ -89,7 +91,6 @@ describe("computeInlineCheckboxSaveValue", () => {
 			"agent-b",
 		);
 
-		expect(result).toEqual([]);
-		expect(result).not.toContain("agent-a");
+		expect(result).toEqual(["agent-a"]);
 	});
 });

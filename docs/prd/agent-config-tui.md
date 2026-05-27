@@ -141,7 +141,7 @@ All selectable options are discovered by scanning `~/.pi/agent/` on startup and 
 | `model` | All models Pi can discover: `~/.pi/agent/models.json` plus provider-registered models |
 | `reasoning_effort` | Fixed list of Pi thinking levels (e.g. low, medium, high, maximum) |
 | `depth` | Fixed list: 0 through 5 |
-| `can_spawn` | All Agent definition filename stems found in `~/.pi/agent/agents/*.md`, excluding the agent itself (self-spawn not meaningful) |
+| `can_spawn` | All Agent definition filename stems found in `~/.pi/agent/agents/*.md`, including the agent itself |
 | `skills` | All `SKILL.md` files under `~/.pi/agent/skills/` (skill name is the parent directory name) |
 | `prompt_parts` | All `.md` files under `~/.pi/agent/prompt-parts/` (name is the filename stem) |
 

@@ -20,6 +20,7 @@ export function ErrorColumn({ agent, isFocused, isExpanded }: ErrorColumnProps) 
 				borderColor={isFocused ? "cyan" : "gray"}
 				paddingX={1}
 				height={COMPACT_ROW_HEIGHT}
+				width="100%"
 				flexShrink={0}
 			>
 				<Box flexDirection="row">
@@ -39,7 +40,9 @@ export function ErrorColumn({ agent, isFocused, isExpanded }: ErrorColumnProps) 
 			borderColor={isFocused ? "cyan" : "gray"}
 			paddingX={1}
 			height={EXPANDED_ROW_HEIGHT}
+			width="100%"
 			flexShrink={0}
+			overflow="hidden"
 		>
 			<Text bold color="red" wrap="truncate">
 				{agent.name}

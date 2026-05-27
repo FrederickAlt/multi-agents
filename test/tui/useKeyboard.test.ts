@@ -148,6 +148,25 @@ describe("Keyboard input dispatch for inline option filtering", () => {
 		expect(exit).not.toHaveBeenCalled();
 	});
 
+	it("escape exits from compact outer level", () => {
+		const actions = makeActions();
+		const exit = vi.fn();
+		const state = makeState({ isExpanded: false });
+		handleKeyboardInput("", { escape: true }, state, actions, exit);
+
+		expect(exit).toHaveBeenCalledTimes(1);
+		expect(actions.collapse).not.toHaveBeenCalled();
+	});
+
+	it("q is ordinary input, not a quit shortcut, outside inline filters", () => {
+		const actions = makeActions();
+		const exit = vi.fn();
+		const state = makeState({ isExpanded: false });
+		handleKeyboardInput("q", {}, state, actions, exit);
+
+		expect(exit).not.toHaveBeenCalled();
+	});
+
 	it("arrow keys still navigate option items in inline expanded mode", () => {
 		const actions = makeActions();
 		const exit = vi.fn();

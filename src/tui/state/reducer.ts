@@ -4,15 +4,23 @@ import type {
 	AgentConfigState,
 	DiscoveredOptions,
 	OverlayState,
+	OptionColumnItemOrder,
 } from "./types.js";
 import { FIELDS_ORDER, OPTION_COLUMN_FIELDS } from "./types.js";
 import { resolveModelDisplayName } from "../discovery/options.js";
 import { clampHorizontalScrollOffset, clampVerticalScrollOffset } from "../layout.js";
+import { getOptionColumnWidth } from "../option-column-layout.js";
 import {
 	getFieldName,
 	getInlineOptionColumnFieldIndex,
+	applyOptionColumnItemOrder,
 	getOptionColumnItemIndex,
 	getOptionColumnItems,
+	getOptionColumnSelectedValues,
+	getToolsAvailableForAgent,
+	isCheckboxOptionColumnField,
+	isOptionColumnDisabledForAgent,
+	isOptionColumnItemDisabled,
 	isOptionColumnField,
 	MODEL_OPTION_LOADING_ITEM,
 	MODEL_OPTION_DEGRADED_STATUS,
@@ -98,6 +106,7 @@ export function createInitialState(): ConfigState {
 		agents: [],
 		options: {
 			tools: [],
+			toolExtensionNames: {},
 			extensions: [],
 			models: [],
 			defaultModel: "",
@@ -117,6 +126,7 @@ export function createInitialState(): ConfigState {
 		statuses: new Map(),
 		scrollOffset: 0,
 		optionColumnScrollOffset: 0,
+		optionColumnItemOrder: null,
 		optionColumnFilter: "",
 		globalError: null,
 	};
@@ -136,43 +146,39 @@ function getInlineFocusFieldIndex(fieldIndex: number): number | null {
 	return getInlineOptionColumnFieldIndex(focusedFieldName);
 }
 
+function clampToFieldRange(index: number): number {
+	return Math.max(0, Math.min(index, FIELDS_ORDER.length - 1));
+}
+
 function getInlineFieldMovementTarget(
 	fieldIndex: number,
 	direction: "next" | "prev",
+	agent?: AgentConfigState,
 ): number {
-	const focusedFieldName = getFieldName(fieldIndex);
+	const currentFieldIndex = clampToFieldRange(fieldIndex);
+	const focusedFieldName = getFieldName(currentFieldIndex);
 	if (!isOptionColumnField(focusedFieldName)) {
-		return clamp(fieldIndex + (direction === "next" ? 1 : -1), FIELDS_ORDER.length);
+		return clampToFieldRange(currentFieldIndex + (direction === "next" ? 1 : -1));
 	}
 
 	const inlineIndex = getInlineOptionColumnFieldIndex(focusedFieldName);
 	if (inlineIndex === -1) {
-		return clamp(fieldIndex + (direction === "next" ? 1 : -1), FIELDS_ORDER.length);
+		return clampToFieldRange(currentFieldIndex + (direction === "next" ? 1 : -1));
 	}
 
-	if (direction === "next") {
-		if (inlineIndex < OPTION_COLUMN_FIELDS.length - 1) {
-			return FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex + 1]);
+	const delta = direction === "next" ? 1 : -1;
+	for (
+		let nextInlineIndex = inlineIndex + delta;
+		nextInlineIndex >= 0 && nextInlineIndex < OPTION_COLUMN_FIELDS.length;
+		nextInlineIndex += delta
+	) {
+		const nextField = OPTION_COLUMN_FIELDS[nextInlineIndex];
+		if (!isOptionColumnDisabledForAgent(agent, nextField)) {
+			return FIELDS_ORDER.indexOf(nextField);
 		}
-
-		// From the last inline option column, continue to the first non-inline
-		// field after it (or wrap to the first field as a safety fallback).
-		const inlineFieldIndex = FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex]);
-		for (let i = inlineFieldIndex + 1; i < FIELDS_ORDER.length; i++) {
-			const nextField = FIELDS_ORDER[i];
-			if (!isOptionColumnField(nextField)) {
-				return i;
-			}
-		}
-		return 0;
 	}
 
-	if (inlineIndex > 0) {
-		return FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex - 1]);
-	}
-
-	const inlineFieldIndex = FIELDS_ORDER.indexOf(OPTION_COLUMN_FIELDS[inlineIndex]);
-	return inlineFieldIndex > 0 ? inlineFieldIndex - 1 : 0;
+	return currentFieldIndex;
 }
 
 function getFocusedOptionItemIndex(
@@ -185,7 +191,14 @@ function getFocusedOptionItemIndex(
 	if (!agent) return 0;
 	const fieldName = getFieldName(fieldIndex);
 	if (!isOptionColumnField(fieldName)) return 0;
-	return getOptionColumnItemIndex(
+	const items = getOptionColumnItems(
+		agent,
+		options,
+		fieldName,
+		agent.name,
+		columnFilter,
+	);
+	const index = getOptionColumnItemIndex(
 		agent,
 		options,
 		fieldName,
@@ -193,17 +206,144 @@ function getFocusedOptionItemIndex(
 		agent.name,
 		columnFilter,
 	);
+	return getNearestEnabledOptionItemIndex(agent, options, fieldName, items, index);
 }
+
+function getNearestEnabledOptionItemIndex(
+	agent: AgentConfigState,
+	options: DiscoveredOptions,
+	fieldName: ReturnType<typeof getFieldName>,
+	items: string[],
+	preferredIndex: number,
+): number {
+	if (!isOptionColumnField(fieldName) || items.length === 0) return 0;
+	const start = Math.max(0, Math.min(preferredIndex, items.length - 1));
+	if (!isOptionColumnItemDisabled(agent, options, fieldName, items[start])) return start;
+	for (let i = start + 1; i < items.length; i += 1) {
+		if (!isOptionColumnItemDisabled(agent, options, fieldName, items[i])) return i;
+	}
+	for (let i = start - 1; i >= 0; i -= 1) {
+		if (!isOptionColumnItemDisabled(agent, options, fieldName, items[i])) return i;
+	}
+	return start;
+}
+
+function getNextEnabledOptionItemIndex(
+	agent: AgentConfigState,
+	options: DiscoveredOptions,
+	fieldName: ReturnType<typeof getFieldName>,
+	items: string[],
+	currentIndex: number,
+	direction: "next" | "prev",
+): number {
+	if (!isOptionColumnField(fieldName) || items.length === 0) return 0;
+	const delta = direction === "next" ? 1 : -1;
+	for (let step = 1; step <= items.length; step += 1) {
+		const index = clamp(currentIndex + (delta * step), items.length);
+		if (!isOptionColumnItemDisabled(agent, options, fieldName, items[index])) {
+			return index;
+		}
+	}
+	return Math.max(0, Math.min(currentIndex, items.length - 1));
+}
+function getEffectiveOptionColumnItems(
+	state: ConfigState,
+	agent: AgentConfigState,
+	fieldName: ReturnType<typeof getFieldName>,
+): string[] {
+	if (!isOptionColumnField(fieldName)) return [];
+	const items = getOptionColumnItems(
+		agent,
+		state.options,
+		fieldName,
+		agent.name,
+		state.optionColumnFilter,
+	);
+	return applyOptionColumnItemOrder(
+		items,
+		state.optionColumnItemOrder,
+		state.focus.agentIndex,
+		fieldName,
+		state.optionColumnFilter,
+	);
+}
+
+function getOptionColumnWidthsForAgent(
+	agent: AgentConfigState | undefined,
+	options: DiscoveredOptions,
+	focusedFieldIndex: number,
+	optionColumnFilter = "",
+	optionColumnItemOrder: OptionColumnItemOrder | null = null,
+	agentIndex = 0,
+): number[] | undefined {
+	if (!agent) return undefined;
+	const focusedFieldName = getFieldName(focusedFieldIndex);
+
+	return OPTION_COLUMN_FIELDS.map((fieldName) => {
+		const isFocusedField = focusedFieldName === fieldName;
+		const isInlineCheckbox = isCheckboxOptionColumnField(fieldName);
+		const columnFilter = isFocusedField ? optionColumnFilter : "";
+		const items = applyOptionColumnItemOrder(
+			getOptionColumnItems(
+				agent,
+				options,
+				fieldName,
+				agent.name,
+				columnFilter,
+			),
+			optionColumnItemOrder,
+			agentIndex,
+			fieldName,
+			columnFilter,
+		);
+		return getOptionColumnWidth({
+			fieldName,
+			items,
+			selectedValues: getOptionColumnSelectedValues(
+				agent,
+				options,
+				fieldName,
+				agent.name,
+			),
+			isFocused: isFocusedField,
+			isCheckbox: isInlineCheckbox,
+			staleItems: agent.staleItems[fieldName] ?? [],
+			filterText: isFocusedField ? optionColumnFilter : undefined,
+		});
+	});
+}
+
 function syncOptionColumnScrollOffset(
 	scrollOffset: number,
 	fieldIndex: number,
 	columnCount: number,
+	agent?: AgentConfigState,
+	options?: DiscoveredOptions,
+	optionColumnFilter = "",
+	optionColumnItemOrder: OptionColumnItemOrder | null = null,
+	agentIndex = 0,
 ): number {
 	const inlineFieldIndex = getInlineFocusFieldIndex(fieldIndex);
 	if (inlineFieldIndex === null) {
 		return scrollOffset;
 	}
-	return clampHorizontalScrollOffset(scrollOffset, inlineFieldIndex, columnCount);
+	const columnWidths = options
+		? getOptionColumnWidthsForAgent(
+			agent,
+			options,
+			fieldIndex,
+			optionColumnFilter,
+			optionColumnItemOrder,
+			agentIndex,
+		)
+		: undefined;
+	return clampHorizontalScrollOffset(
+		scrollOffset,
+		inlineFieldIndex,
+		columnCount,
+		undefined,
+		columnWidths,
+	);
 }
 
 /** Extract current value for a field from agent frontmatter */
@@ -228,13 +368,15 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		case "INIT_COMPLETE": {
 			const fieldCount = FIELDS_ORDER.length;
 			const fieldIndex = clamp(state.focus.fieldIndex, fieldCount);
-			const focusedAgent = action.agents[clamp(state.focus.agentIndex, action.agents.length)];
+			const focusedAgentIndex = clamp(state.focus.agentIndex, action.agents.length);
+			const focusedAgent = action.agents[focusedAgentIndex];
 			return {
 				...state,
 				agents: action.agents,
 				options: action.options,
 				globalError: null,
 				optionColumnFilter: "",
+				optionColumnItemOrder: null,
 				expandedAgentIndex: null,
 				focus: {
 					agentIndex: clamp(state.focus.agentIndex, action.agents.length),
@@ -249,6 +391,11 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					state.optionColumnScrollOffset,
 					fieldIndex,
 					OPTION_COLUMN_FIELDS.length,
+					focusedAgent,
+					action.options,
+					"",
+					null,
+					focusedAgentIndex,
 				),
 			};
 		}
@@ -271,6 +418,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				...state,
 				expandedAgentIndex: nextExpanded,
 				optionColumnFilter: "",
+				optionColumnItemOrder: null,
 				focus: { ...state.focus, agentIndex: newIdx },
 				scrollOffset: clampVerticalScrollOffset(
 					state.scrollOffset,
@@ -294,6 +442,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				...state,
 				expandedAgentIndex: nextExpanded,
 				optionColumnFilter: "",
+				optionColumnItemOrder: null,
 				focus: { ...state.focus, agentIndex: newIdx },
 				scrollOffset: clampVerticalScrollOffset(
 					state.scrollOffset,
@@ -307,14 +456,17 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		case "FOCUS_FIELD": {
 			const len = FIELDS_ORDER.length;
 			if (len === 0) return state;
+			const agent = state.agents[state.focus.agentIndex];
 			const fieldIndex = getInlineFieldMovementTarget(
 				state.focus.fieldIndex,
 				action.direction,
+				agent,
 			);
-			const agent = state.agents[state.focus.agentIndex];
+			if (fieldIndex === state.focus.fieldIndex) return state;
 			return {
 				...state,
 				optionColumnFilter: "",
+				optionColumnItemOrder: null,
 				focus: {
 					...state.focus,
 					fieldIndex,
@@ -324,6 +476,11 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					state.optionColumnScrollOffset,
 					fieldIndex,
 					OPTION_COLUMN_FIELDS.length,
+					agent,
+					state.options,
+					"",
+					null,
+					state.focus.agentIndex,
 				),
 			};
 		}
@@ -335,20 +492,20 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			if (!isOptionColumnField(fieldName)) {
 				return state;
 			}
-			const items = getOptionColumnItems(
-				agent,
-				state.options,
-				fieldName,
-				agent.name,
-				state.optionColumnFilter,
-			);
+			const items = getEffectiveOptionColumnItems(state, agent, fieldName);
 			if (items.length === 0) return state;
-			const delta = action.direction === "next" ? 1 : -1;
 			return {
 				...state,
 				focus: {
 					...state.focus,
-					optionItemIndex: clamp(state.focus.optionItemIndex + delta, items.length),
+					optionItemIndex: getNextEnabledOptionItemIndex(
+						agent,
+						state.options,
+						fieldName,
+						items,
+						state.focus.optionItemIndex,
+						action.direction,
+					),
 				},
 			};
 		}
@@ -361,6 +518,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				state.options,
 				action.fieldName,
 				agent.name,
+				agent,
 			);
 			const currentValue = getFieldValue(agent, action.fieldName);
 
@@ -434,6 +592,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				optionColumnFilter: action.filter,
+				optionColumnItemOrder: null,
 				focus: {
 					...state.focus,
 					optionItemIndex: getOptionColumnItemIndex(
@@ -445,6 +604,16 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 						action.filter,
 					),
 				},
+				optionColumnScrollOffset: syncOptionColumnScrollOffset(
+					state.optionColumnScrollOffset,
+					state.focus.fieldIndex,
+					OPTION_COLUMN_FIELDS.length,
+					agent,
+					state.options,
+					action.filter,
+					null,
+					state.focus.agentIndex,
+				),
 			};
 		}
 
@@ -468,6 +637,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				optionColumnFilter: "",
+				optionColumnItemOrder: null,
 				focus: {
 					...state.focus,
 					optionItemIndex: getOptionColumnItemIndex(
@@ -479,6 +649,16 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 						"",
 					),
 				},
+				optionColumnScrollOffset: syncOptionColumnScrollOffset(
+					state.optionColumnScrollOffset,
+					state.focus.fieldIndex,
+					OPTION_COLUMN_FIELDS.length,
+					agent,
+					state.options,
+					"",
+					null,
+					state.focus.agentIndex,
+				),
 			};
 		}
 
@@ -528,27 +708,45 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				const fieldName = getFieldName(state.focus.fieldIndex);
 				const previousItems =
 					previousAgent && isOptionColumnField(fieldName)
-						? getOptionColumnItems(
-							previousAgent,
-							state.options,
+						? applyOptionColumnItemOrder(
+							getOptionColumnItems(
+								previousAgent,
+								state.options,
+								fieldName,
+								previousAgent.name,
+								state.optionColumnFilter,
+							),
+							state.optionColumnItemOrder,
+							action.agentIndex,
 							fieldName,
-							previousAgent.name,
 							state.optionColumnFilter,
 						)
 					: [];
 				const focusedItem = previousItems[state.focus.optionItemIndex];
+				const shouldPreserveOrder = isOptionColumnField(fieldName)
+					&& isCheckboxOptionColumnField(fieldName);
 				return {
 					...state,
 					agents,
+					optionColumnItemOrder: shouldPreserveOrder
+						? {
+							agentIndex: action.agentIndex,
+							fieldName,
+							filter: state.optionColumnFilter,
+							items: previousItems,
+						}
+						: state.optionColumnItemOrder,
 					focus: {
 						...state.focus,
-						optionItemIndex: getFocusedOptionItemIndex(
-							agent,
-							state.options,
-							state.focus.fieldIndex,
-							focusedItem,
-							state.optionColumnFilter,
-						),
+						optionItemIndex: shouldPreserveOrder
+							? Math.max(0, previousItems.indexOf(focusedItem))
+							: getFocusedOptionItemIndex(
+								agent,
+								state.options,
+								state.focus.fieldIndex,
+								focusedItem,
+								state.optionColumnFilter,
+							),
 					},
 				};
 			}
@@ -557,19 +755,21 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 		}
 
 		case "RESCAN": {
-			return { ...state, overlay: null, optionColumnFilter: "" };
+			return { ...state, overlay: null, optionColumnFilter: "", optionColumnItemOrder: null };
 		}
 
 		case "RESCAN_COMPLETE": {
 			const len = action.agents.length;
 			const fieldIndex = clamp(state.focus.fieldIndex, FIELDS_ORDER.length);
-			const focusedAgent = action.agents[clamp(state.focus.agentIndex, len)];
+			const focusedAgentIndex = clamp(state.focus.agentIndex, len);
+			const focusedAgent = action.agents[focusedAgentIndex];
 			return {
 				...state,
 				agents: action.agents,
 				options: action.options,
 				globalError: null,
 				optionColumnFilter: "",
+				optionColumnItemOrder: null,
 				expandedAgentIndex: null,
 				focus: {
 					agentIndex: clamp(state.focus.agentIndex, len),
@@ -584,6 +784,11 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					state.optionColumnScrollOffset,
 					fieldIndex,
 					OPTION_COLUMN_FIELDS.length,
+					focusedAgent,
+					action.options,
+					"",
+					null,
+					focusedAgentIndex,
 				),
 			};
 		}
@@ -593,6 +798,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			return {
 				...state,
 				options: action.options,
+				optionColumnItemOrder: null,
 				focus: {
 					...state.focus,
 					optionItemIndex: getFocusedOptionItemIndex(
@@ -607,6 +813,11 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					state.optionColumnScrollOffset,
 					state.focus.fieldIndex,
 					OPTION_COLUMN_FIELDS.length,
+					focusedAgent,
+					action.options,
+					state.optionColumnFilter,
+					null,
+					state.focus.agentIndex,
 				),
 			};
 		}
@@ -629,6 +840,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				...state,
 				expandedAgentIndex: idx,
 				optionColumnFilter: "",
+				optionColumnItemOrder: null,
 				focus: {
 					agentIndex: idx,
 					fieldIndex,
@@ -642,15 +854,20 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					0,
 					fieldIndex,
 					OPTION_COLUMN_FIELDS.length,
+					agent,
+					state.options,
+					"",
+					null,
+					idx,
 				),
 			};
 		}
 
 		case "COLLAPSE": {
 			if (state.optionColumnFilter) {
-				return { ...state, optionColumnFilter: "" };
+				return { ...state, optionColumnFilter: "", optionColumnItemOrder: null };
 			}
-			return { ...state, expandedAgentIndex: null };
+			return { ...state, expandedAgentIndex: null, optionColumnItemOrder: null };
 		}
 
 		default:
@@ -675,11 +892,12 @@ function isCheckboxField(fieldName: string): boolean {
 function getAvailableItems(
 	options: DiscoveredOptions,
 	fieldName: string,
-	selfName: string,
+	_selfName: string,
+	agent?: AgentConfigState,
 ): string[] {
 	switch (fieldName) {
 		case "tools":
-			return options.tools;
+			return getToolsAvailableForAgent(options, agent);
 		case "extensions":
 			return options.extensions;
 		case "model":
@@ -695,7 +913,7 @@ function getAvailableItems(
 		case "depth":
 			return options.depths.map(String);
 		case "can_spawn":
-			return options.canSpawn.filter((n) => n !== selfName);
+			return options.canSpawn;
 		case "skills":
 			return options.skills;
 		case "prompt_parts":

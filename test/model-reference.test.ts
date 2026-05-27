@@ -15,6 +15,8 @@ import {
 	computeCanonicalModelRefs,
 	resolveModelDisplayName,
 	modelDisplayNameToCanonicalRef,
+	disambiguateModelDisplayNames,
+	orderModelsByProvider,
 } from "../src/tui/discovery/options.js";
 import type { ModelOption } from "../src/tui/state/types.js";
 
@@ -368,6 +370,64 @@ describe("computeCanonicalModelRefs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// disambiguateModelDisplayNames
+// ---------------------------------------------------------------------------
+
+describe("disambiguateModelDisplayNames", () => {
+	it("adds provider qualifiers to duplicate model names", () => {
+		const models: ModelOption[] = [
+			{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
+			{ provider: "openrouter", modelId: "openai/gpt-5", displayName: "GPT-5", canonicalRef: "openai/gpt-5" },
+			{ provider: "anthropic", modelId: "claude-sonnet", displayName: "Claude Sonnet", canonicalRef: "claude-sonnet" },
+		];
+
+		disambiguateModelDisplayNames(models);
+
+		expect(models.map((m) => m.displayName)).toEqual([
+			"GPT-5 (openai)",
+			"GPT-5 (openrouter)",
+			"Claude Sonnet",
+		]);
+	});
+
+	it("falls back to provider/modelId when provider-only labels are still ambiguous", () => {
+		const models: ModelOption[] = [
+			{ provider: "local", modelId: "a", displayName: "llama", canonicalRef: "a" },
+			{ provider: "local", modelId: "b", displayName: "llama", canonicalRef: "b" },
+		];
+
+		disambiguateModelDisplayNames(models);
+
+		expect(models.map((m) => m.displayName)).toEqual([
+			"llama (local/a)",
+			"llama (local/b)",
+		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// orderModelsByProvider
+// ---------------------------------------------------------------------------
+
+describe("orderModelsByProvider", () => {
+	it("groups models by provider, then model label", () => {
+		const models: ModelOption[] = [
+			{ provider: "openrouter", modelId: "z", displayName: "Zed", canonicalRef: "z" },
+			{ provider: "anthropic", modelId: "sonnet", displayName: "Sonnet", canonicalRef: "sonnet" },
+			{ provider: "openrouter", modelId: "a", displayName: "Alpha", canonicalRef: "a" },
+		];
+
+		orderModelsByProvider(models);
+
+		expect(models.map((m) => `${m.provider}/${m.displayName}`)).toEqual([
+			"anthropic/Sonnet",
+			"openrouter/Alpha",
+			"openrouter/Zed",
+		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // resolveModelDisplayName
 // ---------------------------------------------------------------------------
 
@@ -386,6 +446,10 @@ describe("resolveModelDisplayName", () => {
 
 	it("resolves bare modelId to display name", () => {
 		expect(resolveModelDisplayName("claude-sonnet-4", models)).toBe("Claude Sonnet 4");
+	});
+
+	it("does not resolve ambiguous bare modelId to an arbitrary provider", () => {
+		expect(resolveModelDisplayName("deepseek-v4", models)).toBeUndefined();
 	});
 
 	it("resolves explicit provider/modelId string to display name", () => {
@@ -429,6 +493,15 @@ describe("modelDisplayNameToCanonicalRef", () => {
 
 		expect(modelDisplayNameToCanonicalRef("Acme Shared", slashAndDuplicateModels)).toBe("shared/model");
 		expect(modelDisplayNameToCanonicalRef("Other Shared", slashAndDuplicateModels)).toBe("other/shared/model");
+	});
+
+	it("returns undefined for duplicate display names", () => {
+		const duplicateModels: ModelOption[] = [
+			{ provider: "a", modelId: "shared", displayName: "Shared", canonicalRef: "a/shared" },
+			{ provider: "b", modelId: "shared", displayName: "Shared", canonicalRef: "b/shared" },
+		];
+
+		expect(modelDisplayNameToCanonicalRef("Shared", duplicateModels)).toBeUndefined();
 	});
 
 	it("returns undefined for unmatched display name", () => {

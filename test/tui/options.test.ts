@@ -109,17 +109,17 @@ describe("discoverExtensions", () => {
 });
 
 describe("discoverCanSpawn", () => {
-	it("excludes self from spawnable agents", () => {
+	it("includes self in spawnable agents", () => {
 		writeFile("agents", "self.md");
 		writeFile("agents", "other.md");
 		const names = discoverCanSpawn(tempDir, "self");
-		expect(names).toEqual(["other"]);
+		expect(names).toEqual(["other", "self"]);
 	});
 
-	it("returns empty when only self exists", () => {
+	it("returns self when only self exists", () => {
 		writeFile("agents", "self.md");
 		const names = discoverCanSpawn(tempDir, "self");
-		expect(names).toEqual([]);
+		expect(names).toEqual(["self"]);
 	});
 
 	it("skips hidden files", () => {
@@ -164,6 +164,20 @@ describe("discoverSkills", () => {
 		expect(skills).toEqual(["valid-skill"]);
 	});
 
+	it("recursively returns skill names from nested skill.md files", () => {
+		writeFile("skills", "category", "nested-skill", "skill.md");
+		writeFile("skills", "other", "deep", "nested-again", "SKILL.md");
+		const skills = discoverSkills(tempDir);
+		expect(skills).toEqual(["nested-again", "nested-skill"]);
+	});
+
+	it("deduplicates skill names found in multiple nested directories", () => {
+		writeFile("skills", "category-a", "shared", "SKILL.md");
+		writeFile("skills", "category-b", "shared", "skill.md");
+		const skills = discoverSkills(tempDir);
+		expect(skills).toEqual(["shared"]);
+	});
+
 	it("returns empty when skills dir does not exist", () => {
 		const skills = discoverSkills(tempDir);
 		expect(skills).toEqual([]);
@@ -183,6 +197,31 @@ openrouter          openai/gpt-5.2        400K     128K     yes       yes
 		]);
 	});
 
+	it("disambiguates duplicate model names from different providers", () => {
+		const fakePi = path.join(tempDir, "pi");
+		fs.writeFileSync(
+			fakePi,
+			`#!/usr/bin/env bash
+if [[ "$1" != "--list-models" ]]; then exit 2; fi
+printf 'provider            model                 context  max-out  thinking  images\\n'
+printf 'local-a             llama-3.1-8b          8.2K     4.1K     no        no\\n'
+printf 'local-b             llama-3.1-8b          8.2K     4.1K     no        no\\n'
+`,
+		);
+		fs.chmodSync(fakePi, 0o755);
+
+		const result = discoverModelsFromPiCli(tempDir, fakePi);
+
+		expect(result.models.map((m) => m.displayName)).toEqual([
+			"llama-3.1-8b (local-a)",
+			"llama-3.1-8b (local-b)",
+		]);
+		expect(result.models.map((m) => m.canonicalRef)).toEqual([
+			"local-a/llama-3.1-8b",
+			"local-b/llama-3.1-8b",
+		]);
+	});
+
 	it("uses pi --list-models as a real fallback source", () => {
 		const fakePi = path.join(tempDir, "pi");
 		fs.writeFileSync(
@@ -190,8 +229,8 @@ openrouter          openai/gpt-5.2        400K     128K     yes       yes
 			`#!/usr/bin/env bash
 if [[ "$1" != "--list-models" ]]; then exit 2; fi
 printf 'provider            model                 context  max-out  thinking  images\\n'
-printf 'local-llama-server  llama-3.1-8b          8.2K     4.1K     no        no\\n'
 printf 'openrouter          openai/gpt-5.2        400K     128K     yes       yes\\n'
+printf 'local-llama-server  llama-3.1-8b          8.2K     4.1K     no        no\\n'
 `,
 		);
 		fs.chmodSync(fakePi, 0o755);

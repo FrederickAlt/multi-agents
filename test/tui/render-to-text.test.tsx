@@ -136,8 +136,7 @@ describe("renderToText", () => {
 		);
 
 		expect(text).toContain("prompt_parts");
-		expect(text).toContain("030-project");
-		expect(text).not.toContain("idelines");
+		expect(text).toContain("030-project-guidelines");
 	});
 
 	it("keeps unfocused option-column item windows stable when focus moves to a far-away column item", async () => {

@@ -25,9 +25,10 @@ export function Board({ state }: BoardProps) {
 	const termHeight = process.stdout.rows ?? 24;
 	for (let i = scrollOffset; i < state.agents.length; i++) {
 		const h = getAgentRowHeight(i, state.expandedAgentIndex);
-		if (consumed + h > termHeight) break;
+		if (consumed + h > termHeight && visibleAgents.length > 0) break;
 		visibleAgents.push({ agent: state.agents[i], globalIdx: i });
 		consumed += h;
+		if (consumed > termHeight) break;
 	}
 
 	const hasMoreAbove = scrollOffset > 0;
@@ -44,7 +45,7 @@ export function Board({ state }: BoardProps) {
 	}
 
 	return (
-		<Box flexDirection="column" overflow="hidden" height="100%">
+		<Box flexDirection="column" overflow="hidden" height="100%" width="100%">
 			{/* Scroll indicator: up */}
 			{hasMoreAbove && (
 				<Box height={1} justifyContent="center">
@@ -66,6 +67,8 @@ export function Board({ state }: BoardProps) {
 						options={state.options}
 						status={state.statuses.get(agent.filePath)}
 						optionColumnFilter={state.optionColumnFilter}
+						optionColumnItemOrder={state.optionColumnItemOrder}
+						agentIndex={globalIdx}
 					/>
 				);
 			})}

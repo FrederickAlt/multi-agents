@@ -1,15 +1,19 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { AgentConfigState, DiscoveredOptions, StatusInfo } from "../state/types.js";
-import { OPTION_COLUMN_FIELDS } from "../state/types.js";
+import type { AgentConfigState, DiscoveredOptions, OptionColumnItemOrder, StatusInfo } from "../state/types.js";
+import { EXPANDED_ROW_HEIGHT, OPTION_COLUMN_FIELDS } from "../state/types.js";
 import { getMaxVisibleOptionColumns } from "../layout.js";
+import { getOptionColumnWidth } from "../option-column-layout.js";
 import {
+	applyOptionColumnItemOrder,
 	getFieldName,
 	isCheckboxOptionColumnField,
 	isOptionColumnField,
 	getOptionColumnItems,
 	getOptionColumnItemIndex,
 	getOptionColumnSelectedValues,
+	getOptionColumnDisabledItems,
+	isOptionColumnDisabledForAgent,
 } from "../state/option-columns.js";
 import { OptionColumn } from "./OptionColumn.js";
 import { StatusLine } from "./StatusLine.js";
@@ -25,6 +29,8 @@ interface AgentRowProps {
 	options: DiscoveredOptions;
 	status: StatusInfo | undefined;
 	optionColumnFilter?: string;
+	optionColumnItemOrder?: OptionColumnItemOrder | null;
+	agentIndex?: number;
 }
 
 const INLINE_FIELD_LABELS: Record<string, string> = {
@@ -36,7 +42,15 @@ const INLINE_FIELD_LABELS: Record<string, string> = {
 	prompt_parts: "prompt_parts",
 };
 
-const MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW = 3;
+const EXPANDED_ROW_CHROME_LINES = 2;
+const EXPANDED_ROW_HEADER_LINES = 2;
+const OPTION_COLUMN_CHROME_LINES = 2;
+const OPTION_COLUMN_LABEL_LINES = 1;
+const EXPANDED_COLUMNS_HEIGHT = EXPANDED_ROW_HEIGHT - EXPANDED_ROW_CHROME_LINES - EXPANDED_ROW_HEADER_LINES;
+const MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW = Math.max(
+	1,
+	EXPANDED_COLUMNS_HEIGHT - OPTION_COLUMN_CHROME_LINES - OPTION_COLUMN_LABEL_LINES,
+);
 
 function getFocusedNonInlineSummary(agent: AgentConfigState, fieldName: string): string {
 	const fm = agent.frontmatter ?? {};
@@ -70,6 +84,8 @@ export function AgentRow({
 	options,
 	status,
 	optionColumnFilter = "",
+	optionColumnItemOrder = null,
+	agentIndex = 0,
 }: AgentRowProps) {
 	if (agent.error) {
 		return <ErrorColumn agent={agent} isFocused={isFocused} isExpanded={isExpanded} />;
@@ -95,13 +111,68 @@ export function AgentRow({
 				 · Press Enter/Space to edit
 			</Text>
 		);
-		const visibleCount = getMaxVisibleOptionColumns(undefined, OPTION_COLUMN_FIELDS.length);
-		const visibleFields = OPTION_COLUMN_FIELDS.slice(
+		const columnData = OPTION_COLUMN_FIELDS.map((fieldName) => {
+			const isDisabled = isOptionColumnDisabledForAgent(agent, fieldName);
+			const isFocusedField = !isDisabled && isFocused && getFieldName(focusedField) === fieldName;
+			const isInlineCheckbox = isCheckboxOptionColumnField(fieldName);
+			const selectedValues = getOptionColumnSelectedValues(
+				agent,
+				options,
+				fieldName,
+				agent.name,
+			);
+			const columnFilter = isFocusedField ? optionColumnFilter : "";
+			const items = applyOptionColumnItemOrder(
+				getOptionColumnItems(
+					agent,
+					options,
+					fieldName,
+					agent.name,
+					columnFilter,
+				),
+				optionColumnItemOrder,
+				agentIndex,
+				fieldName,
+				columnFilter,
+			);
+			const width = getOptionColumnWidth({
+				fieldName,
+				items,
+				selectedValues,
+				isFocused: isFocusedField,
+				isCheckbox: isInlineCheckbox,
+				staleItems: agent.staleItems[fieldName] ?? [],
+				filterText: isFocusedField ? optionColumnFilter : undefined,
+			});
+			const optionFocusedItemIndex = isFocusedField
+				? focusedOptionItem
+				: getOptionColumnItemIndex(agent, options, fieldName, undefined, agent.name);
+			return {
+				fieldName,
+				isDisabled,
+				disabledItems: getOptionColumnDisabledItems(agent, options, fieldName),
+				isFocusedField,
+				isInlineCheckbox,
+				selectedValues,
+				columnFilter,
+				items,
+				width,
+				optionFocusedItemIndex,
+			};
+		});
+		const columnWidths = columnData.map((column) => column.width);
+		const visibleCount = getMaxVisibleOptionColumns(
+			undefined,
+			columnData.length,
+			columnWidths,
+			optionColumnScrollOffset,
+		);
+		const visibleColumns = columnData.slice(
 			optionColumnScrollOffset,
 			optionColumnScrollOffset + visibleCount,
 		);
 		const hasMoreLeft = optionColumnScrollOffset > 0;
-		const hasMoreRight = optionColumnScrollOffset + visibleFields.length < OPTION_COLUMN_FIELDS.length;
+		const hasMoreRight = optionColumnScrollOffset + visibleColumns.length < OPTION_COLUMN_FIELDS.length;
 
 		return (
 			<Box
@@ -109,8 +180,10 @@ export function AgentRow({
 				borderStyle={isFocused ? "bold" : "single"}
 				borderColor={isFocused ? "cyan" : "gray"}
 				paddingX={1}
-				height={10}
+				height={EXPANDED_ROW_HEIGHT}
+				width="100%"
 				flexShrink={0}
+				overflow="hidden"
 			>
 				<Box flexDirection="row">
 					<Text bold>{agent.name}</Text>
@@ -124,42 +197,25 @@ export function AgentRow({
 					{status && <Text dimColor> · </Text>}
 					{focusedFieldHint}
 				</Box>
-				<Box flexDirection="row" height={6} overflow="hidden">
+				<Box flexDirection="row" height={EXPANDED_COLUMNS_HEIGHT} overflow="hidden">
 					{hasMoreLeft && <Text dimColor>◀ </Text>}
-					{visibleFields.map((fieldName) => {
-						const isFocusedField = isFocused && getFieldName(focusedField) === fieldName;
-						const isInlineCheckbox = isCheckboxOptionColumnField(fieldName);
-						const selectedValues = getOptionColumnSelectedValues(
-							agent,
-							options,
-							fieldName,
-							agent.name,
-						);
-						const items = getOptionColumnItems(
-							agent,
-							options,
-							fieldName,
-							agent.name,
-							isFocusedField ? optionColumnFilter : "",
-						);
-						const optionFocusedItemIndex = isFocusedField
-							? focusedOptionItem
-							: getOptionColumnItemIndex(agent, options, fieldName, undefined, agent.name);
-						return (
-							<OptionColumn
-								key={fieldName}
-								fieldName={fieldName}
-								items={items}
-								selectedValues={selectedValues}
-								focusedItemIndex={optionFocusedItemIndex}
-								isFocused={isFocusedField}
-								filterText={isFocusedField ? optionColumnFilter : undefined}
-								isCheckbox={isInlineCheckbox}
-								staleItems={agent.staleItems[fieldName] ?? []}
-								maxVisibleItems={MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW}
-							/>
-						);
-					})}
+					{visibleColumns.map((column) => (
+						<OptionColumn
+							key={column.fieldName}
+							fieldName={column.fieldName}
+							items={column.items}
+							selectedValues={column.selectedValues}
+							focusedItemIndex={column.optionFocusedItemIndex}
+							isFocused={column.isFocusedField}
+							disabled={column.isDisabled}
+							disabledItems={column.disabledItems}
+							filterText={column.isFocusedField ? column.columnFilter : undefined}
+							isCheckbox={column.isInlineCheckbox}
+							staleItems={agent.staleItems[column.fieldName] ?? []}
+							maxVisibleItems={MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW}
+							width={column.width}
+						/>
+					))}
 					{hasMoreRight && <Text dimColor> ▶</Text>}
 				</Box>
 			</Box>
@@ -174,6 +230,7 @@ export function AgentRow({
 			borderColor={isFocused ? "cyan" : "gray"}
 			paddingX={1}
 			height={3}
+			width="100%"
 			flexShrink={0}
 		>
 			{/* Name line */}

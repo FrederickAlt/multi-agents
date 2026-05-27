@@ -1,10 +1,10 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { OPTION_COLUMN_WIDTH } from "../state/types.js";
 import {
-	MODEL_OPTION_DEGRADED_STATUS,
-	MODEL_OPTION_LOADING_ITEM,
-} from "../state/option-columns.js";
+	getModelPinnedStatus,
+	getOptionColumnLabel,
+	getOptionColumnWidth,
+} from "../option-column-layout.js";
 
 interface OptionColumnProps {
 	fieldName: string;
@@ -15,35 +15,18 @@ interface OptionColumnProps {
 	isFocused: boolean;
 	isCheckbox?: boolean;
 	staleItems?: string[];
+	disabledItems?: string[];
+	disabled?: boolean;
 	filterText?: string;
 	maxVisibleItems?: number;
+	width?: number;
 }
-
-const FIELD_LABELS: Record<string, string> = {
-	tools: "tools",
-	extensions: "extensions",
-	can_spawn: "can_spawn",
-	skills: "skills",
-	prompt_parts: "prompt_parts",
-	reasoning_effort: "reasoning",
-	depth: "depth",
-	model: "model",
-};
 
 const DEFAULT_MAX_VISIBLE_ITEMS = 5;
 
 function clamp(index: number, len: number): number {
 	if (len <= 0) return 0;
 	return Math.max(0, Math.min(index, len));
-}
-
-function isModelStatusValue(item: string): boolean {
-	return item === MODEL_OPTION_LOADING_ITEM || item === MODEL_OPTION_DEGRADED_STATUS;
-}
-
-function getModelPinnedStatus(items: string[]): string | undefined {
-	const candidate = items[0];
-	return isModelStatusValue(candidate) ? candidate : undefined;
 }
 
 function getVisibleRange(
@@ -74,18 +57,32 @@ export function OptionColumn({
 	isFocused,
 	isCheckbox = false,
 	staleItems = [],
+	disabledItems = [],
+	disabled = false,
 	filterText,
 	maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
+	width,
 }: OptionColumnProps) {
-	const label = FIELD_LABELS[fieldName] ?? fieldName;
+	const label = getOptionColumnLabel(fieldName);
 	const effectiveSelectedValues = selectedValues ??
 		(selectedValueProp !== undefined ? [selectedValueProp] : []);
 	const selectedSet = new Set(effectiveSelectedValues);
 	const selectedValue = effectiveSelectedValues[0] ?? "";
 	const staleSet = new Set(staleItems);
+	const disabledSet = new Set(disabledItems);
 	const visibleItemCount = Math.max(1, maxVisibleItems);
 	const filterValue = filterText?.trim() ?? "";
 	const showFilterBar = isFocused && filterValue.length > 0;
+	const columnWidth = width ?? getOptionColumnWidth({
+		fieldName,
+		items,
+		selectedValues,
+		selectedValue: selectedValueProp,
+		isFocused,
+		isCheckbox,
+		staleItems,
+		filterText,
+	});
 	const pinnedStatus = fieldName === "model" ? getModelPinnedStatus(items) : undefined;
 	const reservedLines = (showFilterBar ? 1 : 0) + (pinnedStatus ? 1 : 0);
 	const scrollableItems = pinnedStatus ? items.slice(1) : items;
@@ -103,13 +100,13 @@ export function OptionColumn({
 	return (
 		<Box
 			flexDirection="column"
-			width={OPTION_COLUMN_WIDTH}
+			width={columnWidth}
 			flexShrink={0}
 			borderStyle={isFocused ? "bold" : "single"}
-			borderColor={isFocused ? "cyan" : "gray"}
+			borderColor={disabled ? "gray" : isFocused ? "cyan" : "gray"}
 			paddingX={1}
 		>
-			<Text bold color={isFocused ? "cyan" : undefined} wrap="truncate">{label}</Text>
+			<Text bold color={!disabled && isFocused ? "cyan" : undefined} dimColor={disabled} wrap="truncate">{label}</Text>
 			{showFilterBar && (
 				<Text dimColor wrap="truncate">filter: {filterValue}</Text>
 			)}
@@ -138,6 +135,7 @@ export function OptionColumn({
 				const isFocusedItem = isFocused && absoluteIndex === focusedItemIndex;
 				const isSelected = selectedSet.has(item);
 				const isMissing = staleSet.has(item);
+				const isDisabledItem = disabled || disabledSet.has(item);
 				const mark = isCheckbox
 					? isSelected
 						? "☑"
@@ -148,8 +146,9 @@ export function OptionColumn({
 				return (
 					<Text
 						key={`${fieldName}-${item}-${absoluteIndex}`}
-						color={isFocusedItem ? "cyan" : isSelected ? "green" : undefined}
-						bold={isFocusedItem}
+						color={!isDisabledItem && isFocusedItem ? "cyan" : !isDisabledItem && isSelected ? "green" : undefined}
+						dimColor={isDisabledItem}
+						bold={!isDisabledItem && isFocusedItem}
 						wrap="truncate"
 					>
 						{isFocusedItem ? ">" : " "} {mark} {item}

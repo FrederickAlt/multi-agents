@@ -4,6 +4,7 @@ import {
 	discoverTools,
 	discoverExtensions,
 	discoverModels,
+	discoverPiRuntimeResources,
 	discoverSkills,
 	discoverPromptParts,
 	discoverAllAgentNames,
@@ -27,6 +28,7 @@ export function useOptionDiscovery(): {
 
 	const [options, setOptions] = useState<DiscoveredOptions>({
 		tools: [],
+		toolExtensionNames: {},
 		extensions: [],
 		models: [],
 		defaultModel: "",
@@ -63,8 +65,10 @@ export function useOptionDiscovery(): {
 					return Array.isArray(t) ? t.map(String) : [];
 				});
 
+			const piRuntimeResourcesPromise = discoverPiRuntimeResources(agentDir, toolLists);
 			const discovered: DiscoveredOptions = {
 				tools: discoverTools(agentDir, toolLists),
+				toolExtensionNames: {},
 				extensions: discoverExtensions(agentDir),
 				models: [],
 				defaultModel: "",
@@ -96,6 +100,35 @@ export function useOptionDiscovery(): {
 			setAgents(scanned);
 			setOptions(discovered);
 			setLoading(false);
+
+			void piRuntimeResourcesPromise.then((piRuntimeResources) => {
+				if (!isCurrentRequest() || !piRuntimeResources) return;
+				const runtimeDiscovered = {
+					...discovered,
+					tools: piRuntimeResources.tools,
+					toolExtensionNames: piRuntimeResources.toolExtensionNames,
+					extensions: piRuntimeResources.extensions,
+					skills: piRuntimeResources.skills,
+				};
+				detectStaleItems(
+					scanned,
+					allNames,
+					runtimeDiscovered.tools,
+					runtimeDiscovered.extensions,
+					runtimeDiscovered.skills,
+					runtimeDiscovered.promptParts,
+				);
+				setAgents([...scanned]);
+				setOptions((prev) => ({
+					...prev,
+					tools: runtimeDiscovered.tools,
+					toolExtensionNames: runtimeDiscovered.toolExtensionNames,
+					extensions: runtimeDiscovered.extensions,
+					skills: runtimeDiscovered.skills,
+				}));
+			}).catch(() => {
+				// Standalone fallback discovery is already shown.
+			});
 
 			// Continue model discovery asynchronously.
 			try {

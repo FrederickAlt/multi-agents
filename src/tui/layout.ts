@@ -38,9 +38,28 @@ export function getMaxVisibleAgents(
 export function getMaxVisibleOptionColumns(
 	termWidth: number = process.stdout.columns ?? 80,
 	columnCount = 1,
+	columnWidths?: number[],
+	scrollOffset = 0,
 ): number {
+	if (columnCount <= 0) return 0;
+
 	const availableWidth = Math.max(1, termWidth - 4);
-	return Math.max(1, Math.min(columnCount, Math.floor(availableWidth / OPTION_COLUMN_WIDTH)));
+	const offset = Math.max(0, Math.min(scrollOffset, columnCount - 1));
+	const leftIndicatorWidth = offset > 0 ? 2 : 0;
+	let usedWidth = leftIndicatorWidth;
+	let visibleCount = 0;
+
+	for (let i = offset; i < columnCount; i++) {
+		const columnWidth = Math.max(1, columnWidths?.[i] ?? OPTION_COLUMN_WIDTH);
+		const rightIndicatorWidth = i < columnCount - 1 ? 2 : 0;
+		const nextUsedWidth = usedWidth + columnWidth + rightIndicatorWidth;
+		if (visibleCount > 0 && nextUsedWidth > availableWidth) break;
+		visibleCount++;
+		usedWidth += columnWidth;
+		if (nextUsedWidth > availableWidth) break;
+	}
+
+	return Math.max(1, visibleCount);
 }
 
 export function clampHorizontalScrollOffset(
@@ -48,15 +67,30 @@ export function clampHorizontalScrollOffset(
 	focusedColumnIndex: number,
 	columnCount: number,
 	termWidth: number = process.stdout.columns ?? 80,
+	columnWidths?: number[],
 ): number {
 	if (columnCount === 0) return 0;
-	const visibleCount = getMaxVisibleOptionColumns(termWidth, columnCount);
+	const focusedIndex = Math.max(0, Math.min(focusedColumnIndex, columnCount - 1));
 	let nextOffset = Math.max(0, Math.min(scrollOffset, columnCount - 1));
 
-	if (focusedColumnIndex < nextOffset) {
-		nextOffset = focusedColumnIndex;
-	} else if (focusedColumnIndex >= nextOffset + visibleCount) {
-		nextOffset = focusedColumnIndex - visibleCount + 1;
+	if (focusedIndex < nextOffset) {
+		nextOffset = focusedIndex;
+	}
+
+	let visibleCount = getMaxVisibleOptionColumns(
+		termWidth,
+		columnCount,
+		columnWidths,
+		nextOffset,
+	);
+	while (focusedIndex >= nextOffset + visibleCount && nextOffset < focusedIndex) {
+		nextOffset++;
+		visibleCount = getMaxVisibleOptionColumns(
+			termWidth,
+			columnCount,
+			columnWidths,
+			nextOffset,
+		);
 	}
 
 	return Math.max(0, Math.min(nextOffset, Math.max(0, columnCount - visibleCount)));

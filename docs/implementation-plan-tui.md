@@ -356,13 +356,12 @@ function discoverModels(agentDir: string): ModelOption[] {
 
 #### Can Spawn Discovery
 ```typescript
-function discoverCanSpawn(agentDir: string, selfName: string): string[] {
+function discoverCanSpawn(agentDir: string): string[] {
   const agentsDir = path.join(agentDir, 'agents');
   if (!fs.existsSync(agentsDir)) return [];
   return fs.readdirSync(agentsDir)
     .filter(f => f.endsWith('.md') && !f.startsWith('.'))
-    .map(f => path.basename(f, '.md'))
-    .filter(name => name !== selfName);  // exclude self
+    .map(f => path.basename(f, '.md'));
 }
 ```
 

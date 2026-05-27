@@ -409,8 +409,8 @@ describe("Board", () => {
 			configurable: true,
 		});
 		try {
-			// 10 rows: expanded agent 0 (10 lines) + more-below indicator (1)
-			// = 11 > 10 — trim would pop the expanded agent without protection.
+			// 10 rows: expanded agent 0 is taller than the available terminal height,
+			// and the more-below indicator adds pressure; the expanded agent still stays visible.
 			const s = state({
 				focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 				expandedAgentIndex: 0,

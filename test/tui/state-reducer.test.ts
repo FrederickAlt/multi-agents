@@ -1,13 +1,19 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { configReducer, createInitialState, resolveCheckboxSelection, computeCheckboxSaveValue } from "../../src/tui/state/reducer.js";
 import {
+	applyOptionColumnItemOrder,
+	getFieldName,
 	getOptionColumnItems,
 	getOptionColumnAvailableItems,
+	getOptionColumnDisabledItems,
 	getOptionColumnSelectedValue,
+	getOptionColumnSelectedValues,
+	isOptionColumnItemDisabled,
 	MODEL_OPTION_LOADING_ITEM,
 	MODEL_OPTION_DEGRADED_STATUS,
 } from "../../src/tui/state/option-columns.js";
 import type { ConfigState, AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
+import { FIELDS_ORDER } from "../../src/tui/state/types.js";
 
 const originalRowsDescriptor = Object.getOwnPropertyDescriptor(
 	process.stdout,
@@ -258,6 +264,41 @@ describe("configReducer", () => {
 			staleItems: {},
 		});
 		expect(next.agents[0].frontmatter).toEqual(newFm);
+	});
+
+	it("preserves checkbox column order after inline toggles until focus leaves the column", () => {
+		const options = makeOptions({ skills: ["skill-a", "skill-b", "skill-c", "skill-d"] });
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent({ frontmatter: { skills: ["skill-a", "skill-b", "skill-d"] } })],
+			options,
+			expandedAgentIndex: 0,
+			focus: {
+				agentIndex: 0,
+				fieldIndex: FIELDS_ORDER.indexOf("skills"),
+				optionItemIndex: 2,
+			},
+		};
+
+		const next = configReducer(state, {
+			type: "UPDATE_AGENT_FRONTMATTER",
+			agentIndex: 0,
+			frontmatter: { skills: ["skill-a", "skill-b"] },
+			staleItems: {},
+		});
+
+		const naturalItems = getOptionColumnItems(next.agents[0], options, "skills", next.agents[0].name);
+		const effectiveItems = applyOptionColumnItemOrder(
+			naturalItems,
+			next.optionColumnItemOrder,
+			0,
+			"skills",
+		);
+		expect(effectiveItems).toEqual(["skill-a", "skill-b", "skill-d", "skill-c"]);
+		expect(next.focus.optionItemIndex).toBe(2);
+
+		const moved = configReducer(next, { type: "FOCUS_FIELD", direction: "next" });
+		expect(moved.optionColumnItemOrder).toBeNull();
 	});
 });
 
@@ -741,7 +782,7 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(3);
 	});
 
-	it("FOCUS_FIELD moves right from model to can_spawn", () => {
+	it("FOCUS_FIELD moves right from model to reasoning_effort", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
@@ -754,6 +795,31 @@ describe("inline Option columns", () => {
 
 		expect(next.focus.fieldIndex).toBe(2);
 		expect(next.focus.optionItemIndex).toBe(1);
+	});
+
+	it("FOCUS_FIELD stops at the first and last rendered option columns", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [makeAgent()],
+			options: makeOptions(),
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: FIELDS_ORDER.indexOf("tools"), optionItemIndex: 1 },
+			optionColumnFilter: "keep",
+		};
+
+		const atFirst = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
+		expect(atFirst).toBe(state);
+
+		const atLast: ConfigState = {
+			...state,
+			focus: {
+				agentIndex: 0,
+				fieldIndex: FIELDS_ORDER.indexOf("prompt_parts"),
+				optionItemIndex: 0,
+			},
+		};
+		const afterLast = configReducer(atLast, { type: "FOCUS_FIELD", direction: "next" });
+		expect(afterLast).toBe(atLast);
 	});
 
 	it("FOCUS_OPTION_ITEM moves up and down within the focused option column", () => {
@@ -866,25 +932,65 @@ describe("inline Option columns", () => {
 		expect(next.focus.fieldIndex).toBe(3);
 	});
 
-	it("excludes current agent from inline can_spawn options", () => {
+	it("greys out Task and skips can_spawn when depth is 0", () => {
+		const options = makeOptions({
+			tools: ["Task", "read"],
+			canSpawn: ["self-agent", "peer"],
+		});
+		const agent = makeAgent({
+			name: "self-agent",
+			frontmatter: { depth: 0 },
+		});
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [agent],
+			options,
+			expandedAgentIndex: 0,
+			focus: { agentIndex: 0, fieldIndex: FIELDS_ORDER.indexOf("depth"), optionItemIndex: 0 },
+		};
+
+		expect(getOptionColumnDisabledItems(agent, options, "tools")).toEqual(["Task"]);
+		expect(isOptionColumnItemDisabled(agent, options, "tools", "Task")).toBe(true);
+
+		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
+		expect(getFieldName(next.focus.fieldIndex)).toBe("skills");
+
+		const prev = configReducer(
+			{ ...state, focus: { agentIndex: 0, fieldIndex: FIELDS_ORDER.indexOf("skills"), optionItemIndex: 0 } },
+			{ type: "FOCUS_FIELD", direction: "prev" },
+		);
+		expect(getFieldName(prev.focus.fieldIndex)).toBe("depth");
+	});
+
+	it("keeps protected multi-agents extension selected and disabled", () => {
+		const options = makeOptions({ extensions: ["multi-agents", "other-ext"] });
+		const agent = makeAgent({ frontmatter: { extensions: [] } });
+
+		expect(getOptionColumnSelectedValues(agent, options, "extensions", agent.name)).toEqual(["multi-agents"]);
+		expect(getOptionColumnDisabledItems(agent, options, "extensions")).toEqual(["multi-agents"]);
+		expect(isOptionColumnItemDisabled(agent, options, "extensions", "multi-agents")).toBe(true);
+	});
+
+	it("includes current agent in inline can_spawn options", () => {
 		const options = makeOptions({
 			canSpawn: ["peer", "self-agent", "advisor"],
 		});
 		const agent = makeAgent({
 			name: "self-agent",
-			frontmatter: { can_spawn: ["self-agent", "peer", "advisor"] },
+			frontmatter: { depth: 1, can_spawn: ["self-agent", "peer", "advisor"] },
 		});
 
 		expect(getOptionColumnItems(agent, options, "can_spawn", "self-agent")).toEqual([
+			"self-agent",
 			"peer",
 			"advisor",
 		]);
 	});
 
-	it("focus movement on can_spawn ignores self", () => {
+	it("focus movement on can_spawn includes self", () => {
 		const state: ConfigState = {
 			...createInitialState(),
-			agents: [makeAgent({ name: "self-agent", frontmatter: {} })],
+			agents: [makeAgent({ name: "self-agent", frontmatter: { depth: 1 } })],
 			options: makeOptions({
 				canSpawn: ["peer", "self-agent", "advisor"],
 			}),
@@ -902,19 +1008,19 @@ describe("inline Option columns", () => {
 		});
 		const agent = makeAgent({
 			name: "self-agent",
-			frontmatter: { can_spawn: ["peer", "advisor"] },
+			frontmatter: { depth: 1, can_spawn: ["peer", "advisor"] },
 		});
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [agent],
 			options,
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 2 },
 		};
 
 		const visibleItems = getOptionColumnItems(agent, options, "can_spawn", agent.name);
-		expect(visibleItems).toEqual(["peer", "advisor"]);
-		expect(visibleItems).toHaveLength(2);
+		expect(visibleItems).toEqual(["peer", "advisor", "self-agent"]);
+		expect(visibleItems).toHaveLength(3);
 
 		const next = configReducer(state, {
 			type: "FOCUS_OPTION_ITEM",
@@ -934,7 +1040,7 @@ describe("inline Option columns", () => {
 			agents: [
 				makeAgent({
 					name: "self-agent",
-					frontmatter: { can_spawn: ["peer", "advisor"] },
+					frontmatter: { depth: 1, can_spawn: ["peer", "advisor"] },
 				}),
 			],
 			options,
@@ -945,12 +1051,12 @@ describe("inline Option columns", () => {
 		const next = configReducer(state, {
 			type: "UPDATE_AGENT_FRONTMATTER",
 			agentIndex: 0,
-			frontmatter: { can_spawn: ["peer", "advisor"] },
+			frontmatter: { depth: 1, can_spawn: ["peer", "advisor"] },
 			staleItems: {},
 		});
 
 		const nextVisibleItems = getOptionColumnItems(next.agents[0], options, "can_spawn", "self-agent");
-		expect(nextVisibleItems).toEqual(["peer", "advisor"]);
+		expect(nextVisibleItems).toEqual(["peer", "advisor", "self-agent"]);
 		expect(next.focus.optionItemIndex).toBe(1);
 		const focusedItem = nextVisibleItems[next.focus.optionItemIndex];
 		expect(focusedItem).toBe("advisor");
@@ -1632,5 +1738,40 @@ describe("focus collapses expanded row", () => {
 		// Expand again
 		next = configReducer(next, { type: "EXPAND" });
 		expect(next.expandedAgentIndex).toBe(0);
+	});
+});
+
+describe("extension-provided tool visibility", () => {
+	it("hides tools whose providing extension is disabled", () => {
+		const options = makeOptions({
+			tools: ["read", "web_search", "map_source_structure"],
+			extensions: ["pi-web-providers", "pi-ast-outline"],
+			toolExtensionNames: {
+				web_search: ["pi-web-providers", "npm:pi-web-providers"],
+				map_source_structure: ["pi-ast-outline"],
+			},
+		});
+		const agent = makeAgent({
+			frontmatter: {
+				tools: ["read", "web_search", "map_source_structure"],
+				extensions: ["pi-ast-outline"],
+			},
+		});
+
+		const items = getOptionColumnItems(agent, options, "tools", agent.name);
+
+		expect(items).toContain("read");
+		expect(items).toContain("map_source_structure");
+		expect(items).not.toContain("web_search");
+	});
+
+	it("shows extension-provided tools when extensions are implicit", () => {
+		const options = makeOptions({
+			tools: ["read", "web_search"],
+			toolExtensionNames: { web_search: ["pi-web-providers"] },
+		});
+		const agent = makeAgent({ frontmatter: { tools: ["read"] } });
+
+		expect(getOptionColumnItems(agent, options, "tools", agent.name)).toContain("web_search");
 	});
 });

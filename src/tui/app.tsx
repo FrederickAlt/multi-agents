@@ -153,8 +153,8 @@ export function App({ debugInfo }: AppProps = {}) {
 	// Loading state while discovery bootstrap has not yielded agents yet.
 	if (loading && state.agents.length === 0) {
 		return (
-			<Box flexDirection="column" height="100%">
-				<Box flexGrow={1} justifyContent="center" alignItems="center">
+			<Box flexDirection="column" height="100%" width="100%">
+				<Box flexGrow={1} justifyContent="center" alignItems="center" width="100%">
 					<Text>Loading agent definitions...</Text>
 				</Box>
 				<DebugBanner debugInfo={debugInfo} />
@@ -165,8 +165,8 @@ export function App({ debugInfo }: AppProps = {}) {
 	// Global error
 	if (state.globalError) {
 		return (
-			<Box flexDirection="column" height="100%">
-				<Box flexGrow={1} justifyContent="center" alignItems="center">
+			<Box flexDirection="column" height="100%" width="100%">
+				<Box flexGrow={1} justifyContent="center" alignItems="center" width="100%">
 					<Box flexDirection="column">
 						<Text color="red">Error: {state.globalError}</Text>
 					</Box>
@@ -180,8 +180,8 @@ export function App({ debugInfo }: AppProps = {}) {
 	// No agents (after discovery completed)
 	if (state.agents.length === 0) {
 		return (
-			<Box flexDirection="column" height="100%">
-				<Box flexGrow={1}>
+			<Box flexDirection="column" height="100%" width="100%">
+				<Box flexGrow={1} width="100%">
 					<EmptyState />
 				</Box>
 				<DebugBanner debugInfo={debugInfo} />
@@ -191,8 +191,8 @@ export function App({ debugInfo }: AppProps = {}) {
 	}
 
 	return (
-		<Box flexDirection="column" height="100%">
-			<Box flexGrow={1}>
+		<Box flexDirection="column" height="100%" width="100%">
+			<Box flexGrow={1} width="100%" overflow="hidden">
 				<Board state={state} />
 			</Box>
 

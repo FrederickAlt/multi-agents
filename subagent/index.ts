@@ -24,6 +24,7 @@ import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from
 import { discoverPromptParts } from "./prompt-parts.js";
 import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 import { AsyncAgentNotifier } from "./async-agent-notifier.js";
+import { matchesProtectedMultiAgentExtension } from "./protected-extension.js";
 import { TaskController, type TaskExecuteParams, type TaskExecuteContext, type TaskDetails, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
 import { defaultRootPolicy, selectedRootPolicy, checkTaskAllowed } from "./depth-policy.js";
 import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
@@ -72,19 +73,6 @@ export function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): 
 		const filtered = base.extensions.filter((extension: any) => {
 			const extensionPath = String(extension.path ?? "");
 			const resolvedPath = String(extension.resolvedPath ?? "");
-			// Keep this sub-agent's inline runtime extension. It installs the
-			// before_agent_start hook that renders agent templates and prompt parts;
-			// filtering it out makes children fall back to Pi's default prompt.
-			if (extensionPath.startsWith("<inline:") || resolvedPath.startsWith("<inline:")) return true;
-			// The parent multi-agents extension is often loaded through a symlink from
-			// ~/.pi/agent/extensions. Compare canonical real paths so it is removed
-			// from child sessions and cannot register a second Root-agent lifecycle.
-			if (
-				sameExtensionPath(extensionPath, canonicalSelfPath) ||
-				sameExtensionPath(resolvedPath, canonicalSelfPath)
-			) return false;
-			if (!allowed) return true; // undefined → unrestricted
-			if (allowed.length === 0) return false; // [] → none
 			const candidates = [
 				extension.path,
 				extension.resolvedPath,
@@ -92,8 +80,22 @@ export function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): 
 				path.basename(extension.path ?? ""),
 				path.basename(extension.resolvedPath ?? ""),
 				path.basename(path.dirname(extension.resolvedPath ?? "")),
-			].filter(Boolean);
-			return allowed.some((name) => candidates.some((candidate) => String(candidate).includes(name)));
+			].filter(Boolean).map(String);
+			// Keep this sub-agent's inline runtime extension. It installs the
+			// before_agent_start hook that renders agent templates and prompt parts;
+			// filtering it out makes children fall back to Pi's default prompt.
+			if (extensionPath.startsWith("<inline:") || resolvedPath.startsWith("<inline:")) return true;
+			// Keep the multi-agents extension itself loaded even when an agent's
+			// extensions list is explicit. Otherwise a config can unload the extension
+			// that enforces this policy and provides Task/wait_for_agent.
+			if (
+				sameExtensionPath(extensionPath, canonicalSelfPath) ||
+				sameExtensionPath(resolvedPath, canonicalSelfPath) ||
+				candidates.some(matchesProtectedMultiAgentExtension)
+			) return true;
+			if (!allowed) return true; // undefined → unrestricted
+			if (allowed.length === 0) return false; // [] → none
+			return allowed.some((name) => candidates.some((candidate) => candidate.includes(name)));
 		});
 		return { ...base, extensions: filtered };
 	};

@@ -44,6 +44,12 @@ export interface ModelDiscoveryState {
 
 export interface DiscoveredOptions {
 	tools: string[];
+	/**
+	 * Tool name -> extension identifiers that provide it. Built-in and
+	 * agent-defined tools are omitted, so they stay available regardless of the
+	 * selected extension filter.
+	 */
+	toolExtensionNames?: Record<string, string[]>;
 	extensions: string[];
 	models: ModelOption[];
 	/**
@@ -81,6 +87,13 @@ export interface StatusInfo {
 	timestamp: number;
 }
 
+export interface OptionColumnItemOrder {
+	agentIndex: number;
+	fieldName: OptionColumnFieldName;
+	filter: string;
+	items: string[];
+}
+
 export interface ConfigState {
 	agents: AgentConfigState[];
 	options: DiscoveredOptions;
@@ -90,6 +103,7 @@ export interface ConfigState {
 	statuses: Map<string, StatusInfo>; // keyed by filePath
 	scrollOffset: number; // vertical scroll (index of first visible agent)
 	optionColumnScrollOffset: number; // horizontal scroll (index of first visible Option column)
+	optionColumnItemOrder: OptionColumnItemOrder | null; // preserved order while toggling within one column
 	/**
 	 * Temporary text filter for the focused inline Option column.
 	 * Cleared when focus moves to another column or actions require an unfiltered view.
@@ -176,4 +190,4 @@ export type ConfigAction =
 export const COMPACT_ROW_HEIGHT = 3;
 
 /** Height of an expanded agent row in terminal lines. */
-export const EXPANDED_ROW_HEIGHT = 10;
+export const EXPANDED_ROW_HEIGHT = 15;

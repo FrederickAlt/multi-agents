@@ -74,7 +74,7 @@ function makeSessionManager(dir: string, sessionId: string) {
 	};
 }
 
-function makeAgent(name: string, overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn">>): AgentConfig {
+function makeAgent(name: string, overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn" | "extensions">>): AgentConfig {
 	return {
 		name,
 		description: `${name} description`,
@@ -728,7 +728,7 @@ describe("extension loading", () => {
 		});
 	});
 
-	it("filters this extension from sub-agent loaders even when loaded through a symlink", () => {
+	it("keeps this extension in sub-agent loaders even when loaded through a symlink", () => {
 		const realDir = join(tempDir, "real-extension");
 		const linkDir = join(tempDir, "linked-extension");
 		makeDir(realDir);
@@ -740,7 +740,7 @@ describe("extension loading", () => {
 		const otherExtensionPath = join(tempDir, "other-extension.ts");
 		writeFile(otherExtensionPath, "export default function () {}\n");
 
-		const result = filterExtensionsForAgent(makeAgent("explorer", { depth: 0 }), realSelfPath)({
+		const result = filterExtensionsForAgent(makeAgent("explorer", { depth: 0, extensions: [] }), realSelfPath)({
 			extensions: [
 				{ path: linkedSelfPath, resolvedPath: linkedSelfPath },
 				{ path: "<inline:1>", resolvedPath: "<inline:1>" },
@@ -748,6 +748,6 @@ describe("extension loading", () => {
 			],
 		});
 
-		expect(result.extensions.map((extension: any) => extension.path)).toEqual(["<inline:1>", otherExtensionPath]);
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([linkedSelfPath, "<inline:1>"]);
 	});
 });

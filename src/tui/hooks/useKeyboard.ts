@@ -89,7 +89,7 @@ export function handleKeyboardInput(
 	const shouldHandleGlobalShortcuts =
 		!state.isExpanded || !isInlineOptionColumn || state.isOverlayOpen;
 
-	if (shouldHandleGlobalShortcuts && (input === "q" || input === "Q")) {
+	if (shouldHandleGlobalShortcuts && key.escape && !state.isOverlayOpen && !state.isExpanded) {
 		exit();
 		return;
 	}

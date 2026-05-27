@@ -15,6 +15,7 @@ import { useOptionDiscovery } from "./useOptionDiscovery.js";
 import { writeFieldToFile } from "../file-io/write-agent.js";
 import { modelDisplayNameToCanonicalRef } from "../discovery/options.js";
 import {
+	applyOptionColumnItemOrder,
 	getFieldName,
 	getOptionColumnAvailableItems,
 	getOptionColumnCurrentValue,
@@ -22,6 +23,8 @@ import {
 	getOptionColumnSaveValue,
 	getOptionColumnSelectedValues,
 	isCheckboxOptionColumnField,
+	isOptionColumnDisabledForAgent,
+	isOptionColumnItemDisabled,
 	isOptionColumnField,
 	MODEL_OPTION_LOADING_ITEM,
 	MODEL_OPTION_DEGRADED_STATUS,
@@ -47,6 +50,7 @@ export function computeInlineCheckboxSaveValue(
 		options,
 		typedField,
 		agent.name,
+		agent,
 	);
 	const selectedValues = getOptionColumnSelectedValues(
 		agent,
@@ -54,6 +58,9 @@ export function computeInlineCheckboxSaveValue(
 		typedField,
 		agent.name,
 	);
+	if (isOptionColumnDisabledForAgent(agent, typedField) || isOptionColumnItemDisabled(agent, options, typedField, item)) {
+		return computeCheckboxSaveValue(selectedValues, availableItems);
+	}
 	const { localSelection, wasImplicit } = resolveCheckboxSelection(
 		selectedValues,
 		availableItems,
@@ -327,15 +334,24 @@ export function useConfig() {
 		const fieldName = getFieldName(state.focus.fieldIndex);
 		if (!isOptionColumnField(fieldName)) return;
 
-		const items = getOptionColumnItems(
-			agent,
-			state.options,
+		const items = applyOptionColumnItemOrder(
+			getOptionColumnItems(
+				agent,
+				state.options,
+				fieldName,
+				agent.name,
+				state.optionColumnFilter,
+			),
+			state.optionColumnItemOrder,
+			state.focus.agentIndex,
 			fieldName,
-			agent.name,
 			state.optionColumnFilter,
 		);
 		const item = items[state.focus.optionItemIndex];
 		if (item === undefined) return;
+		if (isOptionColumnDisabledForAgent(agent, fieldName) || isOptionColumnItemDisabled(agent, state.options, fieldName, item)) {
+			return;
+		}
 
 		if (isCheckboxOptionColumnField(fieldName)) {
 			const nextValue = computeInlineCheckboxSaveValue(
@@ -417,6 +433,7 @@ export function useConfig() {
 		state.focus,
 		state.options,
 		state.optionColumnFilter,
+		state.optionColumnItemOrder,
 		saveFieldValue,
 	]);
 

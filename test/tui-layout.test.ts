@@ -40,9 +40,9 @@ describe("getAgentRowHeight", () => {
 		expect(getAgentRowHeight(3, null)).toBe(3);
 	});
 
-	it("returns EXPANDED_ROW_HEIGHT (10) when agent is expanded", () => {
-		expect(getAgentRowHeight(0, 0)).toBe(10);
-		expect(getAgentRowHeight(3, 3)).toBe(10);
+	it("returns EXPANDED_ROW_HEIGHT (15) when agent is expanded", () => {
+		expect(getAgentRowHeight(0, 0)).toBe(15);
+		expect(getAgentRowHeight(3, 3)).toBe(15);
 	});
 });
 
@@ -62,9 +62,9 @@ describe("getMaxVisibleAgents", () => {
 	});
 
 	it("accounts for an expanded agent taking more space", () => {
-		// Agent 0 expanded (10) + 4 compact (3×4=12) = 22, fits in 24
-		// Agent 0 expanded (10) + 5 compact (3×5=15) = 25, doesn't fit in 24
-		expect(getMaxVisibleAgents(24, 0, 10)).toBe(5);
+		// Agent 0 expanded (15) + 3 compact (3×3=9) = 24, fits in 24
+		// Agent 0 expanded (15) + 4 compact (3×4=12) = 27, doesn't fit in 24
+		expect(getMaxVisibleAgents(24, 0, 10)).toBe(4);
 	});
 
 	it("returns at least 1 even if termHeight is tiny", () => {
@@ -131,38 +131,24 @@ describe("clampVerticalScrollOffset", () => {
 	describe("with an expanded row", () => {
 		it("accounts for the expanded row in walk-back calculation", () => {
 			setTerminalRows(24);
-			// Agent 2 is expanded (10 lines), others compact (3)
+			// Agent 2 is expanded (15 lines), others compact (3)
 			// scrollOffset=0, focused=6, 10 agents, expanded=2
-			// Forward: starting from 0: expanded 2(10)+compact 3(3)+4(3)+5(3)+6(3)=22
-			// Agents 0 (3) + 1 (3) + 2 expanded (10) = 16, can fit 2 more compact → 22
-			// Actually let me trace: 
-			// i=0: h=3, used=3
-			// i=1: h=3, used=6
-			// i=2: h=10, used=16
-			// i=3: h=3, used=19
-			// i=4: h=3, used=22
-			// i=5: h=3, used=25 > 24, break → visible=5 (agents 0-4)
-			// focused=6 >= 5 → enter walk-back
-			// nextOffset=6, used=3 (compact)
-			// Walk back to 5: h=3, 3+3=6 <=24, used=6, nextOffset=5
-			// Walk back to 4: h=3, 6+3=9 <=24, used=9, nextOffset=4
-			// Walk back to 3: h=3, 9+3=12 <=24, used=12, nextOffset=3
-			// Walk back to 2: h=10, 12+10=22 <=24, used=22, nextOffset=2
-			// Walk back to 1: h=3, 22+3=25 >24, break
-			// Result: 2
-			expect(clampVerticalScrollOffset(0, 6, 10, 2)).toBe(2);
+			// Forward from 0 fits agents 0-3 (3+3+15+3=24), so focused=6 is beyond the window.
+			// Walk-back from focused agent 6 fits compact agents 6,5,4,3 (12 lines),
+			// but adding expanded agent 2 would overflow (27 > 24), so offset is 3.
+			expect(clampVerticalScrollOffset(0, 6, 10, 2)).toBe(3);
 		});
 
 		it("does not walk back past expanded row if it doesn't fit", () => {
 			setTerminalRows(15);
-			// Agent 2 is expanded (10), focused=6
-			// Forward from 0: 0(3)+1(3)+2(10)=16 > 15, break at 2 → visible=2
+			// Agent 2 is expanded (15), focused=6
+			// Forward from 0: 0(3)+1(3)+2(15)=21 > 15, break at 2 → visible=2
 			// focused=6 >= 2 → enter walk-back
 			// nextOffset=6, used=getAgentRowHeight(6,2)=3
 			// Walk back: 5(3): 3+3=6 <=15, used=6, nextOffset=5
 			// 4(3): 6+3=9 <=15, used=9, nextOffset=4
 			// 3(3): 9+3=12 <=15, used=12, nextOffset=3
-			// 2(10): 12+10=22 >15, break
+			// 2(15): 12+15=27 >15, break
 			// Result: 3
 			expect(clampVerticalScrollOffset(0, 6, 10, 2)).toBe(3);
 		});
