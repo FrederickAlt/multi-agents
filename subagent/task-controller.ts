@@ -176,6 +176,11 @@ export interface TaskExecuteContext {
 	) => Promise<DefaultResourceLoader>;
 	/** Optional streaming update callback (used for progress emission). */
 	onUpdate?: (partial: TaskResult) => void;
+	/**
+	 * Optional callback to consume terminal wait_for_agent IDs (completed / killed)
+	 * from external notification tracking systems.
+	 */
+	consumeWaitForAgentIds?: (agentIds: string[]) => void;
 }
 
 /** Status of a single agent within a wait_for_agent result. */
@@ -946,6 +951,24 @@ export class TaskController {
 		/** Deduplicate IDs while preserving order. */
 		const uniqueIds = [...new Set(agentIds)];
 
+		/**
+		 * Consume completed / killed IDs from external state (e.g. pending reminders)
+		 * when wait_for_agent has already returned terminal data for them.
+		 */
+		const consumeTerminalResults = (agents: AgentWaitResult[]) => {
+			const completedOrKilled = agents
+				.filter((agent) => agent.status === "completed" || agent.status === "killed")
+				.map((agent) => agent.id);
+			if (completedOrKilled.length > 0 && context.consumeWaitForAgentIds) {
+				context.consumeWaitForAgentIds(completedOrKilled);
+			}
+		};
+
+		const formatWaitResult = (agents: AgentWaitResult[]) => {
+			consumeTerminalResults(agents);
+			return this._formatWaitResult(agents, warnings);
+		};
+
 		// ---- First pass: classify all agents ----
 		const firstResults = uniqueIds.map(buildResult);
 
@@ -962,12 +985,12 @@ export class TaskController {
 					sessionManager.clearAsyncResult(r.id);
 				}
 			}
-			return this._formatWaitResult(firstResults, warnings);
+			return formatWaitResult(firstResults);
 		}
 
 		// If no agents are running (all unknown), return immediately.
 		if (runningIds.length === 0) {
-			return this._formatWaitResult(firstResults, warnings);
+			return formatWaitResult(firstResults);
 		}
 
 		// ---- Second pass: wait for the first running agent to finish ----
@@ -1068,7 +1091,7 @@ export class TaskController {
 								sessionManager.clearAsyncResult(r.id);
 							}
 						}
-						return this._formatWaitResult(escalationResults, warnings);
+						return formatWaitResult(escalationResults);
 					}
 				}
 
@@ -1078,7 +1101,7 @@ export class TaskController {
 						sessionManager.clearAsyncResult(r.id);
 					}
 				}
-				return this._formatWaitResult(timeoutResults, warnings);
+				return formatWaitResult(timeoutResults);
 			}
 
 			// An agent finished — re-classify all
@@ -1092,7 +1115,7 @@ export class TaskController {
 					sessionManager.clearAsyncResult(r.id);
 				}
 			}
-			return this._formatWaitResult(finalResults, warnings);
+			return formatWaitResult(finalResults);
 		} catch {
 			// Best-effort: return whatever we have
 			const fallbackResults = uniqueIds.map(id => {
@@ -1100,7 +1123,7 @@ export class TaskController {
 					return { id, status: "unknown" as const };
 				}
 			});
-			return this._formatWaitResult(fallbackResults, warnings);
+			return formatWaitResult(fallbackResults);
 		}
 	}
 

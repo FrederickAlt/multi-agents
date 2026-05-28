@@ -2207,6 +2207,70 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("killed");
 	});
 
+	it("waitForAgent consumes completed agents from notifier to avoid stale reminders", async () => {
+		const recordId = "deadbeef";
+		const record = makeRecord(recordId, "explorer");
+		__testing.asyncAgentNotifier.markCompleted(recordId);
+
+		const result = await waitForAgentTool(
+			[recordId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue({ output: "completed output", warnings: [] }),
+					clearAsyncResult: vi.fn(),
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(1);
+		expect(agents[0].status).toBe("completed");
+		expect(agents[0].output).toBe("completed output");
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("completed output");
+
+		// No stale boundary reminder should remain after consumed terminal status.
+		expect(__testing.asyncAgentNotifier.hasUnconsumed()).toBe(false);
+		expect(__testing.asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
+	});
+
+	it("waitForAgent keeps running agents unconsumed after timeout", async () => {
+		const recordId = "cafebabe";
+		const record = makeRecord(recordId, "explorer");
+		__testing.asyncAgentNotifier.markCompleted(recordId);
+
+		const result = await waitForAgentTool(
+			[recordId],
+			{ timeout: 0 },
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue(undefined),
+					isAsyncRunning: vi.fn().mockReturnValue(true),
+					waitForAsyncResult: vi.fn(() => new Promise(() => {})),
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(1);
+		expect(agents[0].status).toBe("timed_out_still_running");
+
+		// Timeout path should not clear notifier state.
+		expect(__testing.asyncAgentNotifier.getUnconsumed()).toEqual([recordId]);
+	});
+
 	it("waitForAgent consumes killed agents from notifier to avoid stale reminders", async () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {

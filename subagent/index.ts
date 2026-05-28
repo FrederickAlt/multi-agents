@@ -325,20 +325,11 @@ export function configureTaskToolForRuntime(
 			const result = await controller.waitForAgent(
 				wParams.agent_ids,
 				{ timeout: wParams.timeout, kill_on_timeout: wParams.kill_on_timeout },
-				executeContext,
+				{
+					...executeContext,
+					consumeWaitForAgentIds: (ids) => _asyncAgentNotifier.consume(ids),
+				},
 			);
-
-			// Consume terminal async notifications so killed/completed agents are removed
-			// from the turn-boundary notification set.
-			const agents = (result.details as TaskDetails | undefined)?.agents;
-			if (agents) {
-				const consumed = agents
-					.filter((a) => a.status === "completed" || a.status === "killed")
-					.map((a) => a.id);
-				if (consumed.length > 0) {
-					_asyncAgentNotifier.consume(consumed);
-				}
-			}
 
 			return result;
 
@@ -848,18 +839,10 @@ export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
 export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
 export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opts, context) => {
-	const result = await new TaskController().waitForAgent(agentIds, opts, context);
-	// Consume terminal async notifications so killed/completed agents are removed
-	// from the turn-boundary notification set (mirrors the tool handler).
-	const agents = (result.details as TaskDetails | undefined)?.agents;
-	if (agents) {
-		const consumed = agents
-			.filter((a) => a.status === "completed" || a.status === "killed")
-			.map((a) => a.id);
-		if (consumed.length > 0) {
-			_asyncAgentNotifier.consume(consumed);
-		}
-	}
+	const result = await new TaskController().waitForAgent(agentIds, opts, {
+		...context,
+		consumeWaitForAgentIds: (ids) => _asyncAgentNotifier.consume(ids),
+	});
 	return result;
 };
 
