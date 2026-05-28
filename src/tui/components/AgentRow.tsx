@@ -102,9 +102,9 @@ export function AgentRow({
 		const focusedFieldName = getFieldName(focusedField);
 		const isFocusedFieldInline = isOptionColumnField(focusedFieldName);
 		const focusedFieldHint = isFocusedFieldInline ? (
-			<Text dimColor>←/→ columns · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse</Text>
+			<Text dimColor wrap="truncate">←/→ columns · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse</Text>
 		) : (
-			<Text dimColor>
+			<Text dimColor wrap="truncate">
 				Focus: {INLINE_FIELD_LABELS[focusedFieldName] ?? focusedFieldName} = {
 					getFocusedNonInlineSummary(agent, focusedFieldName)
 				}
@@ -192,9 +192,17 @@ export function AgentRow({
 						<Text color="yellow"> ⚠ no description</Text>
 					)}
 				</Box>
-				<Box flexDirection="row">
-					{status && <StatusLine status={status} />}
-					{status && <Text dimColor> · </Text>}
+				<Box flexDirection="row" height={1} overflow="hidden">
+					{status && (
+						<Box flexShrink={0}>
+							<StatusLine status={status} />
+						</Box>
+					)}
+					{status && (
+						<Box flexShrink={0}>
+							<Text dimColor> · </Text>
+						</Box>
+					)}
 					{focusedFieldHint}
 				</Box>
 				<Box flexDirection="row" height={EXPANDED_COLUMNS_HEIGHT} overflow="hidden">

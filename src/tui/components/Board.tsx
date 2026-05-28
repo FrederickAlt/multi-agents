@@ -6,9 +6,10 @@ import { AgentRow } from "./AgentRow.js";
 
 interface BoardProps {
 	state: ConfigState;
+	height?: number;
 }
 
-export function Board({ state }: BoardProps) {
+export function Board({ state, height }: BoardProps) {
 	if (state.agents.length === 0) return null;
 
 	const scrollOffset = clampVerticalScrollOffset(
@@ -22,7 +23,7 @@ export function Board({ state }: BoardProps) {
 	// Reserve 1 line for each scroll indicator that may be shown.
 	let consumed = 0;
 	const visibleAgents: { agent: typeof state.agents[0]; globalIdx: number }[] = [];
-	const termHeight = process.stdout.rows ?? 24;
+	const termHeight = Math.max(1, Math.floor(height ?? process.stdout.rows ?? 24));
 	for (let i = scrollOffset; i < state.agents.length; i++) {
 		const h = getAgentRowHeight(i, state.expandedAgentIndex);
 		if (consumed + h > termHeight && visibleAgents.length > 0) break;
@@ -45,7 +46,7 @@ export function Board({ state }: BoardProps) {
 	}
 
 	return (
-		<Box flexDirection="column" overflow="hidden" height="100%" width="100%">
+		<Box flexDirection="column" overflow="hidden" height={termHeight} width="100%">
 			{/* Scroll indicator: up */}
 			{hasMoreAbove && (
 				<Box height={1} justifyContent="center">

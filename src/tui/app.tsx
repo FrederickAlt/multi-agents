@@ -34,6 +34,8 @@ function DebugBanner({ debugInfo }: { debugInfo?: AgentConfigDebugInfo }) {
  * manages an overlay-focused index for navigation within overlays.
  */
 export function App({ debugInfo }: AppProps = {}) {
+	const terminalRows = process.stdout.rows ?? 24;
+	const boardHeight = Math.max(1, terminalRows - 1 - (debugInfo ? 1 : 0));
 	const {
 		state,
 		loading,
@@ -193,7 +195,7 @@ export function App({ debugInfo }: AppProps = {}) {
 	return (
 		<Box flexDirection="column" height="100%" width="100%">
 			<Box flexGrow={1} width="100%" overflow="hidden">
-				<Board state={state} />
+				<Board state={state} height={boardHeight} />
 			</Box>
 
 			{/* Overlays */}

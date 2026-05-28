@@ -17,7 +17,7 @@ export function StatusLine({ status }: StatusLineProps) {
 				: "yellow";
 
 	return (
-		<Text color={color} dimColor={status.type === "saving"}>
+		<Text color={color} dimColor={status.type === "saving"} wrap="truncate">
 			{status.message}
 		</Text>
 	);

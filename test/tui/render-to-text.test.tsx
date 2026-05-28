@@ -1,7 +1,9 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Writable } from "node:stream";
+import { Box, Text, render } from "ink";
 import { describe, expect, it } from "vitest";
 import { Board } from "../../src/tui/components/Board.js";
+import { HelpFooter } from "../../src/tui/components/HelpFooter.js";
 import { renderToText } from "../../src/tui/dev/render-to-text.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
@@ -49,10 +51,140 @@ function state(overrides: Partial<ConfigState> = {}): ConfigState {
 		statuses: new Map(),
 		scrollOffset: 0,
 		optionColumnScrollOffset: 0,
+		optionColumnItemOrder: null,
 		optionColumnFilter: "",
 		globalError: null,
 		...overrides,
 	};
+}
+
+class TtyCaptureStream extends Writable {
+	columns: number;
+	rows: number;
+	isTTY = true;
+	private readonly chunks: string[] = [];
+
+	constructor({ columns, rows }: { columns: number; rows: number }) {
+		super();
+		this.columns = columns;
+		this.rows = rows;
+	}
+
+	_write(chunk: unknown, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+		this.chunks.push(String(chunk));
+		callback();
+	}
+
+	toString() {
+		return this.chunks.join("");
+	}
+}
+
+function emulateTerminal(raw: string, rows: number, columns: number): string {
+	let row = 0;
+	let column = 0;
+	let screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
+
+	const scroll = () => {
+		screen.shift();
+		screen.push(Array(columns).fill(" "));
+		row = rows - 1;
+	};
+	const clearScreen = () => {
+		screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
+	};
+	const put = (char: string) => {
+		if (char === "\r") {
+			column = 0;
+			return;
+		}
+		if (char === "\n") {
+			column = 0;
+			row++;
+			if (row >= rows) scroll();
+			return;
+		}
+		if (column >= columns) {
+			column = 0;
+			row++;
+			if (row >= rows) scroll();
+		}
+		screen[row][column] = char;
+		column++;
+	};
+
+	for (let i = 0; i < raw.length; i++) {
+		const char = raw[i];
+		if (char !== "\u001B") {
+			put(char);
+			continue;
+		}
+		if (raw[i + 1] !== "[") continue;
+
+		let end = i + 2;
+		while (end < raw.length && !/[A-Za-z~]/.test(raw[end])) end++;
+		const final = raw[end];
+		const params = raw.slice(i + 2, end);
+		i = end;
+
+		if (final === "m" || final === "h" || final === "l") continue;
+		if (final === "H") {
+			const [nextRow = 1, nextColumn = 1] = params.split(";").map((value) => Number(value) || 1);
+			row = Math.max(0, Math.min(rows - 1, nextRow - 1));
+			column = Math.max(0, Math.min(columns - 1, nextColumn - 1));
+			continue;
+		}
+		if (final === "J") {
+			if (params === "" || params === "2") clearScreen();
+			continue;
+		}
+		if (final === "K") {
+			const mode = params || "0";
+			if (mode === "0") {
+				for (let x = column; x < columns; x++) screen[row][x] = " ";
+			} else if (mode === "2") {
+				screen[row].fill(" ");
+			}
+			continue;
+		}
+		if (final === "G") {
+			column = Math.max(0, Math.min(columns - 1, (Number(params) || 1) - 1));
+			continue;
+		}
+
+		const amount = Number(params) || 1;
+		if (final === "A") row = Math.max(0, row - amount);
+		if (final === "B") row = Math.min(rows - 1, row + amount);
+		if (final === "C") column = Math.min(columns - 1, column + amount);
+		if (final === "D") column = Math.max(0, column - amount);
+	}
+
+	return screen.map((line) => line.join("").trimEnd()).join("\n").trimEnd();
+}
+
+async function renderSequenceToTerminalText(
+	elements: React.ReactNode[],
+	{ columns, rows }: { columns: number; rows: number },
+): Promise<string> {
+	const stdout = new TtyCaptureStream({ columns, rows });
+	const app = render(elements[0], {
+		stdout: stdout as NodeJS.WriteStream,
+		debug: false,
+		exitOnCtrlC: false,
+		patchConsole: false,
+	});
+
+	try {
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		for (const element of elements.slice(1)) {
+			app.rerender(element);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+		}
+		return emulateTerminal(stdout.toString(), rows, columns);
+	} finally {
+		app.unmount();
+		app.cleanup();
+	}
 }
 
 describe("renderToText", () => {
@@ -106,6 +238,87 @@ describe("renderToText", () => {
 		expect(text).toContain("tools");
 		expect(text).toContain("model");
 		expect(text).toContain("←/→ columns");
+	});
+
+	it("keeps expanded-row save status and keyboard hint on one terminal line", async () => {
+		const text = await renderToText(
+			<Board
+				state={state({
+					agents: [
+						{
+							...agent("coder"),
+							frontmatter: {
+								...agent("coder").frontmatter,
+								depth: 1,
+								can_spawn: [],
+							},
+						},
+						agent("explorer"),
+					],
+					options: {
+						...options,
+						canSpawn: ["coder", "explorer"],
+					},
+					focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 0 },
+					expandedAgentIndex: 0,
+					optionColumnScrollOffset: 5,
+					statuses: new Map([
+						["/tmp/coder.md", { type: "saved", message: "Saved coder.md", timestamp: 1 }],
+					]),
+				})}
+			/>,
+			{ columns: 80, rows: 30 },
+		);
+
+		expect(text).toContain("Saved coder.md ·");
+		expect(text).not.toMatch(/Saved\s*\n.*coder\.md/);
+	});
+
+	it("does not leave stale top rows after an expanded top agent frame redraws in a short terminal", async () => {
+		const rows = 18;
+		const columns = 80;
+		const boardHeight = rows - 1; // HelpFooter occupies the final terminal row.
+		const agents = ["coder", "explorer", "math", "planner", "reviewer"].map((name) => ({
+			...agent(name),
+			frontmatter: { depth: 1, can_spawn: ["explorer"] },
+		}));
+		const scenarioOptions = {
+			...options,
+			canSpawn: agents.map((candidate) => candidate.name),
+		};
+		const shell = (nextState: ConfigState) => (
+			<Box flexDirection="column" height="100%" width="100%">
+				<Box flexGrow={1} width="100%" overflow="hidden">
+					<Board state={nextState} height={boardHeight} />
+				</Box>
+				<HelpFooter />
+			</Box>
+		);
+		const makeState = (overrides: Partial<ConfigState>) => state({
+			agents,
+			options: scenarioOptions,
+			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
+			expandedAgentIndex: null,
+			optionColumnScrollOffset: 2,
+			...overrides,
+		});
+
+		const finalScreen = await renderSequenceToTerminalText(
+			[
+				shell(makeState({ expandedAgentIndex: 0 })),
+				shell(makeState({ expandedAgentIndex: null })),
+				shell(makeState({
+					focus: { agentIndex: 1, fieldIndex: 2, optionItemIndex: 1 },
+					expandedAgentIndex: null,
+				})),
+			],
+			{ columns, rows },
+		);
+
+		expect(finalScreen).toContain("│ coder");
+		expect(finalScreen).toContain("┃ explorer");
+		expect(finalScreen).toContain("↑↓ nav agents");
+		expect(finalScreen.split("\n")[0]).toContain("┌");
 	});
 
 	it("keeps long option names from wrapping over option-column headers", async () => {
