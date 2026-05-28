@@ -2271,6 +2271,68 @@ describe("TaskController.execute", () => {
 		expect(__testing.asyncAgentNotifier.getUnconsumed()).toEqual([recordId]);
 	});
 
+	it("maps in-memory async result with error 'killed' to killed status", async () => {
+		const recordId = "deadbeef";
+		const record = makeRecord(recordId, "explorer");
+
+		const result = await waitForAgentTool(
+			[recordId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue({
+						output: "killed output",
+						error: "killed",
+						warnings: [],
+					}),
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(1);
+		expect(agents[0].status).toBe("killed");
+		expect(agents[0].error).toBe("killed");
+		expect(agents[0].output).toBe("killed output");
+	});
+
+	it("returns immediately when one agent is killed and another is still running", async () => {
+		const killedId = "deadbeef";
+		const runningId = "cafebabe";
+		const killedRecord = makeRecord(killedId, "explorer");
+		const runningRecord = makeRecord(runningId, "explorer");
+		const waitForAsyncResult = vi.fn(() => Promise.reject(new Error("should not wait when terminal output is ready")));
+
+		const result = await waitForAgentTool(
+			[killedId, runningId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn((id: string) => id === killedId ? killedRecord : runningRecord),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn((id: string) => id === killedId
+						? { output: "killed output", error: "killed", warnings: [] }
+						: undefined),
+					isAsyncRunning: vi.fn((id: string) => id === runningId),
+					waitForAsyncResult,
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents.find(a => a.id === killedId)?.status).toBe("killed");
+		expect(agents.find(a => a.id === runningId)?.status).toBe("running");
+		expect(waitForAsyncResult).not.toHaveBeenCalled();
+	});
+
 	it("waitForAgent consumes killed agents from notifier to avoid stale reminders", async () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {

@@ -186,6 +186,27 @@ export interface TaskExecuteContext {
 /** Status of a single agent within a wait_for_agent result. */
 export type AgentWaitStatus = 'completed' | 'running' | 'timed_out_still_running' | 'killed' | 'unknown';
 
+/** Internal run-state used to classify Agent runs consistently for Task and wait_for_agent. */
+type AgentRunState =
+	| 'result_ready_memory'
+	| 'result_ready_transcript'
+	| 'running_async'
+	| 'running_open'
+	| 'killed'
+	| 'unknown';
+
+interface AgentRunSnapshot {
+	id: string;
+	displayName?: string;
+	agentType?: string;
+	sessionFile?: string;
+	state: AgentRunState;
+	output?: string;
+	error?: string;
+	abortReason?: string;
+	warnings?: string[];
+}
+
 /** Per-agent structured result returned by waitForAgent. */
 export interface AgentWaitResult {
 	id: string;
@@ -317,6 +338,125 @@ export class TaskController {
 			terminal = extractTerminalOutput(session.messages as any[]);
 		}
 		return terminal;
+	}
+
+	/**
+	 * Classify a single sub-agent run from stored metadata and session state.
+	 */
+	private static classifyRunSnapshot(record: SubagentRecord, sessionManager: SessionAdapter): AgentRunSnapshot {
+		const base: Omit<AgentRunSnapshot, 'state' | 'output' | 'error' | 'abortReason' | 'warnings'> = {
+			id: record.id,
+			displayName: record.displayName,
+			agentType: record.agentType,
+			sessionFile: record.sessionFile,
+		};
+
+		const asyncResult = sessionManager.getAsyncResult(record.id);
+		if (asyncResult) {
+			return {
+				...base,
+				state: asyncResult.error === 'killed' ? 'killed' : 'result_ready_memory',
+				output: asyncResult.output,
+				error: asyncResult.error,
+				abortReason: asyncResult.abortReason,
+				warnings: asyncResult.warnings,
+			};
+		}
+
+		if (sessionManager.isAsyncRunning(record.id)) {
+			return { ...base, state: 'running_async' };
+		}
+
+		if (sessionManager.isCompleted(record.id)) {
+			const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
+			return {
+				...base,
+				state: 'result_ready_transcript',
+				...(persisted ? { output: persisted.text } : {}),
+				...(persisted?.source === 'diagnostic' ? { error: persisted.text } : {}),
+			};
+		}
+
+		if (sessionManager.hasOpenSession(record.id)) {
+			return { ...base, state: 'running_open' };
+		}
+
+		if (record.sessionFile) {
+			const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
+			if (persisted !== undefined) {
+				return {
+					...base,
+					state: 'result_ready_transcript',
+					...(persisted ? { output: persisted.text } : {}),
+					...(persisted.source === 'diagnostic' ? { error: persisted.text } : {}),
+				};
+			}
+			// Session file exists but has no assistant text or error diagnostic.
+			return { ...base, state: 'result_ready_transcript' };
+		}
+
+		return { id: record.id, state: 'unknown' };
+	}
+
+	private static classifyRunSnapshotFromId(
+		agentId: string,
+		metadataStore: MetadataAdapter,
+		sessionManager: SessionAdapter,
+	): AgentRunSnapshot {
+		let record: SubagentRecord | undefined;
+		try {
+			record = metadataStore.findRecord(agentId);
+		} catch {
+			// fall through to unknown
+		}
+
+		if (!record) {
+			return { id: agentId, state: 'unknown' };
+		}
+
+		return TaskController.classifyRunSnapshot(record, sessionManager);
+	}
+
+	private static toAgentWaitResult(snapshot: AgentRunSnapshot): AgentWaitResult {
+		if (snapshot.state === 'running_async' || snapshot.state === 'running_open') {
+			return {
+				id: snapshot.id,
+				displayName: snapshot.displayName,
+				agentType: snapshot.agentType,
+				status: 'running',
+				sessionFile: snapshot.sessionFile,
+			};
+		}
+
+		if (snapshot.state === 'killed') {
+			return {
+				id: snapshot.id,
+				displayName: snapshot.displayName,
+				agentType: snapshot.agentType,
+				status: 'killed',
+				output: snapshot.output,
+				error: snapshot.error,
+				abortReason: snapshot.abortReason,
+				warnings: snapshot.warnings,
+				sessionFile: snapshot.sessionFile,
+			};
+		}
+
+		if (snapshot.state === 'result_ready_memory' || snapshot.state === 'result_ready_transcript') {
+			return {
+				id: snapshot.id,
+				displayName: snapshot.displayName,
+				agentType: snapshot.agentType,
+				status: 'completed',
+				output: snapshot.output,
+				error: snapshot.error,
+				abortReason: snapshot.abortReason,
+				warnings: snapshot.warnings,
+				sessionFile: snapshot.sessionFile,
+			};
+		}
+
+		return { id: snapshot.id, status: 'unknown' };
 	}
 
 	// ---- Instance methods ----
@@ -606,21 +746,22 @@ export class TaskController {
 						emit(`${record!.displayName} (${record!.id}) running...`);
 
 						// Guard against double-prompt when async is already in-flight
-						if (sessionManager.isAsyncRunning(record!.id)) {
+						const runSnapshot = TaskController.classifyRunSnapshot(record!, sessionManager);
+						if (runSnapshot.state === 'running_async') {
 							return {
 								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is still running asynchronously. Use wait_for_agent with agent_id "${record!.id}" to retrieve output.` }],
-							details: {
-								id: record!.id,
-								displayName: record!.displayName,
-								agentType: record!.agentType,
-								description: params.description,
-								resumed: Boolean(params.resume),
-								sessionFile: record!.sessionFile,
-								warnings,
-								error: "async_in_flight",
-							},
-						};
-					}
+								details: {
+									id: record!.id,
+									displayName: record!.displayName,
+									agentType: record!.agentType,
+									description: params.description,
+									resumed: Boolean(params.resume),
+									sessionFile: record!.sessionFile,
+									warnings,
+									error: "async_in_flight",
+								},
+							};
+						}
 
 						const promptRace = [] as Array<
 							Promise<
@@ -848,104 +989,9 @@ export class TaskController {
 
 		/** Build a single AgentWaitResult for a given agent ID. */
 		const buildResult = (agentId: string): AgentWaitResult => {
-			let record: SubagentRecord | undefined;
-			try { record = metadataStore.findRecord(agentId); } catch { /* fall through */ }
-
-			if (!record) {
-				return { id: agentId, status: "unknown" };
-			}
-
-			// 1. Check in-memory async result (async agent that stored output in finish())
-			const asyncResult = sessionManager.getAsyncResult(agentId);
-			if (asyncResult) {
-				if (asyncResult.error !== undefined) {
-					return {
-						id: agentId,
-						displayName: record.displayName,
-						agentType: record.agentType,
-						status: "completed",
-						error: asyncResult.error,
-						abortReason: asyncResult.abortReason,
-						output: asyncResult.output,
-						warnings: asyncResult.warnings,
-						sessionFile: record.sessionFile,
-					};
-				}
-				return {
-					id: agentId,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					status: "completed",
-					output: asyncResult.output,
-					warnings: asyncResult.warnings,
-					sessionFile: record.sessionFile,
-				};
-			}
-
-			// 2. Async agents are not ready until finalization stores an async result.
-			if (sessionManager.isAsyncRunning(agentId)) {
-				return {
-					id: agentId,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					status: "running",
-					sessionFile: record.sessionFile,
-				};
-			}
-
-			// 3. Check completedSessions (non-async agents or re-called agents).
-			if (sessionManager.isCompleted(agentId)) {
-				const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
-				return {
-					id: agentId,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					status: "completed",
-					output: persisted?.text,
-					...(persisted?.source === "diagnostic" ? { error: persisted.text } : {}),
-					sessionFile: record.sessionFile,
-				};
-			}
-
-			// 4. Check if session is open (still running)
-			if (sessionManager.hasOpenSession(agentId)) {
-				return {
-					id: agentId,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					status: "running",
-					sessionFile: record.sessionFile,
-				};
-			}
-
-			// 5. No open session and not completed — may have been disposed
-			//    without storing asyncResult (edge case). Try persisted file.
-			if (record.sessionFile) {
-				const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
-				if (persisted !== undefined) {
-					return {
-						id: agentId,
-						displayName: record.displayName,
-						agentType: record.agentType,
-						status: "completed",
-						output: persisted.text,
-						...(persisted.source === "diagnostic" ? { error: persisted.text } : {}),
-						sessionFile: record.sessionFile,
-					};
-				}
-				// Session file exists but no assistant output — treat as completed
-				// with no output rather than unknown
-				return {
-					id: agentId,
-					displayName: record.displayName,
-					agentType: record.agentType,
-					status: "completed",
-					sessionFile: record.sessionFile,
-				};
-			}
-
-			// 6. No record means unknown
-			return { id: agentId, status: "unknown" };
+			return TaskController.toAgentWaitResult(
+				TaskController.classifyRunSnapshotFromId(agentId, metadataStore, sessionManager),
+			);
 		};
 
 		/** Deduplicate IDs while preserving order. */
@@ -972,13 +1018,13 @@ export class TaskController {
 		// ---- First pass: classify all agents ----
 		const firstResults = uniqueIds.map(buildResult);
 
-		const hasCompleted = firstResults.some(r => r.status === "completed");
+		const hasTerminalResult = firstResults.some(r => r.status === "completed" || r.status === "killed");
 		const runningIds = firstResults
 			.filter(r => r.status === "running")
 			.map(r => r.id);
 
-		// If any agent is already completed, return immediately.
-		if (hasCompleted) {
+		// If any agent already has terminal output, return immediately.
+		if (hasTerminalResult) {
 			// Consume async results so in-memory resources are released
 			for (const r of firstResults) {
 				if (r.status === "completed") {
