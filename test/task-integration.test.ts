@@ -572,6 +572,49 @@ describe("extension loading", () => {
 			expect((pi as any)._sentMessages).toEqual([]);
 		});
 
+		it("preserves five-turn cadence across input and turn_end opportunities", async () => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+			__testing.asyncAgentNotifier.markCompleted("agent-a");
+
+			const input = handlers.get("input");
+			const turnEnd = handlers.get("turn_end");
+			if (!input || !turnEnd) throw new Error("input or turn_end handler missing");
+
+			const makeContext = () => ({
+				cwd: tempDir,
+				sessionManager: makeSessionManager(tempDir, "reminder-session"),
+				ui: { notify: () => {} },
+			});
+
+			const initial = await input(
+				{ type: "input", text: "start", source: "interactive" },
+				makeContext(),
+			);
+			expect(initial).toEqual(expect.objectContaining({ action: "transform" }));
+			expect((initial as any).text).toContain("agent-a");
+			turnEnd();
+
+			for (let i = 0; i < 4; i++) {
+				const inFlight = await input(
+					{ type: "input", text: `follow up ${i}`, source: "interactive" },
+					makeContext(),
+				);
+				expect(inFlight).toEqual(expect.objectContaining({ action: "continue" }));
+				turnEnd();
+			}
+
+			const result = await input(
+				{ type: "input", text: "next user request", source: "interactive" },
+				makeContext(),
+			);
+			expect(result).toEqual(expect.objectContaining({ action: "transform" }));
+			expect(result.text).toContain("Reminder");
+			expect(result.text).toContain("agent-a");
+			expect(result.text).toContain("next user request");
+			expect((pi as any)._sentMessages).toHaveLength(0);
+		});
+
 		it("emits turn-boundary notifications and reminders without duplicate spam", () => {
 			const { pi, handlers } = createFakeExtensionApi();
 			taskExtension(pi);

@@ -613,8 +613,8 @@ export default function (pi: ExtensionAPI) {
 			rootFinalResponseGuardAttempts = 0;
 		}
 
-		if (event.source !== "extension" && _asyncAgentNotifier.hasPendingCompletion()) {
-			const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+		if (event.source !== "extension") {
+			const notification = _asyncAgentNotifier.takeDueNotification("input");
 			if (notification) {
 				return {
 					action: "transform" as const,
@@ -691,10 +691,11 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// Inject async-agent completion notifications at turn boundaries.
-	// The notifier owns first-notification and reminder cadence; this hook only
-	// delivers whichever consolidated message is currently due. Use an immediate
-	// follow-up turn rather than queueing nextTurn text, so retrieved results do
+	// Inject async-agent completion notifications at turn boundaries and input
+	// batching points. The notifier owns first-notification and reminder cadence;
+	// this hook only delivers whichever consolidated message is currently due.
+	// Use an immediate follow-up turn rather than queueing nextTurn text, so
+	// retrieved results do
 	// not leave stale completion messages waiting in the runtime queue.
 	pi.on("turn_end", (event: any) => {
 		const message = event?.message;
@@ -704,7 +705,7 @@ export default function (pi: ExtensionAPI) {
 			sendFinalResponseGuard();
 		}
 
-		const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+		const notification = _asyncAgentNotifier.takeDueNotification("turn_end");
 		if (notification) {
 			pi.sendMessage(
 				{

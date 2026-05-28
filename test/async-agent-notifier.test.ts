@@ -50,6 +50,17 @@ describe("AsyncAgentNotifier", () => {
 			n.markCompleted("abc123");
 			expect(n.getUnconsumed()).toEqual(["abc123"]);
 		});
+
+		it("does not re-notify a consumed ID if it completes again", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("agent-x");
+			n.consume(["agent-x"]);
+			expect(n.takeNotificationForTurnBoundary()).toBeNull();
+
+			n.markCompleted("agent-x");
+			expect(n.takeNotificationForTurnBoundary()).toBeNull();
+			expect(n.getUnconsumed()).toEqual([]);
+		});
 	});
 
 	describe("multiple completions", () => {
@@ -101,6 +112,14 @@ describe("AsyncAgentNotifier", () => {
 			expect(n.getUnconsumed()).toEqual(["a"]);
 		});
 
+		it("records consumption before completion so later completions are ignored", () => {
+			const n = new AsyncAgentNotifier();
+			n.consume(["late-completion"]);
+			n.markCompleted("late-completion");
+			expect(n.getUnconsumed()).toEqual([]);
+			expect(n.takeDueNotification()).toBeNull();
+		});
+
 		it("partial consumption leaves remaining unconsumed", () => {
 			const n = new AsyncAgentNotifier();
 			n.markCompleted("x");
@@ -119,6 +138,54 @@ describe("AsyncAgentNotifier", () => {
 			const msg = n.takeNotificationForTurnBoundary();
 			expect(msg).toContain("abc123");
 			expect(msg).not.toContain("Reminder");
+		});
+
+		it("aliases due-notification API", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("abc123");
+
+			expect(n.takeDueNotification()).toContain("abc123");
+			expect(n.takeDueNotification()).toBeNull();
+		});
+
+		it("does not advance reminders on same turn when a completion is consumed mid-turn", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("a");
+			n.markCompleted("b");
+
+			const initial = n.takeDueNotification("input");
+			expect(initial).toContain("a");
+			expect(initial).toContain("b");
+
+			n.consume(["b"]);
+			expect(n.takeDueNotification("turn_end")).toBeNull();
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeDueNotification("input")).toBeNull();
+				expect(n.takeDueNotification("turn_end")).toBeNull();
+			}
+
+			const reminder = n.takeDueNotification("input");
+			expect(reminder).toContain("Reminder");
+			expect(reminder).toContain("a");
+			expect(reminder).not.toContain("`b`");
+		});
+
+		it("advances reminder cadence once per input+turn_end opportunity", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("agent-a");
+
+			expect(n.takeDueNotification("input")).toContain("agent-a");
+
+			for (let i = 0; i < 4; i++) {
+				expect(n.takeDueNotification("input")).toBeNull();
+				expect(n.takeDueNotification("turn_end")).toBeNull();
+			}
+
+			const reminder = n.takeDueNotification("input");
+			expect(reminder).toContain("Reminder");
+			expect(reminder).toContain("agent-a");
+			expect(n.takeDueNotification("turn_end")).toBeNull();
 		});
 
 		it("reminds after five turns with no new completion", () => {
