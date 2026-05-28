@@ -422,6 +422,9 @@ describe("TaskController.execute", () => {
 			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
 			waitForSessionEnd: vi.fn((id: string) => sessionManager.waitForSessionEnd(id)),
 			storeAsyncResult: vi.fn((id: string, result: any) => sessionManager.storeAsyncResult(id, result)),
+			finalizeAsyncRun: vi.fn((id: string, result: any, options?: { allowOverwrite?: boolean }) =>
+				sessionManager.finalizeAsyncRun(id, result, options),
+			),
 			getAsyncResult: vi.fn((id: string) => sessionManager.getAsyncResult(id)),
 			waitForAsyncResult: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForAsyncResult(id, signal)),
 			clearAsyncResult: vi.fn((id: string) => sessionManager.clearAsyncResult(id)),
@@ -2207,6 +2210,132 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("killed");
 	});
 
+	it("waitForAgent consumes completed agents from notifier to avoid stale reminders", async () => {
+		const recordId = "deadbeef";
+		const record = makeRecord(recordId, "explorer");
+		__testing.asyncAgentNotifier.markCompleted(recordId);
+
+		const result = await waitForAgentTool(
+			[recordId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue({ output: "completed output", warnings: [] }),
+					clearAsyncResult: vi.fn(),
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(1);
+		expect(agents[0].status).toBe("completed");
+		expect(agents[0].output).toBe("completed output");
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("completed output");
+
+		// No stale boundary reminder should remain after consumed terminal status.
+		expect(__testing.asyncAgentNotifier.hasUnconsumed()).toBe(false);
+		expect(__testing.asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
+	});
+
+	it("waitForAgent keeps running agents unconsumed after timeout", async () => {
+		const recordId = "cafebabe";
+		const record = makeRecord(recordId, "explorer");
+		__testing.asyncAgentNotifier.markCompleted(recordId);
+
+		const result = await waitForAgentTool(
+			[recordId],
+			{ timeout: 0 },
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue(undefined),
+					isAsyncRunning: vi.fn().mockReturnValue(true),
+					waitForAsyncResult: vi.fn(() => new Promise(() => {})),
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(1);
+		expect(agents[0].status).toBe("timed_out_still_running");
+
+		// Timeout path should not clear notifier state.
+		expect(__testing.asyncAgentNotifier.getUnconsumed()).toEqual([recordId]);
+	});
+
+	it("maps in-memory async result with error 'killed' to killed status", async () => {
+		const recordId = "deadbeef";
+		const record = makeRecord(recordId, "explorer");
+
+		const result = await waitForAgentTool(
+			[recordId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue({
+						output: "killed output",
+						error: "killed",
+						warnings: [],
+					}),
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents).toHaveLength(1);
+		expect(agents[0].status).toBe("killed");
+		expect(agents[0].error).toBe("killed");
+		expect(agents[0].output).toBe("killed output");
+	});
+
+	it("returns immediately when one agent is killed and another is still running", async () => {
+		const killedId = "deadbeef";
+		const runningId = "cafebabe";
+		const killedRecord = makeRecord(killedId, "explorer");
+		const runningRecord = makeRecord(runningId, "explorer");
+		const waitForAsyncResult = vi.fn(() => Promise.reject(new Error("should not wait when terminal output is ready")));
+
+		const result = await waitForAgentTool(
+			[killedId, runningId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn((id: string) => id === killedId ? killedRecord : runningRecord),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn((id: string) => id === killedId
+						? { output: "killed output", error: "killed", warnings: [] }
+						: undefined),
+					isAsyncRunning: vi.fn((id: string) => id === runningId),
+					waitForAsyncResult,
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents.find(a => a.id === killedId)?.status).toBe("killed");
+		expect(agents.find(a => a.id === runningId)?.status).toBe("running");
+		expect(waitForAsyncResult).not.toHaveBeenCalled();
+	});
+
 	it("waitForAgent consumes killed agents from notifier to avoid stale reminders", async () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
@@ -2326,7 +2455,7 @@ describe("TaskController.execute", () => {
 		expect(sessionManager.isKillInProgress(agentId)).toBe(true);
 
 		// Verify the session was NOT disposed by finish()
-		// (the real SubagentSessionManager handles disposal via _cleanupAfterKill)
+		// (the real SubagentSessionManager handles disposal in its lifecycle finalizer)
 	});
 
 	it("async finish handler skips disposal when kill is in progress", async () => {

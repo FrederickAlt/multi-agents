@@ -208,6 +208,7 @@ export class SubagentSessionManager {
 	private asyncResultWaiters = new Map<string, Set<() => void>>();
 	private asyncInFlight = new Set<string>();
 	private killInProgress = new Set<string>();
+	private asyncRunLifecycle = new Map<string, "running" | "soft-killing" | "hard-aborting" | "completed">();
 	private _onAsyncResultReady: ((id: string) => void) | undefined;
 
 	constructor(
@@ -343,6 +344,7 @@ export class SubagentSessionManager {
 		}
 		this.completedSessions.delete(id);
 		this.asyncInFlight.delete(id);
+		this.asyncRunLifecycle.delete(id);
 	}
 
 	/**
@@ -363,6 +365,7 @@ export class SubagentSessionManager {
 		this.asyncResults.clear();
 		this.asyncResultWaiters.clear();
 		this.asyncInFlight.clear();
+		this.asyncRunLifecycle.clear();
 	}
 
 	// ---- Async completion ----
@@ -446,14 +449,34 @@ export class SubagentSessionManager {
 		});
 	}
 
+	/**
+	 * Mark async lifecycle result ownership and trigger durable cleanup.
+	 *
+	 * This keeps completion, result storage, state transitions, and
+	 * session disposal in one place instead of callers.
+	 */
+	finalizeAsyncRun(
+		id: string,
+		result: { output: string; error?: string; warnings: string[]; abortReason?: string },
+		options?: { allowOverwrite?: boolean },
+	): void {
+		this._finalizeAsyncRun(id, result, {
+			allowOverwrite: options?.allowOverwrite,
+		});
+	}
+
 	/** Mark a session ID as having an in-flight async prompt. */
 	markAsyncRunning(id: string): void {
 		this.asyncInFlight.add(id);
+		this.asyncRunLifecycle.set(id, "running");
 	}
 
 	/** Clear the in-flight marker for a session ID. */
 	clearAsyncRunning(id: string): void {
 		this.asyncInFlight.delete(id);
+		if (this.asyncRunLifecycle.get(id) === "running") {
+			this.asyncRunLifecycle.delete(id);
+		}
 	}
 
 	/** Clear a consumed async result from memory. */
@@ -471,12 +494,75 @@ export class SubagentSessionManager {
 		return this.completedSessions.has(id);
 	}
 
+	private _runLifecycleState(id: string): "running" | "soft-killing" | "hard-aborting" | "completed" | undefined {
+		return this.asyncRunLifecycle.get(id);
+	}
+
+	private _shouldStoreRunResult(id: string, options: { allowOverwrite?: boolean; source?: "task-controller" | "soft-kill" | "hard-abort" } = {}): boolean {
+		const state = this._runLifecycleState(id);
+		if (state === "completed") return false;
+		if (!options.allowOverwrite && this.killInProgress.has(id)) return false;
+		if (!options.allowOverwrite && (state === "soft-killing" || state === "hard-aborting")) {
+			return false;
+		}
+		if (options.allowOverwrite && state === "hard-aborting" && options.source !== "hard-abort") {
+			return false;
+		}
+		if (!options.allowOverwrite && this.asyncResults.has(id)) {
+			return false;
+		}
+		return true;
+	}
+
+	private _startSoftKill(id: string): boolean {
+		const state = this._runLifecycleState(id);
+		if (state === "completed" || state === "hard-aborting") return false;
+		this.asyncRunLifecycle.set(id, "soft-killing");
+		this.killInProgress.add(id);
+		this.clearAsyncRunning(id);
+		return true;
+	}
+
+	private _startHardAbort(id: string): boolean {
+		const state = this._runLifecycleState(id);
+		if (state === "completed") return false;
+		this.asyncRunLifecycle.set(id, "hard-aborting");
+		this.killInProgress.add(id);
+		this.clearAsyncRunning(id);
+		return true;
+	}
+
+	private _finalizeAsyncRun(
+		id: string,
+		result: { output: string; error?: string; warnings: string[]; abortReason?: string },
+		options: { allowOverwrite?: boolean; source?: "task-controller" | "soft-kill" | "hard-abort" } = {},
+	): void {
+		this.asyncInFlight.delete(id);
+
+		if (!this._shouldStoreRunResult(id, options)) {
+			if (this.asyncRunLifecycle.get(id) === "running") {
+				this.asyncRunLifecycle.delete(id);
+			}
+			return;
+		}
+
+		this.storeAsyncResult(id, result);
+		this.completedSessions.add(id);
+		this.asyncRunLifecycle.set(id, "completed");
+		this.killInProgress.delete(id);
+		const session = this.openSessions.get(id);
+		if (session) {
+			try { session.dispose(); } catch { /* best-effort */ }
+			this.openSessions.delete(id);
+		}
+	}
+
 	// ---- Kill / abort ----
 
 	/**
-	 * Check whether a soft-kill is in progress for the given session ID.
-	 * Used by the async finish handler to avoid disposing a session that
-	 * the kill flow still needs.
+	 * Check whether a kill flow (soft-kill or hard-abort) is currently in progress
+	 * for the given session ID. Used by the async finish handler to avoid
+	 * overwriting the lifecycle-owned result.
 	 */
 	isKillInProgress(id: string): boolean {
 		return this.killInProgress.has(id);
@@ -499,37 +585,32 @@ export class SubagentSessionManager {
 
 		const killMessage = `[System] The parent agent requires you to finish within ${timeoutMinutes} minute(s). Please produce your final answer now.`;
 
-		// Clear async-in-flight before aborting so the soft-kill prompt handoff
-		// is not treated as regular async completion.
-		this.clearAsyncRunning(id);
-
-		// Mark kill-in-progress BEFORE abort so the original finish() skips disposal.
-		this.killInProgress.add(id);
+		if (!this._startSoftKill(id)) return;
 
 		// Abort the current prompt; the original async handler observes
-		// killInProgress and leaves result ownership to this kill flow.
+		// kill flow state and leaves result ownership to this kill flow.
 		try { session.abort(); } catch { /* best-effort */ }
 
 		// Give the agent one last turn with the kill instruction.
 		session.prompt(killMessage).then(
 			() => {
-				if (this.asyncResults.has(id)) return;
 				// Agent finished successfully — store fresh output.
 				const extracted = extractOutput(session.messages as any[]);
-				this.storeAsyncResult(id, { output: extracted.text, warnings: [] });
-				this._cleanupAfterKill(id, session);
+				this._finalizeAsyncRun(id, { output: extracted.text, warnings: [] }, { allowOverwrite: true, source: "soft-kill" });
 			},
 			(error: any) => {
-				if (this.asyncResults.has(id)) return;
 				// Kill prompt crashed — store error + partial output.
 				const message = error instanceof Error ? error.message : String(error);
 				const extracted = extractOutput(session.messages as any[], message || undefined);
-				this.storeAsyncResult(id, {
-					output: extracted.text,
-					error: message || 'The sub-agent stopped without producing any output.',
-					warnings: [],
-				});
-				this._cleanupAfterKill(id, session);
+				this._finalizeAsyncRun(
+					id,
+					{
+						output: extracted.text,
+						error: message || "The sub-agent stopped without producing any output.",
+						warnings: [],
+					},
+					{ allowOverwrite: true, source: "soft-kill" },
+				);
 			},
 		);
 	}
@@ -547,41 +628,22 @@ export class SubagentSessionManager {
 		const session = this.openSessions.get(id);
 		if (!session) return;
 
-		// Mark kill-in-progress to prevent the original async reject handler
-		// from storing a competing result or disposing the session.
-		this.killInProgress.add(id);
+		if (!this._startHardAbort(id)) return;
 
 		// Capture partial output before abort using shared extraction.
-		const extracted = extractOutput(session.messages as any[], 'killed');
+		const extracted = extractOutput(session.messages as any[], "killed");
 
 		try { session.abort(); } catch { /* best-effort */ }
 
-		// Store partial output (or error) so wait_for_agent can return it.
-		this.storeAsyncResult(id, {
-			output: extracted.text || '',
-			error: 'killed',
-			warnings: [],
-		});
-
-		// Clean up: mark completed, clear run flags, dispose session.
-		// Defer killInProgress cleanup so the microtask'd reject handler
-		// still sees it and skips storing a competing result.
-		this.completedSessions.add(id);
-		this.asyncInFlight.delete(id);
-		try { session.dispose(); } catch { /* best-effort */ }
-		this.openSessions.delete(id);
-		queueMicrotask(() => this.killInProgress.delete(id));
-	}
-
-	/**
-	 * Shared cleanup after a soft-kill prompt finishes (success or failure).
-	 */
-	private _cleanupAfterKill(id: string, session: AgentSession): void {
-		this.completedSessions.add(id);
-		this.killInProgress.delete(id);
-		this.asyncInFlight.delete(id);
-		try { session.dispose(); } catch { /* best-effort */ }
-		this.openSessions.delete(id);
+		this._finalizeAsyncRun(
+			id,
+			{
+				output: extracted.text || "",
+				error: "killed",
+				warnings: [],
+			},
+			{ allowOverwrite: true, source: "hard-abort" },
+		);
 	}
 
 	// ---- Run serialization ----

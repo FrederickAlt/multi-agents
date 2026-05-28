@@ -325,20 +325,11 @@ export function configureTaskToolForRuntime(
 			const result = await controller.waitForAgent(
 				wParams.agent_ids,
 				{ timeout: wParams.timeout, kill_on_timeout: wParams.kill_on_timeout },
-				executeContext,
+				{
+					...executeContext,
+					consumeWaitForAgentIds: (ids) => _asyncAgentNotifier.consume(ids),
+				},
 			);
-
-			// Consume terminal async notifications so killed/completed agents are removed
-			// from the turn-boundary notification set.
-			const agents = (result.details as TaskDetails | undefined)?.agents;
-			if (agents) {
-				const consumed = agents
-					.filter((a) => a.status === "completed" || a.status === "killed")
-					.map((a) => a.id);
-				if (consumed.length > 0) {
-					_asyncAgentNotifier.consume(consumed);
-				}
-			}
 
 			return result;
 
@@ -622,8 +613,8 @@ export default function (pi: ExtensionAPI) {
 			rootFinalResponseGuardAttempts = 0;
 		}
 
-		if (event.source !== "extension" && _asyncAgentNotifier.hasPendingCompletion()) {
-			const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+		if (event.source !== "extension") {
+			const notification = _asyncAgentNotifier.takeDueNotification("input");
 			if (notification) {
 				return {
 					action: "transform" as const,
@@ -700,10 +691,11 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// Inject async-agent completion notifications at turn boundaries.
-	// The notifier owns first-notification and reminder cadence; this hook only
-	// delivers whichever consolidated message is currently due. Use an immediate
-	// follow-up turn rather than queueing nextTurn text, so retrieved results do
+	// Inject async-agent completion notifications at turn boundaries and input
+	// batching points. The notifier owns first-notification and reminder cadence;
+	// this hook only delivers whichever consolidated message is currently due.
+	// Use an immediate follow-up turn rather than queueing nextTurn text, so
+	// retrieved results do
 	// not leave stale completion messages waiting in the runtime queue.
 	pi.on("turn_end", (event: any) => {
 		const message = event?.message;
@@ -713,7 +705,7 @@ export default function (pi: ExtensionAPI) {
 			sendFinalResponseGuard();
 		}
 
-		const notification = _asyncAgentNotifier.takeNotificationForTurnBoundary();
+		const notification = _asyncAgentNotifier.takeDueNotification("turn_end");
 		if (notification) {
 			pi.sendMessage(
 				{
@@ -848,18 +840,10 @@ export const checkSpawnAllowed = TaskController.checkSpawnAllowed;
 export const resolveTaskAgent = TaskController.resolveTaskAgent;
 export const getFinalTextFromMessages = TaskController.getFinalTextFromMessages;
 export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opts, context) => {
-	const result = await new TaskController().waitForAgent(agentIds, opts, context);
-	// Consume terminal async notifications so killed/completed agents are removed
-	// from the turn-boundary notification set (mirrors the tool handler).
-	const agents = (result.details as TaskDetails | undefined)?.agents;
-	if (agents) {
-		const consumed = agents
-			.filter((a) => a.status === "completed" || a.status === "killed")
-			.map((a) => a.id);
-		if (consumed.length > 0) {
-			_asyncAgentNotifier.consume(consumed);
-		}
-	}
+	const result = await new TaskController().waitForAgent(agentIds, opts, {
+		...context,
+		consumeWaitForAgentIds: (ids) => _asyncAgentNotifier.consume(ids),
+	});
 	return result;
 };
 
