@@ -422,6 +422,9 @@ describe("TaskController.execute", () => {
 			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
 			waitForSessionEnd: vi.fn((id: string) => sessionManager.waitForSessionEnd(id)),
 			storeAsyncResult: vi.fn((id: string, result: any) => sessionManager.storeAsyncResult(id, result)),
+			finalizeAsyncRun: vi.fn((id: string, result: any, options?: { allowOverwrite?: boolean }) =>
+				sessionManager.finalizeAsyncRun(id, result, options),
+			),
 			getAsyncResult: vi.fn((id: string) => sessionManager.getAsyncResult(id)),
 			waitForAsyncResult: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForAsyncResult(id, signal)),
 			clearAsyncResult: vi.fn((id: string) => sessionManager.clearAsyncResult(id)),
@@ -2452,7 +2455,7 @@ describe("TaskController.execute", () => {
 		expect(sessionManager.isKillInProgress(agentId)).toBe(true);
 
 		// Verify the session was NOT disposed by finish()
-		// (the real SubagentSessionManager handles disposal via _cleanupAfterKill)
+		// (the real SubagentSessionManager handles disposal in its lifecycle finalizer)
 	});
 
 	it("async finish handler skips disposal when kill is in progress", async () => {

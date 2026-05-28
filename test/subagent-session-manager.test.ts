@@ -778,6 +778,83 @@ describe("SubagentSessionManager", () => {
 			expect(sm.getAsyncResult("kill-late")?.error).toBe("killed");
 			expect(onReady).toHaveBeenCalledTimes(1);
 		});
+
+		it("transitions running to soft-killing to completed", async () => {
+			const sm = createManager();
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
+
+			const id = "soft-complete";
+			let resolveKillPrompt: (() => void) | undefined;
+			const session = makeMockSession();
+			session.prompt = vi.fn(() => new Promise<void>((resolve) => {
+				resolveKillPrompt = resolve;
+			})) as any;
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "soft-kill final output" }] }];
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 1);
+			expect(sm.isKillInProgress(id)).toBe(true);
+			expect(sm.isAsyncRunning(id)).toBe(false);
+
+			resolveKillPrompt?.();
+			await Promise.resolve();
+
+			expect(sm.isKillInProgress(id)).toBe(false);
+			expect(sm.isCompleted(id)).toBe(true);
+			expect(sm.hasOpenSession(id)).toBe(false);
+			expect(sm.getAsyncResult(id)?.output).toBe("soft-kill final output");
+			expect(onReady).toHaveBeenCalledWith(id);
+		});
+
+		it("transitions running to soft-killing to hard-aborted", async () => {
+			const sm = createManager();
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
+
+			const id = "soft-hard-abort";
+			let rejectKillPrompt: ((error: Error) => void) | undefined;
+			const session = makeMockSession();
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "partial output" }] }];
+			session.prompt = vi.fn(() => new Promise<void>((_resolve, reject) => {
+				rejectKillPrompt = reject;
+			})) as any;
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 1);
+			expect(sm.isKillInProgress(id)).toBe(true);
+			sm.abortSession(id);
+
+			expect(sm.getAsyncResult(id)?.error).toBe("killed");
+			expect(sm.isKillInProgress(id)).toBe(false);
+			expect(sm.isCompleted(id)).toBe(true);
+			expect(sm.hasOpenSession(id)).toBe(false);
+
+			rejectKillPrompt?.(new Error("late kill prompt failure"));
+			await Promise.resolve();
+
+			expect(sm.getAsyncResult(id)?.error).toBe("killed");
+			expect(onReady).toHaveBeenCalledTimes(1);
+		});
+
+		it("transitions running to hard-aborted", () => {
+			const sm = createManager();
+			const id = "hard-abort";
+			const session = makeMockSession();
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "pre-abort output" }] }];
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.abortSession(id);
+
+			expect(sm.getAsyncResult(id)?.error).toBe("killed");
+			expect(sm.getAsyncResult(id)?.output).toBe("pre-abort output");
+			expect(sm.isKillInProgress(id)).toBe(false);
+			expect(sm.isCompleted(id)).toBe(true);
+			expect(sm.hasOpenSession(id)).toBe(false);
+		});
 	});
 });
 

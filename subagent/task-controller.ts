@@ -96,6 +96,12 @@ export interface SessionAdapter {
 	waitForSessionEnd(id: string): Promise<void>;
 	/** Store the output/error result of a completed async session. */
 	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void;
+	/** Finalize async completion and apply lifecycle transitions and cleanup. */
+	finalizeAsyncRun(
+		id: string,
+		result: { output: string; error?: string; warnings: string[]; abortReason?: string },
+		options?: { allowOverwrite?: boolean },
+	): void;
 	/** Retrieve a previously stored async result. */
 	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string } | undefined;
 	/** Wait until a completed async session result has been stored. */
@@ -122,9 +128,8 @@ export interface SessionAdapter {
 	 */
 	abortSession(id: string): void;
 	/**
-	 * Check whether a soft-kill is in progress for the given session ID.
-	 * Used by the async finish handler to avoid disposing a session that
-	 * the kill flow still needs.
+	 * Check whether a kill flow (soft-kill or hard-abort) is in progress for the
+	 * given session ID.
 	 */
 	isKillInProgress(id: string): boolean;
 }
@@ -645,21 +650,27 @@ export class TaskController {
 					if (context.signal?.aborted) abort();
 					else context.signal?.addEventListener("abort", abort, { once: true });
 
-					const finish = (resolved: boolean, terminal?: { text: string; source: 'assistant' | 'diagnostic' | 'none' }) => {
+					const finish = (
+						resolved: boolean,
+						errorMessage: string | undefined,
+						terminal?: { text: string; source: 'assistant' | 'diagnostic' | 'none' },
+					) => {
 						context.signal?.removeEventListener("abort", abort);
 						try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
-						if (resolved && !sessionManager.isKillInProgress(record!.id) && !sessionManager.getAsyncResult(record!.id)) {
+						if (resolved) {
 							const extracted = terminal ?? TaskController.extractTerminalOutput(session.messages as any[]);
-							sessionManager.storeAsyncResult(record!.id, {
+							sessionManager.finalizeAsyncRun(record!.id, {
 								output: extracted.text,
 								...(extracted.source === 'diagnostic' ? { error: extracted.text } : {}),
 								warnings,
 							});
-						}
-						sessionManager.clearAsyncRunning(record!.id);
-						// If a soft-kill is in progress, the kill flow owns cleanup.
-						if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.isCompleted(record!.id)) {
-							try { sessionManager.disposeSession(record!.id); } catch { /* may already be disposed */ }
+						} else {
+							const extracted = TaskController.extractOutput(session.messages as any[], errorMessage);
+							sessionManager.finalizeAsyncRun(record!.id, {
+								output: extracted.text,
+								error: errorMessage,
+								warnings,
+							});
 						}
 					};
 
@@ -667,16 +678,10 @@ export class TaskController {
 						.then(() => session.prompt(params.prompt))
 						.then(() => TaskController._ensureFinalResponse(session))
 						.then(
-							(terminal) => finish(true, terminal),
+							(terminal) => finish(true, undefined, terminal),
 							(err: unknown) => {
 								const message = err instanceof Error ? err.message : String(err);
-								// When a soft-kill or hard-abort is in progress, the kill/abort
-								// flow owns the result. Skip storing to avoid overwriting it.
-								if (!sessionManager.isKillInProgress(record!.id) && !sessionManager.getAsyncResult(record!.id)) {
-									const extracted = TaskController.extractOutput(session.messages as any[], message);
-									sessionManager.storeAsyncResult(record!.id, { output: extracted.text, error: message, warnings });
-								}
-								finish(false);
+								finish(false, message);
 							},
 						);
 
