@@ -143,7 +143,7 @@ describe("discoverAgents", () => {
 	it("parses checkbox fields as YAML arrays", () => {
 		writeAgent(agentsDir, "ArrayAgent", "Agent with YAML arrays", {
 			tools: ["read", "bash", "edit"],
-			extensions: [],
+			extensions: ["web"],
 			can_spawn: ["explorer", "reviewer"],
 			skills: ["tdd"],
 			prompt_parts: ["010-tools", "020-runtime-context"],
@@ -153,10 +153,38 @@ describe("discoverAgents", () => {
 		const agent = result.agents.find((a) => a.name === "arrayagent")!;
 		expect(agent).toBeDefined();
 		expect(agent.tools).toEqual(["read", "bash", "edit"]);
-		expect(agent.extensions).toEqual([]);
+		expect(agent.extensions).toEqual(["web"]);
 		expect(agent.can_spawn).toEqual(["explorer", "reviewer"]);
 		expect(agent.skills).toEqual(["tdd"]);
 		expect(agent.prompt_parts).toEqual(["010-tools", "020-runtime-context"]);
+	});
+
+	it("treats blank tools/extensions fields as missing while preserving explicit empty arrays", () => {
+		writeFileSync(join(agentsDir, "blank-runtime.md"), `---
+description: Agent with blank runtime fields
+tools:
+extensions:
+---
+
+Blank runtime fields.
+`, "utf-8");
+		writeFileSync(join(agentsDir, "empty-runtime.md"), `---
+description: Agent with explicit empty runtime arrays
+tools: []
+extensions: []
+---
+
+Empty runtime arrays.
+`, "utf-8");
+
+		const result = discoverAgents();
+		const blankRuntime = result.agents.find((a) => a.name === "blank-runtime")!;
+		const emptyRuntime = result.agents.find((a) => a.name === "empty-runtime")!;
+
+		expect(blankRuntime.tools).toBeUndefined();
+		expect(blankRuntime.extensions).toBeUndefined();
+		expect(emptyRuntime.tools).toEqual([]);
+		expect(emptyRuntime.extensions).toEqual([]);
 	});
 
 	it("parses skills field with tri-state semantics", () => {

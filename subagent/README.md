@@ -90,8 +90,8 @@ Frontmatter fields:
 | Field | Type | Description |
 |---|---|---|
 | `description` | string | Required. Short description for agent lists |
-| `tools` | comma-separated | Tool whitelist |
-| `extensions` | comma-separated | Filter for extensions to load |
+| `tools` | YAML list or comma-separated | Tool whitelist. Missing/blank = Pi defaults; `[]` = no tools |
+| `extensions` | YAML list or comma-separated | Filter for extensions to load. Missing/blank = unrestricted; `[]` = no extensions |
 | `model` | string | Model override |
 | `reasoning_effort` | string | Thinking/reasoning effort level |
 | `depth` | number | Spawn allowance — how many more Task levels this agent permits |

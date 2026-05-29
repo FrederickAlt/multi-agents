@@ -27,7 +27,9 @@ export type AgentSource = "builtin" | "user" | "project";
 export interface AgentConfig {
 	name: string;
 	description: string;
+	/** Tool whitelist. Missing or blank field means use Pi defaults; explicit [] means no tools. */
 	tools?: string[];
+	/** Extension allowlist. Missing or blank field means unrestricted; explicit [] means no extensions. */
 	extensions?: string[];
 	model?: string;
 	/** Thinking/reasoning effort level for the model. Maps to ThinkingLevel from pi-ai. */
@@ -98,6 +100,21 @@ function parseCheckboxField(
 	return [];
 }
 
+function parseRuntimeResourceField(
+	value: unknown,
+): string[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (Array.isArray(value)) {
+		const items = value.map((v: unknown) => String(v).trim()).filter(Boolean);
+		return items.length > 0 ? items : [];
+	}
+	if (typeof value === "string") {
+		const items = value.split(",").map((v) => v.trim()).filter(Boolean);
+		return items.length > 0 ? items : undefined;
+	}
+	return [];
+}
+
 /**
  * Map a generic RawMarkdownDefinition to an agent-specific AgentConfig.
  *
@@ -107,8 +124,8 @@ function parseCheckboxField(
 function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 	const fm = raw.frontmatter;
 
-	const tools = parseCheckboxField(fm.tools);
-	const extensions = parseCheckboxField(fm.extensions);
+	const tools = parseRuntimeResourceField(fm.tools);
+	const extensions = parseRuntimeResourceField(fm.extensions);
 	const can_spawn = parseCheckboxField(fm.can_spawn);
 	const skills = parseCheckboxField(fm.skills);
 	const prompt_parts = parseCheckboxField(fm.prompt_parts);

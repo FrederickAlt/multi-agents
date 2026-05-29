@@ -53,6 +53,91 @@ describe("Task sub-agent resource loading", () => {
 		}
 	});
 
+	it("does not convert blank tools on a self-spawned agent into an empty tool whitelist", async () => {
+		writeFile(join(agentDiscoveryDir, "agents", "default.md"), `---
+description: Default Root Agent
+depth: 1
+tools:
+can_spawn:
+  - default
+---
+
+Default Root Agent
+`);
+
+		const fakeSession = {
+			messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
+			prompt: vi.fn().mockResolvedValue(undefined),
+			abort: vi.fn(),
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => vi.fn()),
+			getActiveToolNames: () => ["read", "bash"],
+		};
+		const createAgentSessionMock = vi.fn().mockResolvedValue({ session: fakeSession });
+
+		vi.doMock("@mariozechner/pi-coding-agent", async (importOriginal) => {
+			const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+			class MockDefaultResourceLoader {
+				options: any;
+				constructor(options: any) {
+					this.options = options;
+					constructedLoaders.push(this as any);
+				}
+				async reload() {}
+			}
+			return {
+				...actual,
+				DefaultResourceLoader: MockDefaultResourceLoader,
+				createAgentSession: createAgentSessionMock,
+			};
+		});
+
+		const { default: taskExtension } = await import("../subagent/index.js");
+		const tools: any[] = [];
+		const flags = new Map<string, string | boolean | undefined>();
+		const handlers = new Map<string, any>();
+		const pi = {
+			on: (event: string, handler: any) => handlers.set(event, handler),
+			registerTool: (tool: any) => tools.push(tool),
+			registerCommand: vi.fn(),
+			registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
+			getFlag: (name: string) => flags.get(name),
+			getActiveTools: () => ["read", "bash"],
+			getAllTools: () => [],
+			setActiveTools: vi.fn(),
+		} as any;
+		taskExtension(pi);
+
+		const sm = makeSessionManager(sessionDir, "root-session");
+		await handlers.get("before_agent_start")({
+			systemPrompt: "base prompt",
+			systemPromptOptions: { cwd: projectDir },
+		}, { cwd: projectDir, sessionManager: sm });
+
+		const taskTool = tools.find((tool) => tool.name === "Task");
+		expect(taskTool).toBeDefined();
+
+		await taskTool.execute(
+			"call-1",
+			{
+				description: "Spawn default",
+				prompt: "Return ok",
+				subagent_type: "default",
+				cwd: projectDir,
+			},
+			undefined,
+			undefined,
+			{
+				cwd: projectDir,
+				sessionManager: makeSessionManager(sessionDir, "root-session"),
+				modelRegistry: {},
+			},
+		);
+
+		expect(createAgentSessionMock).toHaveBeenCalled();
+		expect(createAgentSessionMock.mock.calls.at(-1)?.[0].tools).toBeUndefined();
+	});
+
 	it("disables native context-file injection while keeping context available to {{context_files}}", async () => {
 		writeFile(join(projectDir, "AGENTS.md"), "PROJECT CONTEXT MARKER");
 		writeFile(join(agentDiscoveryDir, "agents", "contextreader.md"), `---
