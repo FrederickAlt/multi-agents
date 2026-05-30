@@ -375,7 +375,7 @@ export function configureTaskToolForRuntime(
 // share the same tracked sessions.
 let _sessionManager: SubagentSessionManager | undefined;
 
-// Module-level notifier singleton — injected at turn boundaries.
+// Module-level notifier singleton — injected at safe run boundaries or batched into user input.
 const _asyncAgentNotifier = new AsyncAgentNotifier();
 
 export const __testing = {
@@ -685,28 +685,10 @@ export default function (pi: ExtensionAPI) {
 		rootFinalResponseGuardActive = false;
 	});
 
-	pi.on("agent_end", (event: any) => {
-		if (!rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && needsFinalResponsePrompt(event?.messages ?? [])) {
-			sendFinalResponseGuard({ delayed: true });
-		}
-	});
-
-	// Inject async-agent completion notifications at turn boundaries and input
-	// batching points. The notifier owns first-notification and reminder cadence;
-	// this hook only delivers whichever consolidated message is currently due.
-	// Use an immediate follow-up turn rather than queueing nextTurn text, so
-	// retrieved results do
-	// not leave stale completion messages waiting in the runtime queue.
-	pi.on("turn_end", (event: any) => {
-		const message = event?.message;
-		const content = Array.isArray(message?.content) ? message.content : [];
-		const hasToolCall = content.some((part: any) => part?.type === "toolCall");
-		if (message?.role === "assistant" && !rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && !hasToolCall && needsFinalResponsePrompt([message])) {
-			sendFinalResponseGuard();
-		}
-
-		const notification = _asyncAgentNotifier.takeDueNotification("turn_end");
-		if (notification) {
+	const sendAsyncAgentNotification = (options: { delayed?: boolean } = {}) => {
+		const send = () => {
+			const notification = _asyncAgentNotifier.takeDueNotification("turn_end");
+			if (!notification) return;
 			pi.sendMessage(
 				{
 					customType: "system",
@@ -715,6 +697,28 @@ export default function (pi: ExtensionAPI) {
 				},
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
+		};
+		if (options.delayed) setTimeout(send, 0);
+		else send();
+	};
+
+	pi.on("agent_end", (event: any) => {
+		if (!rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && needsFinalResponsePrompt(event?.messages ?? [])) {
+			sendFinalResponseGuard({ delayed: true });
+		}
+		sendAsyncAgentNotification({ delayed: true });
+	});
+
+	// Inject async-agent completion notifications at run boundaries and input
+	// batching points. Revalidate after agent_end instead of queuing static
+	// follow-up text from turn_end; the root agent may consume the result before
+	// the queued follow-up would be delivered.
+	pi.on("turn_end", (event: any) => {
+		const message = event?.message;
+		const content = Array.isArray(message?.content) ? message.content : [];
+		const hasToolCall = content.some((part: any) => part?.type === "toolCall");
+		if (message?.role === "assistant" && !rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && !hasToolCall && needsFinalResponsePrompt([message])) {
+			sendFinalResponseGuard();
 		}
 	});
 

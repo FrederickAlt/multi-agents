@@ -8,17 +8,17 @@ Users want to spawn sub-agents asynchronously, continue doing other work, and re
 
 ## Solution
 
-Add a `blocking` parameter to the `Task` tool (default `true`, preserving backward compatibility). When `blocking: false`, the tool spawns the sub-agent and returns immediately with the agent ID. A new `wait_for_agent` tool lets the parent retrieve results from one or more async agents. The system notifies the parent at turn boundaries when an async agent finishes, with a recurring reminder every 5 turns if unconsumed agents remain.
+Add a `blocking` parameter to the `Task` tool (default `true`, preserving backward compatibility). When `blocking: false`, the tool spawns the sub-agent and returns immediately with the agent ID. A new `wait_for_agent` tool lets the parent retrieve results from one or more async agents. The system notifies the parent at safe root-agent run boundaries when an async agent finishes, with a recurring reminder every 5 notification opportunities if unconsumed agents remain.
 
 ## User Stories
 
 1. As a root agent, I want to spawn a sub-agent asynchronously with `blocking: false`, so that I can continue working on other tasks while the sub-agent runs independently.
 2. As a root agent, I want the `blocking` parameter to default to `true`, so that existing Task calls and agent behaviors are unchanged unless I explicitly opt into async.
 3. As a root agent, I want to receive a system notification when an async sub-agent finishes, so that I know when results are ready without polling.
-4. As a root agent, I want the notification to arrive at the next turn boundary, so that I am never interrupted mid-action.
+4. As a root agent, I want the notification to arrive when my current run would otherwise stop, so that I am never interrupted mid-action and the notification reflects the latest consumed/unconsumed state.
 5. As a root agent, I want notifications for multiple finishing agents to be consolidated into a single message, so that I am not spammed with one notification per agent.
-6. As a root agent, I want to be reminded every ~5 turns about unconsumed agents, so that I do not forget to retrieve results.
-7. As a root agent, I want the 5-turn reminder counter to reset whenever a new agent finishes, so that I see fresh completions immediately.
+6. As a root agent, I want to be reminded every ~5 safe notification opportunities about unconsumed agents, so that I do not forget to retrieve results.
+7. As a root agent, I want the reminder counter to reset whenever a new agent finishes, so that I see fresh completions immediately.
 8. As a root agent, I want a still-pending async notification batched into the next submitted user input, so that the user's turn is not interrupted by an extra system message when the input arrives before the separate notification is emitted.
 9. As a root agent, I want the `wait_for_agent` tool to accept a list of sub-agent IDs, so that I can wait on multiple agents at once.
 10. As a root agent, I want `wait_for_agent` to return as soon as any listed agent has finished, so that I can consume results incrementally and decide whether to keep waiting for the rest.
@@ -63,9 +63,14 @@ On timeout, still-running agents are reported as "timed out, still running." If 
 A new module `AsyncAgentNotifier` owns the notification lifecycle:
 
 - When an async agent's final result has been stored, the notifier records the agent as completed-but-unconsumed.
-- At the next turn boundary, a consolidated `[System]` message is injected as an immediate follow-up turn listing all unconsumed completed agents and instructing the parent to call `wait_for_agent` with their IDs.
-- If any agents remain unconsumed after 5 turns with no new completions, the message is re-injected.
-- If a new agent finishes during this window, the message is injected immediately on the next turn and the counter resets.
+- Notifications are delivered at safe root-agent run boundaries, not at intermediate assistant `turn_end` events.
+  - A **root-agent run** starts with a user prompt or automatic follow-up and ends at `agent_end`, when the root agent would otherwise become idle and return control to the user.
+  - A run may contain multiple assistant/tool turns and therefore multiple `turn_end` events.
+  - The extension intentionally does not build static notification text at `turn_end`, because the root agent can still call `wait_for_agent` later in the same run. If the text were queued then, it could become stale before Pi delivers it.
+- After `agent_end`, the extension revalidates the current unconsumed-agent set. If any completed agents remain unconsumed, it injects a consolidated `[System]` message listing their IDs and instructing the parent to call `wait_for_agent`.
+- The Pi enqueue mechanism for these automatic notifications is `pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" })`. Because this is sent after `agent_end`, it starts an automatic follow-up turn and does not wait for the next user input. If called while a run is still active, Pi would queue a frozen follow-up message, which is the stale-notification class this design avoids.
+- If any agents remain unconsumed after 5 safe notification opportunities with no new completions, the message is re-injected.
+- If a new agent finishes during this window, the message is injected at the next safe run boundary and the counter resets.
 - If user input is submitted while a completion notification is still pending, the notification is prepended to that submitted input rather than injected as a separate follow-up turn.
 
 ### 4. Outcome-agnostic output extraction
@@ -105,8 +110,8 @@ Tests should verify external behavior — what the parent agent observes — not
 
 - **`TaskController`** (existing test file): Add tests for `blocking: false` (returns immediately with agent ID), `blocking: true` (unchanged), `waitForAgents()` (returns per-agent output, handles timeout, handles unknown IDs, handles kill_on_timeout escalation), shared outcome-agnostic extraction (returns partial output on crash, returns error when transcript empty).
 - **`SubagentSessionManager`** (existing test file): Add tests for async result-ready notification callback registration and waiting for result storage without blocking the parent session.
-- **`AsyncAgentNotifier`** (new test file): Test the notification state machine in isolation — consolidated message content, 5-turn counter, counter reset on new completion, empty state produces no notification, multiple agents in one message. These tests operate on pure state transitions with no Pi runtime dependency.
-- **Async notification runtime integration**: Add a behavior-level regression test for stale notification delivery. Through the extension-facing `sendMessage`/`input`/`turn_end` interface, simulate an async completion notification becoming due, retrieve the result with `wait_for_agent`, then submit the next user input. The parent should not observe the previously consumed agent ID in a later notification. This test should fail if notifications are queued as deferred `nextTurn` text and pass when they are delivered as immediate follow-up turns or otherwise revalidated before delivery.
+- **`AsyncAgentNotifier`** (new test file): Test the notification state machine in isolation — consolidated message content, reminder counter, counter reset on new completion, empty state produces no notification, multiple agents in one message. These tests operate on pure state transitions with no Pi runtime dependency.
+- **Async notification runtime integration**: Add a behavior-level regression test for stale notification delivery. Through the extension-facing `sendMessage`/`input`/`turn_end`/`agent_end` interface, simulate an async completion becoming due during a root-agent run, retrieve the result with `wait_for_agent` before the run ends, then end the run and submit the next user input. The parent should not observe the previously consumed agent ID in a later notification. This test should fail if notifications are queued as frozen deferred text from `turn_end` and pass when notification content is built only after run-boundary revalidation.
 
 ### Test patterns
 

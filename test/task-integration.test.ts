@@ -41,6 +41,7 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 	const registeredTools: any[] = [];
 	const sentMessages: Array<{ message: any; options?: any }> = [];
 	const nextTurnMessages: any[] = [];
+	const followUpMessages: any[] = [];
 	let activeTools = [...(options.activeTools ?? ["read", "bash", "edit", "write"])];
 	const pi = {
 		on: (event: string, handler: any) => handlers.set(event, handler),
@@ -49,6 +50,7 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 		sendMessage: (message: any, options?: any) => {
 			sentMessages.push({ message, options });
 			if (options?.deliverAs === "nextTurn") nextTurnMessages.push(message);
+			if (options?.deliverAs === "followUp") followUpMessages.push(message);
 		},
 		registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
 		getFlag: (name: string) => flags.get(name),
@@ -57,8 +59,9 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 		_registeredTools: registeredTools,
 		_sentMessages: sentMessages,
 		_nextTurnMessages: nextTurnMessages,
+		_followUpMessages: followUpMessages,
 		_promptTextForNextUserInput: (text: string) => {
-			const queued = nextTurnMessages.splice(0);
+			const queued = [...followUpMessages.splice(0), ...nextTurnMessages.splice(0)];
 			return [text, ...queued.map((message) => String(message.content ?? ""))].join("\n\n");
 		},
 		_getActiveTools: () => [...activeTools],
@@ -617,72 +620,91 @@ describe("extension loading", () => {
 			expect((pi as any)._sentMessages).toHaveLength(0);
 		});
 
-		it("emits turn-boundary notifications and reminders without duplicate spam", () => {
-			const { pi, handlers } = createFakeExtensionApi();
-			taskExtension(pi);
-			__testing.asyncAgentNotifier.markCompleted("agent-a");
-			__testing.asyncAgentNotifier.markCompleted("agent-b");
+		it("emits run-boundary notifications and reminders without duplicate spam", async () => {
+			vi.useFakeTimers();
+			try {
+				const { pi, handlers } = createFakeExtensionApi();
+				taskExtension(pi);
+				__testing.asyncAgentNotifier.markCompleted("agent-a");
+				__testing.asyncAgentNotifier.markCompleted("agent-b");
 
-			const turnEnd = handlers.get("turn_end");
-			turnEnd();
-			expect((pi as any)._sentMessages).toHaveLength(1);
-			expect((pi as any)._sentMessages[0].message.content).toContain("agent-a");
-			expect((pi as any)._sentMessages[0].message.content).toContain("agent-b");
+				const agentEnd = handlers.get("agent_end");
+				const completedTurn = { messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }] };
+				agentEnd(completedTurn);
+				await vi.runOnlyPendingTimersAsync();
+				expect((pi as any)._sentMessages).toHaveLength(1);
+				expect((pi as any)._sentMessages[0].message.content).toContain("agent-a");
+				expect((pi as any)._sentMessages[0].message.content).toContain("agent-b");
 
-			for (let i = 0; i < 4; i++) turnEnd();
-			expect((pi as any)._sentMessages).toHaveLength(1);
+				for (let i = 0; i < 4; i++) {
+					agentEnd(completedTurn);
+					await vi.runOnlyPendingTimersAsync();
+				}
+				expect((pi as any)._sentMessages).toHaveLength(1);
 
-			turnEnd();
-			expect((pi as any)._sentMessages).toHaveLength(2);
-			expect((pi as any)._sentMessages[1].message.content).toContain("Reminder");
-			expect((pi as any)._sentMessages[1].message.content).toContain("agent-a");
-			expect((pi as any)._sentMessages[1].message.content).toContain("agent-b");
+				agentEnd(completedTurn);
+				await vi.runOnlyPendingTimersAsync();
+				expect((pi as any)._sentMessages).toHaveLength(2);
+				expect((pi as any)._sentMessages[1].message.content).toContain("Reminder");
+				expect((pi as any)._sentMessages[1].message.content).toContain("agent-a");
+				expect((pi as any)._sentMessages[1].message.content).toContain("agent-b");
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("does not deliver a stale completion notification after wait_for_agent retrieves the result", async () => {
-			const { pi, handlers } = createFakeExtensionApi();
-			taskExtension(pi);
-			__testing.asyncAgentNotifier.markCompleted("agent-a");
+			vi.useFakeTimers();
+			try {
+				const { pi, handlers } = createFakeExtensionApi();
+				taskExtension(pi);
+				__testing.asyncAgentNotifier.markCompleted("agent-a");
 
-			handlers.get("turn_end")?.();
+				handlers.get("turn_end")?.();
 
-			const asyncResults = new Map([
-				["agent-a", { output: "retrieved output", warnings: [] }],
-			]);
-			const waitResult = await waitForAgentTool(
-				["agent-a"],
-				{},
-				{
-					metadataStore: {
-						findRecord: () => ({
-							id: "agent-a",
-							humanName: "Ava",
-							displayName: "explorer Ava",
-							agentType: "explorer",
-							sessionFile: "",
-							depth: 1,
-							createdAt: "2024-01-01T00:00:00.000Z",
-							updatedAt: "2024-01-01T00:00:00.000Z",
-						}),
-					},
-					sessionManager: {
-						getAsyncResult: (id: string) => asyncResults.get(id),
-						clearAsyncResult: (id: string) => { asyncResults.delete(id); },
-					},
-				} as any,
-			);
-			const waitText = waitResult.content[0]?.type === "text" ? waitResult.content[0].text : "";
-			expect(waitText).toContain("retrieved output");
+				const asyncResults = new Map([
+					["agent-a", { output: "retrieved output", warnings: [] }],
+				]);
+				const waitResult = await waitForAgentTool(
+					["agent-a"],
+					{},
+					{
+						metadataStore: {
+							findRecord: () => ({
+								id: "agent-a",
+								humanName: "Ava",
+								displayName: "explorer Ava",
+								agentType: "explorer",
+								sessionFile: "",
+								depth: 1,
+								createdAt: "2024-01-01T00:00:00.000Z",
+								updatedAt: "2024-01-01T00:00:00.000Z",
+							}),
+						},
+						sessionManager: {
+							getAsyncResult: (id: string) => asyncResults.get(id),
+							clearAsyncResult: (id: string) => { asyncResults.delete(id); },
+						},
+					} as any,
+				);
+				const waitText = waitResult.content[0]?.type === "text" ? waitResult.content[0].text : "";
+				expect(waitText).toContain("retrieved output");
 
-			const inputResult = await handlers.get("input")(
-				{ type: "input", text: "next user request", source: "interactive" },
-				{ cwd: tempDir, sessionManager: makeSessionManager(tempDir, "stale-notification-session"), ui: { notify: () => {} } },
-			);
-			const submittedText = inputResult?.action === "transform" ? inputResult.text : "next user request";
-			const promptText = (pi as any)._promptTextForNextUserInput(submittedText);
+				handlers.get("agent_end")?.({ messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }] });
+				await vi.runOnlyPendingTimersAsync();
 
-			expect(promptText).toContain("next user request");
-			expect(promptText).not.toContain("agent-a");
+				const inputResult = await handlers.get("input")(
+					{ type: "input", text: "next user request", source: "interactive" },
+					{ cwd: tempDir, sessionManager: makeSessionManager(tempDir, "stale-notification-session"), ui: { notify: () => {} } },
+				);
+				const submittedText = inputResult?.action === "transform" ? inputResult.text : "next user request";
+				const promptText = (pi as any)._promptTextForNextUserInput(submittedText);
+
+				expect(promptText).toContain("next user request");
+				expect(promptText).not.toContain("agent-a");
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("asks the root agent to continue when a turn would end with thinking only", () => {
