@@ -188,31 +188,33 @@ describe("extension loading", () => {
 		session.dispose();
 	});
 
-	it("Task tool has promptSnippet and promptGuidelines for LLM context", async () => {
-		const sessionManager = SessionManager.inMemory();
-		const resourceLoader = new DefaultResourceLoader({
-			cwd: tempDir,
-			agentDir,
-			extensionFactories: [taskExtension],
-		});
-		await resourceLoader.reload();
+	it("Task and wait_for_agent tools have prompt context for LLMs", () => {
+		const { pi } = createFakeExtensionApi();
+		const runtime = {
+			treeDepth: 0,
+			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
+		};
 
-		const { session } = await createAgentSession({
-			cwd: tempDir,
-			agentDir,
-			model: getModel("anthropic", "claude-sonnet-4-5")!,
-			sessionManager,
-			resourceLoader,
-		});
+		configureTaskToolForRuntime(pi, runtime, async () => ({
+			content: [{ type: "text", text: "unused" }],
+			details: { warnings: [] },
+		}));
 
-		// Bind extensions so session_start fires and registers Task via the resolved policy
-		await session.bindExtensions({});
-
-		const taskTool = session.getAllTools().find((t) => t.name === "Task");
+		const taskTool = latestTaskTool(pi);
 		expect(taskTool).toBeDefined();
-		expect(taskTool?.description).toBeDefined();
+		expect(taskTool?.promptSnippet).toContain("sub-agent");
+		expect(taskTool?.promptGuidelines).toEqual(expect.arrayContaining([
+			expect.stringContaining("delegate"),
+			expect.stringContaining("blocking:false"),
+		]));
 
-		session.dispose();
+		const waitForAgentTool = (pi as any)._registeredTools.find((t: any) => t.name === "wait_for_agent");
+		expect(waitForAgentTool).toBeDefined();
+		expect(waitForAgentTool?.promptSnippet).toContain("async sub-agent");
+		expect(waitForAgentTool?.promptGuidelines).toEqual(expect.arrayContaining([
+			expect.stringContaining("wait_for_agent"),
+			expect.stringContaining("timeout"),
+		]));
 	});
 
 	it("renders the configured default Root agent when the session has no /agent selection", async () => {

@@ -42,8 +42,13 @@ function addUnique(values: string[], value: string): void {
 export function getAgentDepth(agent: AgentConfigState | undefined): number {
 	const raw = agent?.frontmatter?.depth;
 	if (raw === undefined || raw === null || raw === "") return 0;
-	const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
-	return Number.isFinite(parsed) ? parsed : 0;
+	if (typeof raw === "number") {
+		return Number.isSafeInteger(raw) && raw >= 0 ? raw : 0;
+	}
+	const trimmed = String(raw).trim();
+	if (!/^-?\d+$/.test(trimmed)) return 0;
+	const parsed = Number.parseInt(trimmed, 10);
+	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 export function isOptionColumnDisabledForAgent(

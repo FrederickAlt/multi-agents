@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { Board } from "../src/tui/components/Board.js";
 import { AgentRow } from "../src/tui/components/AgentRow.js";
 import { OptionColumn } from "../src/tui/components/OptionColumn.js";
+import { HelpFooter } from "../src/tui/components/HelpFooter.js";
 import { MODEL_OPTION_DEGRADED_STATUS } from "../src/tui/state/option-columns.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../src/tui/state/types.js";
 
@@ -66,6 +67,20 @@ function collectText(node: React.ReactNode): string {
 	}
 	return "";
 }
+
+describe("HelpFooter", () => {
+	it("advertises rescan outside inline option filtering mode", () => {
+		const text = collectText(<HelpFooter />);
+		expect(text).toContain("r rescan");
+		expect(text).toContain("Enter/Space expand");
+	});
+
+	it("shows filter help instead of r rescan in inline option filtering mode", () => {
+		const text = collectText(<HelpFooter filteringInlineOptions />);
+		expect(text).toContain("type to filter");
+		expect(text).not.toContain("r rescan");
+	});
+});
 
 describe("Board", () => {
 	it("renders AgentRow components for all visible agents in vertical layout", () => {

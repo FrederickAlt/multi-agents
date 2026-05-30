@@ -932,14 +932,20 @@ describe("inline Option columns", () => {
 		expect(next.focus.fieldIndex).toBe(3);
 	});
 
-	it("greys out Task and skips can_spawn when depth is 0", () => {
+	it.each([
+		["zero", 0],
+		["negative", -1],
+		["float", 2.5],
+		["float string", "2.5"],
+		["oversized string", "9".repeat(400)],
+	])("greys out Task and skips can_spawn when depth is %s", (_label, depth) => {
 		const options = makeOptions({
 			tools: ["Task", "read"],
 			canSpawn: ["self-agent", "peer"],
 		});
 		const agent = makeAgent({
 			name: "self-agent",
-			frontmatter: { depth: 0 },
+			frontmatter: { depth },
 		});
 		const state: ConfigState = {
 			...createInitialState(),

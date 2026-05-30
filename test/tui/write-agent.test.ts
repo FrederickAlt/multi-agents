@@ -1,9 +1,26 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgent } from "../../src/tui/file-io/read-agent.js";
+import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
+
+const mockWriteFile = vi.hoisted(() => ({ shouldFail: false }));
+
+vi.mock("node:fs", async () => {
+	const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+	return {
+		...actual,
+		writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+			if (mockWriteFile.shouldFail) {
+				const err: NodeJS.ErrnoException = new Error("permission denied") as NodeJS.ErrnoException;
+				err.code = "EACCES";
+				throw err;
+			}
+			return actual.writeFileSync(...args);
+		},
+	};
+});
 
 let tempDir: string;
 
@@ -241,16 +258,15 @@ describe("writeFieldToFile", () => {
 			const p = writeTempFile(
 				["---", "description: test", "---", "", "body"].join("\n"),
 			);
-			// Remove write permission from the file
-			fs.chmodSync(p, 0o444);
+			mockWriteFile.shouldFail = true;
+
 			try {
 				const result = writeFieldToFile(p, "model", "claude");
 				expect(result.success).toBe(false);
 				expect(result.error).toBeDefined();
 				expect(result.error!.toLowerCase()).toMatch(/read.only|readonly/);
 			} finally {
-				// Restore write permission for cleanup
-				fs.chmodSync(p, 0o644);
+				mockWriteFile.shouldFail = false;
 			}
 		});
 

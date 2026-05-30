@@ -8,34 +8,33 @@ import * as path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-// Set PI_CODING_AGENT_DIR before importing modules that use getAgentDir()
-const tempRoot = fs.mkdtempSync(path.join(tmpdir(), "pi-config-integration-"));
-process.env.PI_CODING_AGENT_DIR = tempRoot;
-
 import { scanAgents, readAgent, detectStaleItems } from "../../src/tui/file-io/read-agent.js";
 import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
-import {
-	discoverTools,
-	discoverExtensions,
-	discoverSkills,
-	discoverPromptParts,
-	discoverAllAgentNames,
-} from "../../src/tui/discovery/options.js";
+import { discoverAllAgentNames, discoverSkills } from "../../src/tui/discovery/options.js";
 import { configReducer, createInitialState } from "../../src/tui/state/reducer.js";
 import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
+let tempRoot: string;
 let agentsDir: string;
+let originalAgentDir: string | undefined;
 
 beforeEach(() => {
+	tempRoot = fs.mkdtempSync(path.join(tmpdir(), "pi-config-integration-"));
+	originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = tempRoot;
+
 	agentsDir = path.join(tempRoot, "agents");
 	fs.mkdirSync(agentsDir, { recursive: true });
 });
 
 afterEach(() => {
+	if (originalAgentDir === undefined) {
+		delete process.env.PI_CODING_AGENT_DIR;
+	} else {
+		process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+	}
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 });
-
 function writeAgentMd(name: string, frontmatter: Record<string, unknown>, body: string = "Test body"): string {
 	const lines: string[] = ["---"];
 	for (const [key, value] of Object.entries(frontmatter)) {

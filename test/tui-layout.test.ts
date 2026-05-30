@@ -4,6 +4,7 @@ import {
 	getMaxVisibleAgents,
 	clampVerticalScrollOffset,
 } from "../src/tui/layout.js";
+import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "../src/tui/state/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,15 +35,15 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("getAgentRowHeight", () => {
-	it("returns COMPACT_ROW_HEIGHT (3) when agent is not expanded", () => {
-		expect(getAgentRowHeight(0, null)).toBe(3);
-		expect(getAgentRowHeight(5, 2)).toBe(3);
-		expect(getAgentRowHeight(3, null)).toBe(3);
+	it("uses compact row height when agent is not expanded", () => {
+		expect(getAgentRowHeight(0, null)).toBe(COMPACT_ROW_HEIGHT);
+		expect(getAgentRowHeight(5, 2)).toBe(COMPACT_ROW_HEIGHT);
+		expect(getAgentRowHeight(3, null)).toBe(COMPACT_ROW_HEIGHT);
 	});
 
-	it("returns EXPANDED_ROW_HEIGHT (15) when agent is expanded", () => {
-		expect(getAgentRowHeight(0, 0)).toBe(15);
-		expect(getAgentRowHeight(3, 3)).toBe(15);
+	it("uses expanded row height when agent is expanded", () => {
+		expect(getAgentRowHeight(0, 0)).toBe(EXPANDED_ROW_HEIGHT);
+		expect(getAgentRowHeight(3, 3)).toBe(EXPANDED_ROW_HEIGHT);
 	});
 });
 

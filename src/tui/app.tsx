@@ -8,7 +8,7 @@ import { CheckboxOverlay } from "./components/CheckboxOverlay.js";
 import { DropdownOverlay } from "./components/DropdownOverlay.js";
 import { HelpFooter } from "./components/HelpFooter.js";
 import { EmptyState } from "./components/EmptyState.js";
-import { getFieldName } from "./state/option-columns.js";
+import { getFieldName, isOptionColumnField } from "./state/option-columns.js";
 import type { AgentConfigDebugInfo } from "./debug.js";
 
 interface AppProps {
@@ -57,6 +57,10 @@ export function App({ debugInfo }: AppProps = {}) {
 		setOptionColumnFilter,
 		rescan,
 	} = useConfig();
+	const filteringInlineOptions =
+		!state.overlay &&
+		state.expandedAgentIndex !== null &&
+		isOptionColumnField(getFieldName(state.focus.fieldIndex));
 	// Overlay-local focus index (for up/down navigation within overlay items)
 	const [overlayFocusIndex, setOverlayFocusIndex] = useState(0);
 
@@ -213,7 +217,7 @@ export function App({ debugInfo }: AppProps = {}) {
 			)}
 
 			<DebugBanner debugInfo={debugInfo} />
-			<HelpFooter />
+			<HelpFooter filteringInlineOptions={filteringInlineOptions} />
 		</Box>
 	);
 }

@@ -115,13 +115,58 @@ function parseRuntimeResourceField(
 	return [];
 }
 
+function parseAgentDepth(
+	rawDepth: unknown,
+	filePath: string,
+	warnings: AgentDiagnostic[],
+): number | undefined {
+	if (rawDepth === undefined || rawDepth === null || rawDepth === "") {
+		return undefined;
+	}
+
+	if (typeof rawDepth === "number") {
+		if (Number.isSafeInteger(rawDepth) && rawDepth >= 0) return rawDepth;
+		warnings.push({
+			filePath,
+			level: "warn",
+			reason: `Invalid depth value in ${filePath}: ${rawDepth} is not a valid non-negative integer. Using 0.`,
+		});
+		return 0;
+	}
+
+	if (typeof rawDepth === "string") {
+		const trimmed = rawDepth.trim();
+		if (trimmed === "") return undefined;
+		if (/^-?\d+$/.test(trimmed)) {
+			const parsed = Number.parseInt(trimmed, 10);
+			if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+		}
+		warnings.push({
+			filePath,
+			level: "warn",
+			reason: `Invalid depth value in ${filePath}: ${rawDepth} is not a valid non-negative integer. Using 0.`,
+		});
+		return 0;
+	}
+
+	warnings.push({
+		filePath,
+		level: "warn",
+		reason: `Invalid depth value in ${filePath}: ${String(rawDepth)} is not a valid non-negative integer. Using 0.`,
+	});
+	return 0;
+}
+
 /**
  * Map a generic RawMarkdownDefinition to an agent-specific AgentConfig.
  *
  * Parses agent-specific frontmatter fields (tools, extensions, model,
  * reasoning_effort, depth, can_spawn, skills, prompt_parts) from the raw frontmatter map.
  */
-function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
+function mapToAgentConfig(
+	raw: RawMarkdownDefinition,
+	warnings: AgentDiagnostic[],
+): AgentConfig {
 	const fm = raw.frontmatter;
 
 	const tools = parseRuntimeResourceField(fm.tools);
@@ -131,13 +176,7 @@ function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 	const prompt_parts = parseCheckboxField(fm.prompt_parts);
 
 	const reasoningEffort = fm.reasoning_effort ? String(fm.reasoning_effort) : undefined;
-	const rawDepth = fm.depth;
-	const depth =
-		rawDepth === undefined || rawDepth === ""
-			? undefined
-			: typeof rawDepth === "number"
-				? rawDepth
-				: Number.parseInt(String(rawDepth), 10);
+	const depth = parseAgentDepth(fm.depth, raw.filePath, warnings);
 
 	return {
 		name: raw.name,
@@ -146,7 +185,7 @@ function mapToAgentConfig(raw: RawMarkdownDefinition): AgentConfig {
 		tools,
 		extensions,
 		model: fm.model ? String(fm.model) : undefined,
-		depth: Number.isFinite(depth) ? depth : undefined,
+		depth,
 		can_spawn,
 		skills,
 		prompt_parts,
@@ -202,8 +241,10 @@ export class AgentRegistry {
 			userSubdir: "agents",
 		});
 
-		this._agents = result.definitions.map(mapToAgentConfig);
 		this._diagnostics = result.diagnostics.map(mapToAgentDiagnostic);
+		this._agents = result.definitions.map((definition) =>
+			mapToAgentConfig(definition, this._diagnostics),
+		);
 		this._projectAgentsDir = result.projectDir;
 		this._discovered = true;
 		return this;

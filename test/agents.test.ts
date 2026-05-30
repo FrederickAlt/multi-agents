@@ -315,11 +315,11 @@ Empty runtime arrays.
 	it("skips non-markdown files in agents directory", () => {
 		writeAgent(agentsDir, "RealAgent", "A real agent");
 		writeFileSync(join(agentsDir, "notes.txt"), "Just some notes.", "utf-8");
-		writeFileSync(join(agentsDir, "readme.md"), "---\ndescription: Readme description\n---\n\nReadme body.\n", "utf-8");
 
 		const result = discoverAgents();
-		expect(result.agents.find((a) => a.name === "notes")).toBeUndefined();
-		expect(result.agents.map((a) => a.name)).toContain("readme");
+		const names = result.agents.map((a) => a.name);
+		expect(names).toContain("realagent");
+		expect(names).not.toContain("notes");
 	});
 
 	it("returns null projectAgentsDir (project scanning removed)", () => {
@@ -519,6 +519,70 @@ describe("AgentRegistry", () => {
 		expect(diag).toBeDefined();
 		expect(diag!.level).toBe("warn");
 		expect(diag!.reason).toContain("Hidden");
+	});
+
+	it("clamps negative depth to 0 and emits a warning diagnostic", () => {
+		writeAgent(agentsDir, "NegDepth", "Negative depth", { depth: -1 });
+
+		const registry = new AgentRegistry();
+		registry.discover();
+
+		const agent = registry.find("negdepth")!;
+		expect(agent).toBeDefined();
+		expect(agent.depth).toBe(0);
+
+		const diag = registry.diagnostics.find((d) => d.filePath.includes("negdepth.md"));
+		expect(diag).toBeDefined();
+		expect(diag!.level).toBe("warn");
+		expect(diag!.reason).toContain("non-negative integer");
+	});
+
+	it("clamps non-integer depth to 0 and emits a warning diagnostic", () => {
+		writeAgent(agentsDir, "FloatDepth", "Non-integer depth", { depth: 2.5 });
+
+		const registry = new AgentRegistry();
+		registry.discover();
+
+		const agent = registry.find("floatdepth")!;
+		expect(agent).toBeDefined();
+		expect(agent.depth).toBe(0);
+
+		const diag = registry.diagnostics.find((d) => d.filePath.includes("floatdepth.md"));
+		expect(diag).toBeDefined();
+		expect(diag!.level).toBe("warn");
+		expect(diag!.reason).toContain("non-negative integer");
+	});
+
+	it("clamps invalid text depth to 0 and emits a warning diagnostic", () => {
+		writeAgent(agentsDir, "BadDepth", "Invalid depth", { depth: "abc" });
+
+		const registry = new AgentRegistry();
+		registry.discover();
+
+		const agent = registry.find("baddepth")!;
+		expect(agent).toBeDefined();
+		expect(agent.depth).toBe(0);
+
+		const diag = registry.diagnostics.find((d) => d.filePath.includes("baddepth.md"));
+		expect(diag).toBeDefined();
+		expect(diag!.level).toBe("warn");
+		expect(diag!.reason).toContain("non-negative integer");
+	});
+
+	it("clamps oversized text depth to 0 and emits a warning diagnostic", () => {
+		writeAgent(agentsDir, "HugeDepth", "Oversized depth", { depth: "9".repeat(400) });
+
+		const registry = new AgentRegistry();
+		registry.discover();
+
+		const agent = registry.find("hugedepth")!;
+		expect(agent).toBeDefined();
+		expect(agent.depth).toBe(0);
+
+		const diag = registry.diagnostics.find((d) => d.filePath.includes("hugedepth.md"));
+		expect(diag).toBeDefined();
+		expect(diag!.level).toBe("warn");
+		expect(diag!.reason).toContain("non-negative integer");
 	});
 
 	it("collects diagnostics for unreadable files", () => {

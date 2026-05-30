@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { tmpdir } from "node:os";
 import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import React from "react";
+import React, { act } from "react";
 import { render } from "ink";
 import type { DiscoveredModelsResult } from "../../src/tui/discovery/options.js";
 import { useOptionDiscovery } from "../../src/tui/hooks/useOptionDiscovery.js";
@@ -97,54 +97,63 @@ describe("useOptionDiscovery", () => {
 				callback();
 			},
 		});
-		const app = render(
-			<OptionDiscoveryProbe
-				triggerRescan={false}
-				onFrame={(frame) => frames.push({ ...frame })}
-			/>,
-			{
-				stdout: stdout as unknown as NodeJS.WriteStream,
-				patchConsole: false,
-			},
-		);
-
-		// Allow initial scan to start and trigger first model lookup.
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(pendingModelDiscoveries).toHaveLength(1);
-
-		// Trigger a rescan while first model lookup is still pending.
-		app.rerender(
-			<OptionDiscoveryProbe
-				triggerRescan={true}
-				onFrame={(frame) => frames.push({ ...frame })}
-			/>,
-		);
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(pendingModelDiscoveries).toHaveLength(2);
-
-		const freshResult: DiscoveredModelsResult = {
-			models: [{ provider: "fresh", modelId: "fresh", displayName: "fresh", canonicalRef: "" }],
-			defaultModelDisplayName: "fresh",
-			status: "ready",
-		};
-		const staleResult: DiscoveredModelsResult = {
-			models: [{ provider: "stale", modelId: "stale", displayName: "stale", canonicalRef: "" }],
-			defaultModelDisplayName: "stale",
-			status: "ready",
+		const flush = async () => {
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
 		};
 
-		// Fresh completion should win; stale completion from the first request must be ignored.
-		pendingModelDiscoveries[1]?.resolve(freshResult);
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		pendingModelDiscoveries[0]?.resolve(staleResult);
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		let app: ReturnType<typeof render> | null = null;
+		try {
+			app = render(
+				<OptionDiscoveryProbe
+					triggerRescan={false}
+					onFrame={(frame) => frames.push({ ...frame })}
+				/>,
+				{
+					stdout: stdout as unknown as NodeJS.WriteStream,
+					patchConsole: false,
+				},
+			);
 
-		app.unmount();
+			// Allow initial scan to start and trigger first model lookup.
+			await flush();
+			expect(pendingModelDiscoveries).toHaveLength(1);
 
-		const finalFrame = frames.at(-1);
-		expect(finalFrame).toBeDefined();
-		expect(finalFrame?.status).toBe("ready");
-		expect(finalFrame?.models).toEqual(["fresh"]);
-		expect(finalFrame?.models).not.toContain("stale");
+			// Trigger a rescan while first model lookup is still pending.
+			app.rerender(
+				<OptionDiscoveryProbe
+					triggerRescan={true}
+					onFrame={(frame) => frames.push({ ...frame })}
+				/>,
+			);
+			await flush();
+			expect(pendingModelDiscoveries).toHaveLength(2);
+
+			const freshResult: DiscoveredModelsResult = {
+				models: [{ provider: "fresh", modelId: "fresh", displayName: "fresh", canonicalRef: "" }],
+				defaultModelDisplayName: "fresh",
+				status: "ready",
+			};
+			const staleResult: DiscoveredModelsResult = {
+				models: [{ provider: "stale", modelId: "stale", displayName: "stale", canonicalRef: "" }],
+				defaultModelDisplayName: "stale",
+				status: "ready",
+			};
+
+			// Fresh completion should win; stale completion from the first request must be ignored.
+			pendingModelDiscoveries[1]?.resolve(freshResult);
+			await flush();
+			pendingModelDiscoveries[0]?.resolve(staleResult);
+			await flush();
+
+			const finalFrame = frames.at(-1);
+			expect(finalFrame).toBeDefined();
+			expect(finalFrame?.status).toBe("ready");
+			expect(finalFrame?.models).toEqual(["fresh"]);
+			expect(finalFrame?.models).not.toContain("stale");
+		} finally {
+			app?.unmount();
+		}
 	});
 });

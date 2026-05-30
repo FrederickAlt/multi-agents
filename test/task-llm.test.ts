@@ -49,8 +49,12 @@ describe.skipIf(!SHOULD_RUN_REAL_LLM_TESTS)("Task with real LLM (gpt-5.4-mini) [
 		// Seed a default root agent so before_agent_start can resolve the root.
 		writeFileSync(join(agentDir, "agents", "default.md"), `---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`, "utf-8");
 
-		// Write a simple README for the subagent to read
-		writeFileSync(join(projectDir, "README.md"), "# Test Project\n\nThis is a test project for persistent subagents.", "utf-8");
+		// Write a README with unique markers so the test can verify the subagent actually read it.
+		writeFileSync(
+			join(projectDir, "README.md"),
+			"# Test Project\n\nThis is a test project for persistent subagents.\n\nVerification marker: ALPHA-README-7321.\nPrimary capability: persistent subagent delegation.",
+			"utf-8",
+		);
 
 		// Write a custom agent config: gpt-5.4-mini, read-only, depth 1
 		// Agent name is derived from the filename stem (testreader).
@@ -114,7 +118,13 @@ CRITICAL SAFETY RULES:
 			"test-call-1",
 			{
 				description: "Read project README",
-				prompt: "Read the README.md file in the current working directory and summarize what this project is about in one sentence.",
+				prompt: `Read README.md in the current working directory and produce a concise report with exactly these headings:
+## File Read
+State the file path you read.
+## Evidence
+Quote the verification marker and primary capability from the file.
+## Summary
+Summarize the project in one sentence.`,
 				subagent_type: "testreader",
 			},
 			undefined,
@@ -124,6 +134,9 @@ CRITICAL SAFETY RULES:
 		expect(taskResult.content).toBeDefined();
 		const text = taskResult.content?.[0]?.text ?? "";
 		expect(text).toContain("testreader"); // display name should appear (from filename)
+		expect(text).toContain("README.md");
+		expect(text).toContain("ALPHA-README-7321");
+		expect(text.toLowerCase()).toContain("persistent subagent delegation");
 		expect(text).not.toContain("failed");
 		expect(taskResult.details?.error).toBeUndefined();
 	}, 120_000);
@@ -163,7 +176,12 @@ CRITICAL SAFETY RULES:
 			"test-call-2",
 			{
 				description: "Remember a color",
-				prompt: 'My favorite color is turquoise. Respond with only the word "OK".',
+				prompt: `Remember this fact for the current conversation: favorite_color = turquoise.
+Return a report with exactly these headings:
+## Stored Fact
+Restate the stored key and value.
+## Status
+Say READY.`,
 				subagent_type: "testreader",
 			},
 			undefined,
@@ -171,6 +189,8 @@ CRITICAL SAFETY RULES:
 		);
 
 		expect(firstResult.details?.error).toBeUndefined();
+		const firstText = firstResult.content?.[0]?.text ?? "";
+		expect(firstText.toLowerCase()).toContain("turquoise");
 		const resumeId = firstResult.details?.id;
 		expect(resumeId).toBeDefined();
 		expect(resumeId).toMatch(/^[0-9a-f]{8}$/);
@@ -180,7 +200,11 @@ CRITICAL SAFETY RULES:
 			"test-call-3",
 			{
 				description: "Recall favorite color",
-				prompt: "What is my favorite color? Answer with exactly one word, no punctuation.",
+				prompt: `Use the previous conversation memory and return a report with exactly these headings:
+## Recalled Fact
+State the favorite color value.
+## Confidence
+Say whether the value came from the prior turn.`,
 				subagent_type: "TestReader",
 				resume: resumeId,
 			},
