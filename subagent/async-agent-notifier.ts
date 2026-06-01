@@ -5,7 +5,7 @@
  * - completed-but-unconsumed agents
  * - which of those are still pending first-boundary delivery
  * - reminder cadence for still-unconsumed agents
- * - which IDs have been consumed so they never re-enter notifications
+ * - consumption of currently completed agents so they stop appearing in notifications
  */
 export type AsyncAgentNotificationOpportunity = "input" | "turn_end";
 
@@ -48,9 +48,6 @@ export class AsyncAgentNotifier implements AsyncAgentNotificationPort {
 	/** Completed-but-unconsumed agent IDs. */
 	private completed: Set<string> = new Set();
 
-	/** IDs that were consumed so they never re-enter notifications. */
-	private consumed: Set<string> = new Set();
-
 	/** Completed IDs not yet announced at a turn boundary. */
 	private pendingCompletions: Set<string> = new Set();
 
@@ -69,9 +66,9 @@ export class AsyncAgentNotifier implements AsyncAgentNotificationPort {
 		this.reminderTurnInterval = options.reminderTurnInterval ?? 5;
 	}
 
-	/** Record an agent as completed-but-unconsumed. Idempotent. */
+	/** Record an agent as completed-but-unconsumed. Idempotent per outstanding result. */
 	markCompleted(id: string): void {
-		if (this.completed.has(id) || this.consumed.has(id)) return;
+		if (this.completed.has(id)) return;
 		this.completed.add(id);
 		this.pendingCompletions.add(id);
 		this.turnsSinceNotification = 0;
@@ -92,7 +89,6 @@ export class AsyncAgentNotifier implements AsyncAgentNotificationPort {
 	 */
 	consume(ids: string[]): void {
 		for (const id of ids) {
-			this.consumed.add(id);
 			if (this.completed.delete(id)) {
 				this.pendingCompletions.delete(id);
 			}
@@ -105,7 +101,6 @@ export class AsyncAgentNotifier implements AsyncAgentNotificationPort {
 	clear(): void {
 		this.completed.clear();
 		this.pendingCompletions.clear();
-		this.consumed.clear();
 		this.completionStateVersion = 0;
 		this.deliveryOpportunity = 0;
 		this.lastOpportunity = 0;

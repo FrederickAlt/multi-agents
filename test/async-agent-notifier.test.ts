@@ -51,15 +51,15 @@ describe("AsyncAgentNotifier", () => {
 			expect(n.getUnconsumed()).toEqual(["abc123"]);
 		});
 
-		it("does not re-notify a consumed ID if it completes again", () => {
+		it("notifies again when a consumed agent ID completes a later async run", () => {
 			const n = new AsyncAgentNotifier();
 			n.markCompleted("agent-x");
 			n.consume(["agent-x"]);
 			expect(n.takeNotificationForTurnBoundary()).toBeNull();
 
 			n.markCompleted("agent-x");
-			expect(n.takeNotificationForTurnBoundary()).toBeNull();
-			expect(n.getUnconsumed()).toEqual([]);
+			expect(n.takeNotificationForTurnBoundary()).toContain("agent-x");
+			expect(n.getUnconsumed()).toEqual(["agent-x"]);
 		});
 	});
 
@@ -112,12 +112,12 @@ describe("AsyncAgentNotifier", () => {
 			expect(n.getUnconsumed()).toEqual(["a"]);
 		});
 
-		it("records consumption before completion so later completions are ignored", () => {
+		it("consume before completion does not suppress a later async run with the same ID", () => {
 			const n = new AsyncAgentNotifier();
 			n.consume(["late-completion"]);
 			n.markCompleted("late-completion");
-			expect(n.getUnconsumed()).toEqual([]);
-			expect(n.takeDueNotification()).toBeNull();
+			expect(n.getUnconsumed()).toEqual(["late-completion"]);
+			expect(n.takeDueNotification()).toContain("late-completion");
 		});
 
 		it("partial consumption leaves remaining unconsumed", () => {

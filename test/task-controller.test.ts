@@ -1410,6 +1410,180 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("still running asynchronously");
 	});
 
+	it("queues async resume as a steering message when async is already in-flight", async () => {
+		// Make the original async prompt stay in-flight.
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+		mockSession.steer = vi.fn().mockResolvedValue(undefined);
+		mockSession.isStreaming = true;
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false, prompt: "Original async work" }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const result = await controller.execute(
+			makeParams({
+				blocking: false,
+				resume: agentId,
+				subagent_type: "explorer",
+				prompt: "Steer the running work",
+			}),
+			makeContext(),
+		);
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("steered");
+		expect(result.details.error).toBeUndefined();
+		expect(mockSession.steer).toHaveBeenCalledWith("Steer the running work");
+		expect(mockSession.prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("falls back to prompt streamingBehavior when steer helper is unavailable", async () => {
+		mockSession.prompt = vi
+			.fn()
+			.mockImplementationOnce(() => new Promise(() => {}))
+			.mockResolvedValueOnce(undefined);
+		mockSession.steer = undefined;
+		mockSession.isStreaming = true;
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false, prompt: "Original async work" }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const result = await controller.execute(
+			makeParams({
+				blocking: false,
+				resume: agentId,
+				subagent_type: "explorer",
+				prompt: "Steer through prompt fallback",
+			}),
+			makeContext(),
+		);
+
+		expect(result.details.error).toBeUndefined();
+		expect(mockSession.prompt).toHaveBeenNthCalledWith(2, "Steer through prompt fallback", { streamingBehavior: "steer" });
+	});
+
+	it("does not accept steering while an async run is only finalizing", async () => {
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+		mockSession.steer = vi.fn().mockResolvedValue(undefined);
+		mockSession.isStreaming = false;
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false, prompt: "Original async work" }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const result = await controller.execute(
+			makeParams({
+				blocking: false,
+				resume: agentId,
+				subagent_type: "explorer",
+				prompt: "Too-late steer",
+			}),
+			makeContext(),
+		);
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(result.details.error).toBe("async_finalizing");
+		expect(text).toContain("finalizing");
+		expect(mockSession.steer).not.toHaveBeenCalled();
+		expect(mockSession.prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not start a resumed async run while prior async output is unconsumed", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "prior async output" }] },
+		];
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false, prompt: "Original async work" }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const result = await controller.execute(
+			makeParams({
+				blocking: false,
+				resume: agentId,
+				subagent_type: "explorer",
+				prompt: "New async work before wait",
+			}),
+			makeContext(),
+		);
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(result.details.error).toBe("async_result_unconsumed");
+		expect(text).toContain("waiting to be consumed");
+		expect(mockSession.prompt).toHaveBeenCalledTimes(1);
+		expect(mockAgentSessionFactory.create).toHaveBeenCalledTimes(1);
+	});
+
+	it("allows resume after wait_for_agent consumes prior async output with wait_all", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "prior async output" }] },
+		];
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false, prompt: "Original async work" }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const waitResult = await controller.waitForAgent(
+			[agentId],
+			{ wait_all: true },
+			makeContext(),
+		);
+		expect((waitResult.details.agents as AgentWaitResult[])[0].status).toBe("completed");
+
+		const resumeResult = await controller.execute(
+			makeParams({
+				blocking: false,
+				resume: agentId,
+				subagent_type: "explorer",
+				prompt: "New async work after wait",
+			}),
+			makeContext(),
+		);
+
+		const text = resumeResult.content[0]?.type === "text" ? resumeResult.content[0].text : "";
+		expect(resumeResult.details.error).toBeUndefined();
+		expect(text).toContain("started");
+		expect(mockSession.prompt).toHaveBeenCalledTimes(2);
+	});
+
+	it("disposes a session opened before detecting a newly unconsumed async result", async () => {
+		const record = await metadataStore.allocateRecord("explorer", undefined, 1);
+		let getAsyncResultCalls = 0;
+		fakeSessionManager.getAsyncResult = vi.fn((id: string) => {
+			getAsyncResultCalls += 1;
+			return id === record.id && getAsyncResultCalls >= 2
+				? { output: "late async output", warnings: [] }
+				: undefined;
+		});
+
+		const result = await controller.execute(
+			makeParams({
+				blocking: false,
+				resume: record.id,
+				subagent_type: "explorer",
+				prompt: "Race with completion",
+			}),
+			makeContext(),
+		);
+
+		expect(result.details.error).toBe("async_result_unconsumed");
+		expect(fakeSessionManager.disposeSession).toHaveBeenCalledWith(record.id);
+		expect(mockSession.prompt).not.toHaveBeenCalled();
+	});
+
 	// ---- Abort handling ----
 
 	it("aborts background async session when parent signal fires", async () => {

@@ -584,6 +584,29 @@ export class TaskController {
 					store: metadataStore,
 				};
 
+				const rejectUnconsumedAsyncResult = (snapshot: AgentRunSnapshot): TaskResult | undefined => {
+					if (!params.resume || (snapshot.state !== 'result_ready_memory' && snapshot.state !== 'killed')) {
+						return undefined;
+					}
+					return {
+						content: [{ type: "text", text: `${record!.displayName} (${record!.id}) has completed async output waiting to be consumed. Use wait_for_agent with agent_id "${record!.id}" before resuming it again.` }],
+						details: {
+							id: record!.id,
+							displayName: record!.displayName,
+							agentType: record!.agentType,
+							description: params.description,
+							resumed: true,
+							sessionFile: record!.sessionFile,
+							warnings,
+							error: "async_result_unconsumed",
+						},
+					};
+				};
+
+				const preRunSnapshot = TaskController.classifyRunSnapshot(record!, sessionManager);
+				const preRunRejection = rejectUnconsumedAsyncResult(preRunSnapshot);
+				if (preRunRejection) return preRunRejection;
+
 				// Obtain the resource loader via the injected factory
 				let resourceLoader: DefaultResourceLoader;
 				try {
@@ -606,6 +629,7 @@ export class TaskController {
 				}
 
 				let session: any;
+				const hadOpenSessionBeforeSetup = sessionManager.hasOpenSession(record!.id);
 				try {
 					session = await sessionManager.getOrCreateSession(
 						record!,
@@ -637,9 +661,86 @@ export class TaskController {
 					};
 				}
 
+				const setupRunSnapshot = TaskController.classifyRunSnapshot(record!, sessionManager);
+				const setupRunRejection = rejectUnconsumedAsyncResult(setupRunSnapshot);
+				if (setupRunRejection) {
+					if (!hadOpenSessionBeforeSetup) {
+						try { sessionManager.disposeSession(record!.id); } catch { /* best-effort cleanup for rejected setup */ }
+					}
+					return setupRunRejection;
+				}
+
 				const blocking = params.blocking !== false;
 
 				if (!blocking) {
+					// Async resume while the same record is already running is a steering
+					// request, not a second prompt. Queue it explicitly so AgentSession
+					// does not reject with "already processing" and so the original async
+					// run remains the owner of the final wait_for_agent result.
+					const runSnapshot = TaskController.classifyRunSnapshot(record!, sessionManager);
+					if (params.resume && runSnapshot.state === 'running_async') {
+						const isStreaming =
+							typeof session?.isStreaming === "boolean"
+								? session.isStreaming
+								: typeof session?.agent?.state?.isStreaming === "boolean"
+									? session.agent.state.isStreaming
+									: undefined;
+						if (isStreaming === false) {
+							return {
+								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is finalizing its async result and cannot be steered. Use wait_for_agent with agent_id "${record!.id}" to retrieve output, then resume it again if more work is needed.` }],
+								details: {
+									id: record!.id,
+									displayName: record!.displayName,
+									agentType: record!.agentType,
+									description: params.description,
+									resumed: true,
+									sessionFile: record!.sessionFile,
+									warnings,
+									error: "async_finalizing",
+								},
+							};
+						}
+						try {
+							if (typeof session.steer === "function") {
+								await session.steer(params.prompt);
+							} else {
+								await session.prompt(params.prompt, { streamingBehavior: "steer" });
+							}
+							return {
+								content: [
+									{
+										type: "text",
+										text: `${record!.displayName} (${record!.id}) steered. Use wait_for_agent with agent_id "${record!.id}" to retrieve output.`,
+									},
+								],
+								details: {
+									id: record!.id,
+									displayName: record!.displayName,
+									agentType: record!.agentType,
+									description: params.description,
+									resumed: true,
+									sessionFile: record!.sessionFile,
+									warnings,
+								},
+							};
+						} catch (err) {
+							const message = err instanceof Error ? err.message : String(err);
+							return {
+								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed to queue steering message. Use wait_for_agent with agent_id "${record!.id}" to retrieve output from the original run.\n\n${message}` }],
+								details: {
+									id: record!.id,
+									displayName: record!.displayName,
+									agentType: record!.agentType,
+									description: params.description,
+									resumed: true,
+									sessionFile: record!.sessionFile,
+									warnings,
+									error: message,
+								},
+							};
+						}
+					}
+
 					// Async path: start prompt in background, return immediately.
 					// The session stays tracked; `wait_for_agent` retrieves output later.
 					sessionManager.markAsyncRunning(record!.id);
@@ -1015,6 +1116,9 @@ export class TaskController {
 			const completedOrKilled = agents
 				.filter((agent) => agent.status === "completed" || agent.status === "killed")
 				.map((agent) => agent.id);
+			for (const id of completedOrKilled) {
+				sessionManager.clearAsyncResult(id);
+			}
 			if (completedOrKilled.length > 0 && context.consumeWaitForAgentIds) {
 				context.consumeWaitForAgentIds(completedOrKilled);
 			}
