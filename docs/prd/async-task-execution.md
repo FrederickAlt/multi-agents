@@ -21,22 +21,23 @@ Add a `blocking` parameter to the `Task` tool (default `true`, preserving backwa
 7. As a root agent, I want the reminder counter to reset whenever a new agent finishes, so that I see fresh completions immediately.
 8. As a root agent, I want a still-pending async notification batched into the next submitted user input, so that the user's turn is not interrupted by an extra system message when the input arrives before the separate notification is emitted.
 9. As a root agent, I want the `wait_for_agent` tool to accept a list of sub-agent IDs, so that I can wait on multiple agents at once.
-10. As a root agent, I want `wait_for_agent` to return as soon as any listed agent has finished, so that I can consume results incrementally and decide whether to keep waiting for the rest.
-11. As a root agent, I want `wait_for_agent` to return structured per-agent output, so that I can distinguish which agent produced which result.
-12. As a root agent, I want `wait_for_agent` to report the status of agents that are still running, so that I know which agents remain outstanding.
-13. As a root agent, I want `wait_for_agent` to accept a `timeout` parameter (default 5 minutes), so that I can bound how long I wait before getting a status update.
-14. As a root agent, I want `wait_for_agent` to support a `kill_on_timeout` option, so that I can escalate from waiting to demanding that the sub-agent wrap up.
-15. As a root agent, I want `kill_on_timeout` to send the sub-agent a soft-kill warning ("finish in under X minutes"), so that the sub-agent has a chance to produce a final answer before being aborted.
-16. As a root agent, I want the sub-agent to be hard-aborted if it does not finish within the kill timeout, so that the parent is not blocked indefinitely.
-17. As a root agent, I want a hard-aborted sub-agent's transcript to persist for resume, so that I can continue the work later.
-18. As a root agent, I want `wait_for_agent` to always be available as a tool, so that the system prompt does not change mid-conversation and invalidate the cache.
-19. As a root agent, I want `wait_for_agent` to work even on agents that were spawned in blocking mode (returning their output again from the persisted session file), so that the tool behaves uniformly regardless of how the agent was spawned.
-20. As a root agent, I want the output from a stopped sub-agent to be extracted outcome-agnostically — whether the agent succeeded, crashed, timed out, or was aborted — so that I always get the best available content from the session transcript.
-21. As a root agent, I want to resume any sub-agent (async or blocking) via the existing `resume` parameter on `Task`, so that follow-up work uses the same transcript regardless of original execution mode.
-22. As a root agent, I want to mix blocking and non-blocking `Task` calls in the same turn via parallel tool calls, so that I can optimize for both urgent and deferrable work.
-23. As a root agent, I want to be notified that an agent "crashed" (not "failed") when an unexpected error occurs, so that the language distinguishes between agent errors and task failures.
-24. As a developer, I want the output extraction logic to be shared between the blocking and async paths, so that behavior is consistent and there is no duplication.
-25. As a developer, I want the async notification state machine to be tested in isolation, so that the turn-counting and message-consolidation logic is verifiable without a running Pi session.
+10. As a root agent, I want `wait_for_agent` to return as soon as any listed agent has finished by default, so that I can consume results incrementally and decide whether to keep waiting for the rest.
+11. As a root agent, I want `wait_for_agent` to optionally wait for all listed agents, so that I can retrieve a batch only after every selected agent has finished or the timeout expires.
+12. As a root agent, I want `wait_for_agent` to return structured per-agent output, so that I can distinguish which agent produced which result.
+13. As a root agent, I want `wait_for_agent` to report the status of agents that are still running, so that I know which agents remain outstanding.
+14. As a root agent, I want `wait_for_agent` to accept a `timeout` parameter (default 5 minutes), so that I can bound how long I wait before getting a status update.
+15. As a root agent, I want `wait_for_agent` to support a `kill_on_timeout` option, so that I can escalate from waiting to demanding that the sub-agent wrap up.
+16. As a root agent, I want `kill_on_timeout` to send the sub-agent a soft-kill warning ("finish in under X minutes"), so that the sub-agent has a chance to produce a final answer before being aborted.
+17. As a root agent, I want the sub-agent to be hard-aborted if it does not finish within the kill timeout, so that the parent is not blocked indefinitely.
+18. As a root agent, I want a hard-aborted sub-agent's transcript to persist for resume, so that I can continue the work later.
+19. As a root agent, I want `wait_for_agent` to always be available as a tool, so that the system prompt does not change mid-conversation and invalidate the cache.
+20. As a root agent, I want `wait_for_agent` to work even on agents that were spawned in blocking mode (returning their output again from the persisted session file), so that the tool behaves uniformly regardless of how the agent was spawned.
+21. As a root agent, I want the output from a stopped sub-agent to be extracted outcome-agnostically — whether the agent succeeded, crashed, timed out, or was aborted — so that I always get the best available content from the session transcript.
+22. As a root agent, I want to resume any sub-agent (async or blocking) via the existing `resume` parameter on `Task`, so that follow-up work uses the same transcript regardless of original execution mode.
+23. As a root agent, I want to mix blocking and non-blocking `Task` calls in the same turn via parallel tool calls, so that I can optimize for both urgent and deferrable work.
+24. As a root agent, I want to be notified that an agent "crashed" (not "failed") when an unexpected error occurs, so that the language distinguishes between agent errors and task failures.
+25. As a developer, I want the output extraction logic to be shared between the blocking and async paths, so that behavior is consistent and there is no duplication.
+26. As a developer, I want the async notification state machine to be tested in isolation, so that the turn-counting and message-consolidation logic is verifiable without a running Pi session.
 
 ## Implementation Decisions
 
@@ -50,11 +51,12 @@ A new tool registered alongside `Task` with parameters:
 
 - `agent_ids`: list of hex IDs to wait on (required)
 - `timeout`: minutes to wait before returning a status update (optional, default 5)
+- `wait_all`: whether to wait for all listed running agents instead of returning when any finishes (optional, default false)
 - `kill_on_timeout`: whether to escalate to kill on timeout (optional, default false)
 
 The tool is always registered. Its description explains that it works for async agents and can also retrieve output from finished blocking agents.
 
-When called, the tool checks each listed agent. For finished agents, it extracts and returns the output. For still-running agents, it waits on session completion. It returns as soon as any listed agent finishes, with structured per-agent output showing which completed, which are still running, and the status of any unknown IDs.
+When called, the tool checks each listed agent. For finished agents, it extracts and returns the output. For still-running agents, it waits on session completion. By default it returns as soon as any listed agent finishes; with `wait_all: true`, it waits until all listed running agents finish or the timeout expires. The response includes structured per-agent output showing which completed, which are still running, and the status of any unknown IDs.
 
 On timeout, still-running agents are reported as "timed out, still running." If `kill_on_timeout: true`, the sub-agent receives a soft-kill message instructing it to finish within the same timeout duration. If it still does not finish within the kill window, the session is hard-aborted. The transcript persists for resume.
 

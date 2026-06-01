@@ -957,15 +957,19 @@ export class TaskController {
 	 * - `killed`: hard-aborted after soft-kill window expired; transcript persists for resume
 	 * - `unknown`: the agent ID has no corresponding record
 	 *
-	 * When multiple IDs are supplied the call returns as soon as any listed
-	 * running agent finishes or the timeout expires. Already-completed agents
-	 * cause an immediate return.
+	 * When multiple IDs are supplied the default behavior is to return as soon
+	 * as any listed running agent finishes or the timeout expires.
+	 * Already-completed agents cause an immediate return. If opts.wait_all is
+	 * true, the call waits until all listed running agents finish or the timeout
+	 * expires.
 	 *
 	 * After async output is consumed any in-memory session resources held only
 	 * for that run are disposed; the session file remains on disk for resume.
 	 *
 	 * @param agentIds  List of hex agent IDs to wait on (required).
 	 * @param opts.timeout  Minutes to wait before returning a status update (default 5).
+	 * @param opts.wait_all  When true, waits for all listed running agents to finish
+	 *   before returning. Default false (return when any finishes).
 	 * @param opts.kill_on_timeout  When true, on timeout sends a soft-kill instruction to
 	 *   each still-running agent to finish within the same timeout duration.
 	 *   Agents that don't finish in that kill window are hard-aborted.
@@ -973,7 +977,7 @@ export class TaskController {
 	 */
 	async waitForAgent(
 		agentIds: string[],
-		opts: { timeout?: number; kill_on_timeout?: boolean },
+		opts: { timeout?: number; wait_all?: boolean; kill_on_timeout?: boolean },
 		context: TaskExecuteContext,
 	): Promise<TaskResult> {
 		const { metadataStore, sessionManager } = context;
@@ -989,6 +993,7 @@ export class TaskController {
 
 		const timeoutMinutes = opts.timeout ?? 5;
 		const timeoutMs = timeoutMinutes * 60 * 1000;
+		const waitAll = opts.wait_all === true;
 
 		// ---- Helpers ----
 
@@ -1028,8 +1033,9 @@ export class TaskController {
 			.filter(r => r.status === "running")
 			.map(r => r.id);
 
-		// If any agent already has terminal output, return immediately.
-		if (hasTerminalResult) {
+		// If any agent already has terminal output, return immediately unless the
+		// caller asked to wait for all remaining running agents.
+		if (!waitAll && hasTerminalResult) {
 			// Consume async results so in-memory resources are released
 			for (const r of firstResults) {
 				if (r.status === "completed") {
@@ -1044,7 +1050,7 @@ export class TaskController {
 			return formatWaitResult(firstResults);
 		}
 
-		// ---- Second pass: wait for the first running agent to finish ----
+		// ---- Second pass: wait for one or all running agents to finish ----
 		try {
 			const waitAbortController = new AbortController();
 			const waitForReady = (id: string) => (
@@ -1054,12 +1060,15 @@ export class TaskController {
 			).then(() => id);
 
 			const waitPromises = runningIds.map(waitForReady);
+			const waitCompletion = waitAll
+				? Promise.all(waitPromises).then(() => "__all_completed__")
+				: Promise.race(waitPromises);
 
 			const timeoutPromise = new Promise<string>((resolve) => {
 				setTimeout(() => resolve("__timeout__"), timeoutMs);
 			});
 
-			const winner = await Promise.race([...waitPromises, timeoutPromise]);
+			const winner = await Promise.race([waitCompletion, timeoutPromise]);
 			waitAbortController.abort();
 
 			// Yield to the microtask queue so finish() can run storeAsyncResult

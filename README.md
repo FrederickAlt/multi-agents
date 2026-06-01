@@ -70,7 +70,7 @@ If the limit is exceeded, Task fails with `execution_timeout` and the sub-agent 
 
 ## Async Task Retrieval
 
-Use `Task` with `blocking: false` to spawn a sub-agent immediately. Call `wait_for_agent` with one or more IDs to retrieve output later, including from finished blocking agents.
+Use `Task` with `blocking: false` to spawn a sub-agent immediately. Call `wait_for_agent` with one or more IDs to retrieve output later, including from finished blocking agents. Multi-agent waits return when any listed agent finishes by default; pass `wait_all: true` to wait until all listed running agents finish or the timeout expires.
 
 Async completion notifications are delivered at safe root-agent run boundaries: after the root agent reaches `agent_end` and would otherwise become idle, the extension re-checks which completed async agents are still unconsumed and sends a `[System]` follow-up with `pi.sendMessage(..., { triggerTurn: true, deliverAs: "followUp" })`. This starts an automatic follow-up turn; it does not wait for the next user input. Notifications are not pre-built at intermediate `turn_end` events because the root agent may still consume the result with `wait_for_agent` later in the same run.
 

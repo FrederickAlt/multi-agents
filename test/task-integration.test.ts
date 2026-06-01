@@ -186,6 +186,7 @@ describe("extension loading", () => {
 		expect(waitParams).toBeDefined();
 		expect(waitParams.properties.agent_ids).toBeDefined();
 		expect(waitParams.properties.timeout).toBeDefined();
+		expect(waitParams.properties.wait_all).toBeDefined();
 		expect(waitParams.properties.kill_on_timeout).toBeDefined();
 
 		session.dispose();
@@ -216,6 +217,7 @@ describe("extension loading", () => {
 		expect(waitForAgentTool?.promptSnippet).toContain("async sub-agent");
 		expect(waitForAgentTool?.promptGuidelines).toEqual(expect.arrayContaining([
 			expect.stringContaining("wait_for_agent"),
+			expect.stringContaining("wait_all"),
 			expect.stringContaining("timeout"),
 		]));
 	});

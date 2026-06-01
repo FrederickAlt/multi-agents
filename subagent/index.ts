@@ -264,11 +264,15 @@ export function configureTaskToolForRuntime(
 	// Register wait_for_agent alongside Task for async retrieval.
 	const waitForAgentParams = Type.Object({
 		agent_ids: Type.Array(Type.String(), {
-			description: "List of short hex IDs of previously spawned sub-agents to wait for. The call returns as soon as any listed running agent finishes.",
+			description: "List of short hex IDs of previously spawned sub-agents to wait for. By default the call returns as soon as any listed running agent finishes.",
 		}),
 		timeout: Type.Optional(Type.Number({
 			default: 5,
 			description: "Minutes to wait before returning a status update. Default 5 minutes.",
+		})),
+		wait_all: Type.Optional(Type.Boolean({
+			default: false,
+			description: "When true, wait until all listed running agents finish or timeout expires. Default false returns as soon as any listed agent finishes.",
 		})),
 		kill_on_timeout: Type.Optional(Type.Boolean({
 			default: false,
@@ -280,12 +284,13 @@ export function configureTaskToolForRuntime(
 		name: "wait_for_agent",
 		label: "Wait for Agent",
 		description:
-			"Wait for one or more asynchronously spawned sub-agents to finish and return their output. Also retrieves output from finished blocking agents. Returns as soon as any listed agent finishes or timeout expires.",
+			"Wait for one or more asynchronously spawned sub-agents to finish and return their output. Also retrieves output from finished blocking agents. By default returns as soon as any listed agent finishes or timeout expires; set wait_all=true to wait for all listed agents.",
 		promptSnippet: "Wait for async sub-agent(s) by ID to finish",
 		promptGuidelines: [
 			"Use wait_for_agent to retrieve output from sub-agent(s) spawned with Task blocking:false.",
 			"Provide the agent_ids returned by the async Task calls as a list.",
-			"Pass multiple IDs to wait on several agents at once — returns when any finishes.",
+			"Pass multiple IDs to wait on several agents at once — by default returns when any finishes.",
+			"Set wait_all:true to wait until all listed running agents finish or timeout expires.",
 			"Pass timeout (in minutes, default 5) to bound the wait.",
 		],
 		parameters: waitForAgentParams,
@@ -324,7 +329,7 @@ export function configureTaskToolForRuntime(
 
 			const result = await controller.waitForAgent(
 				wParams.agent_ids,
-				{ timeout: wParams.timeout, kill_on_timeout: wParams.kill_on_timeout },
+				{ timeout: wParams.timeout, wait_all: wParams.wait_all, kill_on_timeout: wParams.kill_on_timeout },
 				{
 					...executeContext,
 					consumeWaitForAgentIds: (ids) => _asyncAgentNotifier.consume(ids),

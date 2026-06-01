@@ -1594,6 +1594,112 @@ describe("TaskController.execute", () => {
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
 	});
 
+	it("wait_all waits until all listed running agents finish", async () => {
+		const subsA: Array<(e: any) => void> = [];
+		const mockSessionA = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subsA.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+
+		const subsB: Array<(e: any) => void> = [];
+		const mockSessionB = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+
+		let callCount = 0;
+		mockAgentSessionFactory.create = vi.fn(() => {
+			callCount++;
+			return Promise.resolve(callCount === 1 ? mockSessionA : mockSessionB);
+		});
+
+		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idA = (spawnA.details as TaskDetails).id!;
+
+		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idB = (spawnB.details as TaskDetails).id!;
+
+		const waitPromise = controller.waitForAgent([idA, idB], { wait_all: true }, makeContext());
+
+		await new Promise((r) => setTimeout(r, 5));
+		for (const cb of subsB) cb({ type: "agent_end" });
+		queueMicrotask(() => {
+			sessionManager.storeAsyncResult(idB, { output: "agent B finished first", warnings: [] });
+		});
+
+		const early = await Promise.race([
+			waitPromise.then(() => "resolved"),
+			new Promise((resolve) => setTimeout(() => resolve("pending"), 20)),
+		]);
+		expect(early).toBe("pending");
+
+		for (const cb of subsA) cb({ type: "agent_end" });
+		queueMicrotask(() => {
+			sessionManager.storeAsyncResult(idA, { output: "agent A finished second", warnings: [] });
+		});
+
+		const result = await waitPromise;
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents.find(a => a.id === idA)?.status).toBe("completed");
+		expect(agents.find(a => a.id === idA)?.output).toBe("agent A finished second");
+		expect(agents.find(a => a.id === idB)?.status).toBe("completed");
+		expect(agents.find(a => a.id === idB)?.output).toBe("agent B finished first");
+
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+	});
+
+	it("wait_all waits for remaining running agents even when one is already completed", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "completed before wait" }] },
+		];
+		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idA = (spawnA.details as TaskDetails).id!;
+		await new Promise((r) => setTimeout(r, 10));
+
+		const subsB: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const idB = (spawnB.details as TaskDetails).id!;
+
+		const waitPromise = controller.waitForAgent([idA, idB], { wait_all: true }, makeContext());
+
+		const early = await Promise.race([
+			waitPromise.then(() => "resolved"),
+			new Promise((resolve) => setTimeout(() => resolve("pending"), 20)),
+		]);
+		expect(early).toBe("pending");
+
+		for (const cb of subsB) cb({ type: "agent_end" });
+		queueMicrotask(() => {
+			sessionManager.storeAsyncResult(idB, { output: "finished after wait_all", warnings: [] });
+		});
+
+		const result = await waitPromise;
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents.find(a => a.id === idA)?.status).toBe("completed");
+		expect(agents.find(a => a.id === idA)?.output).toBe("completed before wait");
+		expect(agents.find(a => a.id === idB)?.status).toBe("completed");
+		expect(agents.find(a => a.id === idB)?.output).toBe("finished after wait_all");
+	});
+
 	it("reports timed_out_still_running when timeout expires", async () => {
 		// Agent never finishes (prompt hangs)
 		mockSession.prompt = vi.fn(() => new Promise(() => {}));
