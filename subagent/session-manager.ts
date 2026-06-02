@@ -21,6 +21,7 @@ import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
 import { extractOutput } from "./output-extraction.js";
 import type { AgentConfig } from "./agents.js";
 import type { MetadataStore, SubagentRecord } from "./metadata.js";
+import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
 
 // ---------------------------------------------------------------------------
 // Injectable adapter interfaces
@@ -210,11 +211,15 @@ export class SubagentSessionManager {
 	private killInProgress = new Set<string>();
 	private asyncRunLifecycle = new Map<string, "running" | "soft-killing" | "hard-aborting" | "completed">();
 	private _onAsyncResultReady: ((id: string) => void) | undefined;
+	private readonly logger: DebugLogger;
 
 	constructor(
 		private sessionManagerProvider: SessionManagerProvider,
 		private agentSessionFactory: AgentSessionFactory,
-	) {}
+		logger?: DebugLogger,
+	) {
+		this.logger = logger ?? makeNoopDebugLogger();
+	}
 
 	// ---- Async result-ready callback ----
 
@@ -267,16 +272,37 @@ export class SubagentSessionManager {
 		warnings: string[],
 		context: SessionSetupContext,
 	): Promise<AgentSession> {
+		const sessionLogger = this.logger.child({ component: "subagent_session_manager", recordId: record.id, agentType: agent?.name });
 		const existing = this.openSessions.get(record.id);
-		if (existing) return existing;
+		if (existing) {
+			sessionLogger.debug("session_reused", { hasOpenSession: true });
+			return existing;
+		}
 
 		const { metadataStore, cwd, fallbackModel, modelResolver, modelRegistry } = context;
+		sessionLogger.info("session_create_start", {
+			cwdLength: cwd.length,
+			recordDepth: record.depth,
+		});
 
 		// 1. Create resource loader
-		const resourceLoader = await context.createResourceLoader(agent);
+		let resourceLoader: DefaultResourceLoader;
+		try {
+			resourceLoader = await context.createResourceLoader(agent);
+			sessionLogger.info("session_resource_loader_created", {
+				cwdLength: cwd.length,
+				agentType: agent.name,
+			});
+		} catch (error) {
+			sessionLogger.error("session_resource_loader_failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
 
 		// 2. Open or create Pi session manager
 		const sessionDir = metadataStore.ctx.sessionDir;
+		sessionLogger.debug("session_manager_open", { sessionDir, existingFile: !!record.sessionFile });
 		const piSessionManager = this.sessionManagerProvider.openOrCreate(
 			record.sessionFile,
 			sessionDir,
@@ -286,29 +312,41 @@ export class SubagentSessionManager {
 		// 3. Persist session file back to the record
 		record.sessionFile = piSessionManager.getSessionFile() ?? record.sessionFile;
 		metadataStore.upsertRecord(record);
+		sessionLogger.debug("session_file_persisted", { sessionFile: record.sessionFile });
 
 		// 4. Resolve model
 		const model = modelResolver.resolve(agent.model, fallbackModel, warnings);
+		sessionLogger.debug("session_model_resolved", { modelHint: model?.id || model?.provider || "default" });
 
 		// 5. Create agent session (pass parent's modelRegistry for shared auth)
-		const session = await this.agentSessionFactory.create({
-			cwd,
-			model,
-			tools: agent.tools,
-			resourceLoader,
-			sessionManager: piSessionManager,
-			thinkingLevel: agent.reasoningEffort as ThinkingLevel | undefined,
-			modelRegistry,
-		});
+		let session: AgentSession;
+		try {
+			session = await this.agentSessionFactory.create({
+				cwd,
+				model,
+				tools: agent.tools,
+				resourceLoader,
+				sessionManager: piSessionManager,
+				thinkingLevel: agent.reasoningEffort as ThinkingLevel | undefined,
+				modelRegistry,
+			});
+		} catch (error) {
+			sessionLogger.error("session_create_failed", { error: error instanceof Error ? error.message : String(error) });
+			throw error;
+		}
+		sessionLogger.info("session_created", { sessionFile: record.sessionFile, hasTools: !!agent.tools });
 
 		// 6. Check tool availability
 		if (agent.tools) {
 			const active = new Set(session.getActiveToolNames());
+			let missing = 0;
 			for (const tool of agent.tools) {
 				if (!active.has(tool)) {
 					warnings.push(`Configured tool "${tool}" is not available for ${agent.name}.`);
+					missing += 1;
 				}
 			}
+			sessionLogger.debug("session_tools_checked", { requestedTools: agent.tools.length, availableTools: active.size, missingTools: missing });
 		}
 
 		// 7. Subscribe to agent_end to update metadata timestamp and mark session completion.
@@ -317,6 +355,7 @@ export class SubagentSessionManager {
 				record.updatedAt = new Date().toISOString();
 				metadataStore.upsertRecord(record);
 				this.completedSessions.add(record.id);
+				sessionLogger.info("session_agent_end_observed", { recordId: record.id, updatedAt: record.updatedAt });
 			}
 		});
 
@@ -328,6 +367,9 @@ export class SubagentSessionManager {
 		};
 
 		this.openSessions.set(record.id, session);
+		sessionLogger.info("session_create_done", {
+			openSessions: this.openSessions.size,
+		});
 		return session;
 	}
 
@@ -338,13 +380,22 @@ export class SubagentSessionManager {
 	 */
 	disposeSession(id: string): void {
 		const session = this.openSessions.get(id);
+		const logger = this.logger.child({ component: "subagent_session_manager", recordId: id });
 		if (session) {
-			session.dispose();
+			logger.debug("session_dispose_start", { hasOpenSession: true });
+			try {
+				session.dispose();
+			} catch (error) {
+				logger.warn("session_dispose_error", { error: error instanceof Error ? error.message : String(error) });
+			}
 			this.openSessions.delete(id);
+		} else {
+			logger.debug("session_dispose_noop", { hasOpenSession: false });
 		}
 		this.completedSessions.delete(id);
 		this.asyncInFlight.delete(id);
 		this.asyncRunLifecycle.delete(id);
+		logger.debug("session_dispose_complete");
 	}
 
 	/**
@@ -353,10 +404,13 @@ export class SubagentSessionManager {
 	 * already disposed.
 	 */
 	disposeAll(): void {
+		const logger = this.logger.child({ component: "subagent_session_manager" });
+		logger.info("session_dispose_all_start", { count: this.openSessions.size });
 		for (const [, session] of this.openSessions) {
 			try {
 				session.dispose();
-			} catch {
+			} catch (error) {
+				logger.warn("session_dispose_error", { error: error instanceof Error ? error.message : String(error) });
 				// Ignore errors from already-disposed sessions.
 			}
 		}
@@ -366,6 +420,7 @@ export class SubagentSessionManager {
 		this.asyncResultWaiters.clear();
 		this.asyncInFlight.clear();
 		this.asyncRunLifecycle.clear();
+		logger.info("session_dispose_all_done", { count: this.openSessions.size });
 	}
 
 	// ---- Async completion ----
@@ -375,15 +430,24 @@ export class SubagentSessionManager {
 	 * Resolves immediately if the session already ended or is no longer tracked.
 	 */
 	async waitForSessionEnd(id: string): Promise<void> {
-		if (this.completedSessions.has(id)) return;
+		if (this.completedSessions.has(id)) {
+			this.logger.debug("session_wait_complete_immediate", { id });
+			return;
+		}
 
 		const session = this.openSessions.get(id);
-		if (!session) return;
+		if (!session) {
+			this.logger.debug("session_wait_no_session", { id });
+			return;
+		}
 
+		const waitLogger = this.logger.child({ component: "subagent_session_manager", recordId: id });
+		waitLogger.debug("session_wait_start");
 		return new Promise<void>((resolve) => {
 			const unsubscribe = session.subscribe((event: any) => {
 				if (event.type === "agent_end") {
 					unsubscribe();
+					waitLogger.debug("session_wait_complete", { id });
 					resolve();
 				}
 			});
@@ -392,6 +456,11 @@ export class SubagentSessionManager {
 
 	/** Store the output/error of a completed async sub-agent session. */
 	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void {
+		this.logger.debug("session_async_result_stored", {
+			recordId: id,
+			outputLength: result.output.length,
+			hasError: Boolean(result.error),
+		});
 		this.asyncResults.set(id, result);
 		const waiters = this.asyncResultWaiters.get(id);
 		if (waiters) {
@@ -408,7 +477,11 @@ export class SubagentSessionManager {
 
 	/** Wait until a completed async sub-agent result has been stored. */
 	async waitForAsyncResult(id: string, signal?: AbortSignal): Promise<void> {
-		if (this.asyncResults.has(id)) return;
+		if (this.asyncResults.has(id)) {
+			this.logger.debug("session_wait_async_result_immediate", { recordId: id });
+			return;
+		}
+		this.logger.debug("session_wait_async_result", { recordId: id, hasSignal: Boolean(signal) });
 		return new Promise<void>((resolve, reject) => {
 			let settled = false;
 			let resolveWaiter: () => void = () => {};
@@ -467,12 +540,14 @@ export class SubagentSessionManager {
 
 	/** Mark a session ID as having an in-flight async prompt. */
 	markAsyncRunning(id: string): void {
+		this.logger.debug("session_async_mark_running", { recordId: id });
 		this.asyncInFlight.add(id);
 		this.asyncRunLifecycle.set(id, "running");
 	}
 
 	/** Clear the in-flight marker for a session ID. */
 	clearAsyncRunning(id: string): void {
+		this.logger.debug("session_async_clear_running", { recordId: id });
 		this.asyncInFlight.delete(id);
 		if (this.asyncRunLifecycle.get(id) === "running") {
 			this.asyncRunLifecycle.delete(id);
@@ -481,6 +556,7 @@ export class SubagentSessionManager {
 
 	/** Clear a consumed async result from memory. */
 	clearAsyncResult(id: string): void {
+		this.logger.debug("session_async_result_cleared", { recordId: id });
 		this.asyncResults.delete(id);
 	}
 
@@ -540,20 +616,41 @@ export class SubagentSessionManager {
 		this.asyncInFlight.delete(id);
 
 		if (!this._shouldStoreRunResult(id, options)) {
+			this.logger.debug("session_finalize_skipped", {
+				recordId: id,
+				state: this.asyncRunLifecycle.get(id),
+				hasResult: this.asyncResults.has(id),
+				source: options.source,
+			});
 			if (this.asyncRunLifecycle.get(id) === "running") {
 				this.asyncRunLifecycle.delete(id);
 			}
 			return;
 		}
 
+		this.logger.debug("session_finalize", {
+			recordId: id,
+			source: options.source,
+			outputLength: result.output.length,
+			hasError: Boolean(result.error),
+			allowOverwrite: options.allowOverwrite,
+		});
 		this.storeAsyncResult(id, result);
 		this.completedSessions.add(id);
 		this.asyncRunLifecycle.set(id, "completed");
 		this.killInProgress.delete(id);
 		const session = this.openSessions.get(id);
 		if (session) {
-			try { session.dispose(); } catch { /* best-effort */ }
-			this.openSessions.delete(id);
+			try {
+				session.dispose();
+			} catch (error) {
+				this.logger.warn("session_finalize_dispose_error", {
+					recordId: id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				this.openSessions.delete(id);
+			}
 		}
 	}
 
@@ -568,24 +665,27 @@ export class SubagentSessionManager {
 		return this.killInProgress.has(id);
 	}
 
-	/**
-	 * Send a soft-kill instruction to a running async session.
-	 *
-	 * Marks kill-in-progress before aborting the original prompt so that
-	 * the async finish handler skips disposal. After abort, sends a kill
-	 * message as a new prompt giving the agent one more turn.
-	 *
-	 * On completion (success or failure): clears kill-in-progress, stores
-	 * the final result using shared extraction, marks completed, clears
-	 * async-running, and disposes the session.
-	 */
 	sendKillMessage(id: string, timeoutMinutes: number): void {
 		const session = this.openSessions.get(id);
-		if (!session || this.asyncResults.has(id)) return;
+		if (!session || this.asyncResults.has(id)) {
+			if (!session) {
+				this.logger.debug("session_send_kill_missing", { recordId: id });
+			}
+			if (this.asyncResults.has(id)) {
+				this.logger.debug("session_send_kill_ignored_already_completed", { recordId: id });
+			}
+			return;
+		}
 
+		const logger = this.logger.child({ component: "subagent_session_manager", recordId: id });
 		const killMessage = `[System] The parent agent requires you to finish within ${timeoutMinutes} minute(s). Please produce your final answer now.`;
 
-		if (!this._startSoftKill(id)) return;
+		if (!this._startSoftKill(id)) {
+			logger.debug("session_send_kill_not_started", { state: this._runLifecycleState(id) });
+			return;
+		}
+
+		logger.info("session_send_kill_started", { timeoutMinutes });
 
 		// Abort the current prompt; the original async handler observes
 		// kill flow state and leaves result ownership to this kill flow.
@@ -596,12 +696,14 @@ export class SubagentSessionManager {
 			() => {
 				// Agent finished successfully — store fresh output.
 				const extracted = extractOutput(session.messages as any[]);
+				logger.debug("session_send_kill_prompt_completed", { outputLength: extracted.text.length });
 				this._finalizeAsyncRun(id, { output: extracted.text, warnings: [] }, { allowOverwrite: true, source: "soft-kill" });
 			},
 			(error: any) => {
 				// Kill prompt crashed — store error + partial output.
 				const message = error instanceof Error ? error.message : String(error);
 				const extracted = extractOutput(session.messages as any[], message || undefined);
+				logger.warn("session_send_kill_prompt_failed", { error: message });
 				this._finalizeAsyncRun(
 					id,
 					{
@@ -626,9 +728,17 @@ export class SubagentSessionManager {
 	 */
 	abortSession(id: string): void {
 		const session = this.openSessions.get(id);
-		if (!session) return;
+		if (!session) {
+			this.logger.debug("session_hard_abort_missing", { recordId: id });
+			return;
+		}
 
-		if (!this._startHardAbort(id)) return;
+		if (!this._startHardAbort(id)) {
+			this.logger.debug("session_hard_abort_not_started", { recordId: id, state: this._runLifecycleState(id) });
+			return;
+		}
+
+		this.logger.warn("session_hard_abort_started", { recordId: id });
 
 		// Capture partial output before abort using shared extraction.
 		const extracted = extractOutput(session.messages as any[], "killed");
@@ -655,6 +765,7 @@ export class SubagentSessionManager {
 	 * The lock is cleared after the function resolves (or rejects).
 	 */
 	async withRecordRunLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+		this.logger.debug("session_run_lock_acquired", { recordId: id, hasQueued: this.runLocks.has(id) });
 		const previous = this.runLocks.get(id) ?? Promise.resolve();
 		let release!: () => void;
 		const current = new Promise<void>((resolve) => {
@@ -664,12 +775,14 @@ export class SubagentSessionManager {
 		this.runLocks.set(id, tail);
 		await previous.catch(() => undefined);
 		try {
+			this.logger.debug("session_run_lock_enter", { recordId: id });
 			return await fn();
 		} finally {
 			release();
 			if (this.runLocks.get(id) === tail) {
 				this.runLocks.delete(id);
 			}
+			this.logger.debug("session_run_lock_release", { recordId: id });
 		}
 	}
 }

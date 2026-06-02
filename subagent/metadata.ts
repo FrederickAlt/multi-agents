@@ -15,6 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
+import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -100,8 +101,11 @@ export function pickHumanName(agentName: string, records: SubagentRecord[]): { h
 export class MetadataStore {
 	private static pathLocks = new Map<string, Promise<void>>();
 	private _metadata: MetadataFile | null = null;
+	private readonly logger: DebugLogger;
 
-	constructor(public readonly ctx: MetadataStoreContext) {}
+	constructor(public readonly ctx: MetadataStoreContext, logger?: DebugLogger) {
+		this.logger = logger ?? makeNoopDebugLogger();
+	}
 
 	private async withPathLock<T>(fn: () => T | Promise<T>): Promise<T> {
 		const previous = MetadataStore.pathLocks.get(this.path) ?? Promise.resolve();
@@ -110,6 +114,7 @@ export class MetadataStore {
 		const tail = previous.catch(() => undefined).then(() => current);
 		MetadataStore.pathLocks.set(this.path, tail);
 		await previous.catch(() => undefined);
+		this.logger.debug("metadata_path_lock_acquired", { path: this.path });
 		try {
 			return await fn();
 		} finally {
@@ -117,6 +122,7 @@ export class MetadataStore {
 			if (MetadataStore.pathLocks.get(this.path) === tail) {
 				MetadataStore.pathLocks.delete(this.path);
 			}
+			this.logger.debug("metadata_path_lock_released", { path: this.path });
 		}
 	}
 
@@ -144,18 +150,25 @@ export class MetadataStore {
 	 */
 	reload(): MetadataFile {
 		const filePath = this.path;
+		this.logger.debug("metadata_reload_start", { filePath });
 		if (fs.existsSync(filePath)) {
 			try {
 				const raw = fs.readFileSync(filePath, "utf-8");
 				const parsed = JSON.parse(raw) as MetadataFile;
 				if (parsed.version === 1 && Array.isArray(parsed.records)) {
 					this._metadata = parsed;
+					this.logger.debug("metadata_reload_ok", { recordCount: parsed.records.length });
 					return parsed;
 				}
-			} catch {
+			} catch (error) {
+				this.logger.warn("metadata_reload_failed", {
+					filePath,
+					error: error instanceof Error ? error.message : String(error),
+				});
 				// Malformed JSON or wrong shape; fall through to a clean file.
 			}
 		}
+		this.logger.info("metadata_reload_defaulted", { filePath });
 		this._metadata = {
 			version: 1,
 			mainSessionId: this.ctx.sessionId,
@@ -174,8 +187,21 @@ export class MetadataStore {
 		metadata.mainSessionId = this.ctx.sessionId;
 		metadata.mainSessionFile = this.ctx.sessionFile;
 		const filePath = this.path;
-		fs.mkdirSync(path.dirname(filePath), { recursive: true });
-		fs.writeFileSync(filePath, `${JSON.stringify(metadata, null, 2)}\n`, "utf-8");
+		this.logger.debug("metadata_save_start", {
+			recordCount: metadata.records.length,
+			filePath,
+		});
+		try {
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, `${JSON.stringify(metadata, null, 2)}\n`, "utf-8");
+			this.logger.debug("metadata_save_done", { filePath });
+		} catch (error) {
+			this.logger.error("metadata_save_failed", {
+				filePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
 	}
 
 	// ---- Cleanup ----
@@ -185,20 +211,33 @@ export class MetadataStore {
 	 * referenced in the records. Resets the in-memory cache to null.
 	 */
 	cleanup(): void {
+		const logger = this.logger.child({ component: "metadata" });
 		const metadata = this.reload();
+		logger.info("metadata_cleanup_start", { recordCount: metadata.records.length });
 		for (const record of metadata.records) {
+			if (!record.sessionFile) {
+				continue;
+			}
 			try {
-				if (record.sessionFile) fs.unlinkSync(record.sessionFile);
-			} catch {
-				// Ignore cleanup errors for individual files.
+				fs.unlinkSync(record.sessionFile);
+				logger.debug("metadata_cleanup_file_deleted", { filePath: record.sessionFile });
+			} catch (error) {
+				logger.warn("metadata_cleanup_file_failed", {
+					filePath: record.sessionFile,
+					error: error instanceof Error ? error.message : String(error),
+				});
 			}
 		}
 		try {
 			fs.unlinkSync(this.path);
-		} catch {
-			// Ignore cleanup errors.
+		} catch (error) {
+			logger.warn("metadata_cleanup_main_failed", {
+				error: error instanceof Error ? error.message : String(error),
+				filePath: this.path,
+			});
 		}
 		this._metadata = null;
+		logger.info("metadata_cleanup_done");
 	}
 
 	// ---- Selected Root agent ----
@@ -243,9 +282,12 @@ export class MetadataStore {
 		parentAgentId?: string,
 		depth: number = 1,
 	): Promise<SubagentRecord> {
+		const logger = this.logger.child({ component: "metadata", agentName, parentAgentId, depth });
+		logger.debug("metadata_allocate_start");
 		return this.withPathLock(() => {
 			const metadata = this.reload();
 			const id = randomHexId(new Set(metadata.records.map((r) => r.id)));
+			logger.debug("metadata_allocate_lock_acquired", { existingCount: metadata.records.length });
 			const { humanName, displayName } = pickHumanName(agentName, metadata.records);
 			const now = new Date().toISOString();
 			const record: SubagentRecord = {
@@ -261,6 +303,7 @@ export class MetadataStore {
 			};
 			metadata.records.push(record);
 			this.save();
+			logger.info("metadata_allocate_done", { recordId: id, displayName: record.displayName });
 			return record;
 		});
 	}
@@ -272,6 +315,7 @@ export class MetadataStore {
 	 * If the record doesn't exist yet it is appended.
 	 */
 	upsertRecord(record: SubagentRecord): void {
+		const logger = this.logger.child({ component: "metadata", recordId: record.id });
 		const metadata = this.load();
 		const idx = metadata.records.findIndex((r) => r.id === record.id);
 		if (idx >= 0) {
@@ -280,8 +324,10 @@ export class MetadataStore {
 				...record,
 				createdAt: metadata.records[idx].createdAt, // never overwrite original
 			};
+			logger.debug("metadata_record_updated", { agentType: record.agentType });
 		} else {
 			metadata.records.push(record);
+			logger.debug("metadata_record_inserted", { agentType: record.agentType, parentAgentId: record.parentAgentId });
 		}
 		this.save();
 	}
@@ -291,11 +337,13 @@ export class MetadataStore {
 	 * No-op if the ID is not found.
 	 */
 	touchRecord(id: string): void {
+		const logger = this.logger.child({ component: "metadata", recordId: id });
 		const metadata = this.load();
 		const record = metadata.records.find((r) => r.id === id);
 		if (record) {
 			record.updatedAt = new Date().toISOString();
 			this.save();
+			logger.debug("metadata_record_touched");
 		}
 	}
 
@@ -310,12 +358,12 @@ export class MetadataStore {
 		getSessionDir(): string;
 		getSessionId(): string;
 		getSessionFile(): string | undefined;
-	}): MetadataStore {
+	}, logger?: DebugLogger): MetadataStore {
 		return new MetadataStore({
 			sessionDir: sm.getSessionDir(),
 			sessionId: sm.getSessionId(),
 			sessionFile: sm.getSessionFile(),
-		});
+		}, logger);
 	}
 
 	// ---- Legacy-compatible static wrappers (for existing tests) ----

@@ -20,6 +20,7 @@ import {
 import { DefaultResourceLoader, SessionManager, type AgentSession } from "@mariozechner/pi-coding-agent";
 import type { SubagentRecord } from "../subagent/metadata.js";
 import type { AgentConfig } from "../subagent/agents.js";
+import type { DebugLogger } from "../subagent/debug-logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,6 +87,22 @@ function makeMockPiSessionManager(sessionFile: string) {
 	};
 }
 
+function makeSpyDebugLogger(sink: Array<{ event: string }>): DebugLogger {
+	const create = (context: Record<string, unknown>): DebugLogger => ({
+		isEnabled: true,
+		child: (childContext) => create({ ...context, ...childContext }),
+		log: (level, event) => {
+			sink.push({ event });
+		},
+		debug: (event) => create(context).log("debug", event),
+		info: (event) => create(context).log("info", event),
+		warn: (event) => create(context).log("warn", event),
+		error: (event) => create(context).log("error", event),
+	});
+
+	return create({});
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -142,10 +159,11 @@ describe("SubagentSessionManager", () => {
 		}
 	});
 
-	function createManager(): SubagentSessionManager {
+	function createManager(options?: { logger?: DebugLogger }): SubagentSessionManager {
 		return new SubagentSessionManager(
 			mockSessionManagerProvider,
 			mockAgentSessionFactory,
+			options?.logger,
 		);
 	}
 
@@ -660,6 +678,26 @@ describe("SubagentSessionManager", () => {
 	// ---- Async result ready callback ----
 
 	describe("onAsyncResultReady callback", () => {
+		it("emits debug breadcrumbs through session manager logger", async () => {
+			const events: Array<{ event: string }> = [];
+			const logger = makeSpyDebugLogger(events);
+			const sm = createManager({ logger });
+			const id = "log-kill";
+			const session = makeMockSession();
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "final output" }] }];
+			session.prompt = vi.fn().mockResolvedValue(undefined) as any;
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 5);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(events.some((entry) => entry.event === "session_send_kill_started")).toBe(true);
+			expect(events.some((entry) => entry.event === "session_send_kill_prompt_completed")).toBe(true);
+			expect(events.some((entry) => entry.event === "session_finalize")).toBe(true);
+			expect(sm.getAsyncResult(id)?.output).toBe("final output");
+		});
+
 		it("does not fire when agent_end occurs before async result storage", async () => {
 			const sm = createManager();
 			const onReady = vi.fn();

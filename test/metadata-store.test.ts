@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MetadataStore } from "../subagent/metadata.js";
 import type { MetadataFile, MetadataStoreContext, SubagentRecord } from "../subagent/metadata.js";
+import type { DebugLogger } from "../subagent/debug-logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,6 +44,22 @@ function makeRecord(id: string, agentType: string = "scout"): SubagentRecord {
 		createdAt: "2024-01-01T00:00:00.000Z",
 		updatedAt: "2024-01-01T00:00:00.000Z",
 	};
+}
+
+function makeSpyDebugLogger(sink: Array<{ event: string }>): DebugLogger {
+	const create = (context: Record<string, unknown>): DebugLogger => ({
+		isEnabled: true,
+		child: (childContext) => create({ ...context, ...childContext }),
+		log: (level, event) => {
+			sink.push({ event });
+		},
+		debug: (event) => create(context).log("debug", event),
+		info: (event) => create(context).log("info", event),
+		warn: (event) => create(context).log("warn", event),
+		error: (event) => create(context).log("error", event),
+	});
+
+	return create({});
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +530,24 @@ describe("MetadataStore", () => {
 			expect(store.ctx.sessionDir).toBe(tempDir);
 			expect(store.ctx.sessionId).toBe("sm-test");
 			expect(store.ctx.sessionFile).toBe(join(tempDir, "sm-test.jsonl"));
+		});
+
+		it("accepts logger and emits debug breadcrumbs", async () => {
+			const events: Array<{ event: string }> = [];
+			const logger = makeSpyDebugLogger(events);
+			const sm = {
+				getSessionDir: () => tempDir,
+				getSessionId: () => "sm-with-logger",
+				getSessionFile: () => join(tempDir, "sm-with-logger.jsonl"),
+			};
+			const store = MetadataStore.fromSessionManager(sm, logger);
+			store.load();
+			const record = await store.allocateRecord("worker");
+			store.touchRecord(record.id);
+			expect(events.some((entry) => entry.event === "metadata_reload_start")).toBe(true);
+			expect(events.some((entry) => entry.event === "metadata_allocate_start")).toBe(true);
+			expect(events.some((entry) => entry.event === "metadata_allocate_done")).toBe(true);
+			expect(events.some((entry) => entry.event === "metadata_record_touched")).toBe(true);
 		});
 
 		it("creates a working store that can load and save", () => {

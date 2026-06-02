@@ -74,6 +74,19 @@ Use `Task` with `blocking: false` to spawn a sub-agent immediately. Call `wait_f
 
 Async completion notifications are delivered at safe root-agent run boundaries: after the root agent reaches `agent_end` and would otherwise become idle, the extension re-checks which completed async agents are still unconsumed and sends a `[System]` follow-up with `pi.sendMessage(..., { triggerTurn: true, deliverAs: "followUp" })`. This starts an automatic follow-up turn; it does not wait for the next user input. Notifications are not pre-built at intermediate `turn_end` events because the root agent may still consume the result with `wait_for_agent` later in the same run.
 
+## Debug Logging (isolated)
+
+The extension includes a dedicated, isolated debug logger for Task/wait lifecycle paths.
+
+- **Enablement**: for local incident debugging only, edit `subagent/debug-logger.ts` and set the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` to `true`. There is no Pi flag and no extension config.
+- **Publishing default**: the constant must remain `false` in published builds so ordinary users do not write extra local forensic logs by default.
+- **Log file**: `.task-subagents-<sessionId>.debug.jsonl` in the session directory, one JSON object per line.
+- **What is logged**: breadcrumbs such as root/session start and shutdown, Task run IDs, sub-agent record IDs, parent IDs, agent types, depths, async/wait/kill lifecycle events, counts, lengths, and boolean state flags.
+- **What is not logged**: full prompts, model outputs, context file contents, tool schemas/parameters, and path-like values are not intended to be recorded; callers pass lightweight metadata only.
+- **Redaction and safety**:
+  - Sensitive-ish keys (`authorization`, `bearer`, `cookie`, `password`, `secret`, `secret_key`, `token`, `apikey`, `api_key`, `access_token`, `refresh_token`) plus prompt/output/context/tool-schema/path keys are redacted by the logger.
+  - Logging is capped/truncated and never throws; failures are swallowed.
+
 `can_spawn` examples:
 - field absent → any agent name may be spawned if depth allows it
 - `can_spawn: []` → no agent names may be spawned

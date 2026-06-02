@@ -38,6 +38,10 @@ import {
 	extractTerminalOutput,
 	getFinalTextFromMessages,
 } from "./output-extraction.js";
+import {
+	createRunCorrelationId,
+	makeNoopDebugLogger,
+} from "./debug-logger.js";
 
 /**
  * Default maximum runtime for a Task sub-agent execution, in minutes.
@@ -157,6 +161,7 @@ export interface RuntimeContext {
 	/** Spawn-policy state for the current agent. */
 	depthPolicy: DepthPolicyState;
 	store?: MetadataAdapter;
+	logger?: import("./debug-logger.js").DebugLogger;
 }
 
 /**
@@ -490,10 +495,26 @@ export class TaskController {
 			createResourceLoaderFactory,
 			onUpdate,
 		} = context;
+		const logger = runtime.logger ?? makeNoopDebugLogger();
 
 		// a. Agent discovery (via injected adapter)
 		let agents: AgentConfig[];
 		const warnings: string[] = [];
+		const runLogger = logger.child({
+			component: "task_controller",
+			runId: createRunCorrelationId("task"),
+			treeDepth: runtime.treeDepth,
+			parentAgentId: runtime.parentAgentId,
+			subagentType: params.subagent_type,
+			resumed: Boolean(params.resume),
+			blocking: params.blocking !== false,
+			cwdLength: effectiveCwd.length,
+		});
+		runLogger.info("task_run_start", {
+			promptLength: params.prompt.length,
+			descriptionLength: params.description.length,
+		});
+		runLogger.debug("task_discovery_start");
 		try {
 			const discovery = agentDiscovery.discover();
 			agents = discovery.agents;
@@ -511,8 +532,14 @@ export class TaskController {
 						.join("\n")}`,
 				);
 			}
+			runLogger.debug("task_discovery_completed", {
+				agentCount: agents.length,
+				warningCount: warnings.length,
+				diagnosticCount: discovery.diagnostics.length,
+			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
+			runLogger.error("task_discovery_failed", { error: message, treeDepth: runtime.treeDepth });
 			return {
 				content: [{ type: "text", text: `Task failed during agent discovery: ${message}` }],
 				details: { warnings, error: message },
@@ -523,8 +550,12 @@ export class TaskController {
 		let metadata: MetadataFile;
 		try {
 			metadata = metadataStore.load();
+			runLogger.debug("task_metadata_load_success", {
+				recordCount: metadata.records.length,
+			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
+			runLogger.error("task_metadata_load_failed", { error: message });
 			return {
 				content: [{ type: "text", text: `Task failed while loading metadata: ${message}` }],
 				details: { warnings, error: message },
@@ -533,33 +564,62 @@ export class TaskController {
 
 		const resolved = TaskController.resolveTaskAgent(params, metadata, agents);
 		if (!resolved.ok) {
+			runLogger.warn("task_agent_resolution_failed", {
+				errorCode: resolved.errorCode,
+				resumeRequested: Boolean(params.resume),
+			});
 			return {
 				content: [{ type: "text", text: resolved.errorText }],
 				details: { warnings, error: resolved.errorCode },
 			};
 		}
+		runLogger.debug("task_agent_resolution_success", {
+			agentType: resolved.agent.name,
+			resume: Boolean(params.resume),
+			hasParent: Boolean(runtime.parentAgentId),
+		});
 		const { agent } = resolved;
 		let record = resolved.record;
 
 		// c. Check task permission via DepthPolicy
 		const taskCheck = checkTaskAllowed(runtime.depthPolicy, agent.name);
 		if (!taskCheck.allowed) {
+			runLogger.warn("task_depth_policy_rejected", {
+				agentType: agent.name,
+				reason: taskCheck.code,
+				maxDepth: runtime.depthPolicy.maxDepth,
+			});
 			return {
 				content: [{ type: "text", text: taskCheck.error! }],
 				details: { warnings, agentType: agent.name, error: taskCheck.code },
 			};
 		}
+		runLogger.debug("task_depth_policy_allowed", { agentType: agent.name, allowed: taskCheck.allowed });
 
 		// d. Allocate record if not resuming
 		if (!record) {
+			runLogger.debug("task_record_allocation_start", {
+				agentType: agent.name,
+				depth: runtime.treeDepth + 1,
+				parentAgentId: runtime.parentAgentId,
+			});
 			try {
 				record = await metadataStore.allocateRecord(
 					agent.name,
 					runtime.parentAgentId,
 					runtime.treeDepth + 1,
 				);
+				runLogger.info("task_record_allocated", {
+					recordId: record?.id,
+					displayName: record?.displayName,
+					depth: record?.depth,
+				});
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
+				runLogger.error("task_record_allocation_failed", {
+					agentType: agent.name,
+					error: message,
+				});
 				return {
 					content: [{ type: "text", text: `Task failed during record allocation: ${message}` }],
 					details: { warnings, agentType: agent.name, error: message },
@@ -582,12 +642,17 @@ export class TaskController {
 					treeDepth: childTreeDepth,
 					depthPolicy: childPolicy(runtime.depthPolicy, agent, childTreeDepth),
 					store: metadataStore,
+					logger: runLogger,
 				};
 
 				const rejectUnconsumedAsyncResult = (snapshot: AgentRunSnapshot): TaskResult | undefined => {
 					if (!params.resume || (snapshot.state !== 'result_ready_memory' && snapshot.state !== 'killed')) {
 						return undefined;
 					}
+					runLogger.warn("task_resume_blocked_unconsumed_result", {
+						recordId: record?.id,
+						runState: snapshot.state,
+					});
 					return {
 						content: [{ type: "text", text: `${record!.displayName} (${record!.id}) has completed async output waiting to be consumed. Use wait_for_agent with agent_id "${record!.id}" before resuming it again.` }],
 						details: {
@@ -630,6 +695,12 @@ export class TaskController {
 
 				let session: any;
 				const hadOpenSessionBeforeSetup = sessionManager.hasOpenSession(record!.id);
+				runLogger.debug("task_session_setup_started", {
+					recordId: record?.id,
+					hadOpenSession: hadOpenSessionBeforeSetup,
+					agentModel: agent.model || "default",
+					agentToolNames: agent.tools ? agent.tools.length : undefined,
+				});
 				try {
 					session = await sessionManager.getOrCreateSession(
 						record!,
@@ -644,8 +715,16 @@ export class TaskController {
 							createResourceLoader: async () => resourceLoader,
 						},
 					);
+					runLogger.info("task_session_setup_completed", {
+					recordId: record!.id,
+					resumed: Boolean(params.resume),
+				});
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
+					runLogger.error("task_session_setup_failed", {
+					recordId: record!.id,
+					error: message,
+				});
 					return {
 						content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed to create session. Use resume: "${record!.id}" to retry.\n\n${message}` }],
 						details: {
@@ -664,6 +743,7 @@ export class TaskController {
 				const setupRunSnapshot = TaskController.classifyRunSnapshot(record!, sessionManager);
 				const setupRunRejection = rejectUnconsumedAsyncResult(setupRunSnapshot);
 				if (setupRunRejection) {
+					runLogger.warn("task_run_blocked_unconsumed_result_after_setup", { recordId: record!.id });
 					if (!hadOpenSessionBeforeSetup) {
 						try { sessionManager.disposeSession(record!.id); } catch { /* best-effort cleanup for rejected setup */ }
 					}
@@ -673,6 +753,11 @@ export class TaskController {
 				const blocking = params.blocking !== false;
 
 				if (!blocking) {
+					runLogger.debug("task_run_async_start", {
+					recordId: record!.id,
+					resumed: Boolean(params.resume),
+					hasOpenSession: sessionManager.hasOpenSession(record!.id),
+				});
 					// Async resume while the same record is already running is a steering
 					// request, not a second prompt. Queue it explicitly so AgentSession
 					// does not reject with "already processing" and so the original async
@@ -686,6 +771,9 @@ export class TaskController {
 									? session.agent.state.isStreaming
 									: undefined;
 						if (isStreaming === false) {
+							runLogger.warn("task_async_steer_blocked_not_streaming", {
+								recordId: record!.id,
+							});
 							return {
 								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is finalizing its async result and cannot be steered. Use wait_for_agent with agent_id "${record!.id}" to retrieve output, then resume it again if more work is needed.` }],
 								details: {
@@ -700,12 +788,17 @@ export class TaskController {
 								},
 							};
 						}
+						runLogger.info("task_async_steer_attempt", {
+							recordId: record!.id,
+							hasSteerHelper: typeof session.steer === "function",
+						});
 						try {
 							if (typeof session.steer === "function") {
 								await session.steer(params.prompt);
 							} else {
 								await session.prompt(params.prompt, { streamingBehavior: "steer" });
 							}
+							runLogger.info("task_async_steer_success", { recordId: record!.id });
 							return {
 								content: [
 									{
@@ -725,6 +818,7 @@ export class TaskController {
 							};
 						} catch (err) {
 							const message = err instanceof Error ? err.message : String(err);
+							runLogger.warn("task_async_steer_failed", { recordId: record!.id, error: message });
 							return {
 								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed to queue steering message. Use wait_for_agent with agent_id "${record!.id}" to retrieve output from the original run.\n\n${message}` }],
 								details: {
@@ -744,8 +838,12 @@ export class TaskController {
 					// Async path: start prompt in background, return immediately.
 					// The session stays tracked; `wait_for_agent` retrieves output later.
 					sessionManager.markAsyncRunning(record!.id);
+					runLogger.debug("task_async_marked_running", {
+					recordId: record!.id,
+				});
 
 					const abort = () => {
+						runLogger.warn("task_async_signal_abort", { recordId: record!.id });
 						void session?.abort();
 					};
 					if (context.signal?.aborted) abort();
@@ -765,12 +863,22 @@ export class TaskController {
 								...(extracted.source === 'diagnostic' ? { error: extracted.text } : {}),
 								warnings,
 							});
+							runLogger.info("task_async_completed", {
+								recordId: record!.id,
+								outputLength: extracted.text.length,
+								hasError: extracted.source === 'diagnostic',
+							});
 						} else {
 							const extracted = TaskController.extractOutput(session.messages as any[], errorMessage);
 							sessionManager.finalizeAsyncRun(record!.id, {
 								output: extracted.text,
 								error: errorMessage,
 								warnings,
+							});
+							runLogger.warn("task_async_failed", {
+								recordId: record!.id,
+								error: errorMessage,
+								outputLength: extracted.text.length,
 							});
 						}
 					};
@@ -806,6 +914,9 @@ export class TaskController {
 				}
 
 				// Blocking path (existing behaviour)
+				runLogger.debug("task_blocking_path", {
+					recordId: record!.id,
+				});
 				const emit = (text: string) => {
 					onUpdate?.({
 						content: [{ type: "text", text }],
@@ -854,6 +965,9 @@ export class TaskController {
 						// Guard against double-prompt when async is already in-flight
 						const runSnapshot = TaskController.classifyRunSnapshot(record!, sessionManager);
 						if (runSnapshot.state === 'running_async') {
+							runLogger.warn("task_blocking_rejected_async_in_flight", {
+								recordId: record!.id,
+							});
 							return {
 								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is still running asynchronously. Use wait_for_agent with agent_id "${record!.id}" to retrieve output.` }],
 								details: {
@@ -901,6 +1015,10 @@ export class TaskController {
 						const promptOrTimeout = await Promise.race(promptRace);
 						clearRuntimeTimeout();
 						if (promptOrTimeout.type === "timeout") {
+							runLogger.warn("task_blocking_timeout", {
+								recordId: record!.id,
+								minutes: DEFAULT_TASK_RUNTIME_TIMEOUT_MINUTES,
+							});
 							const message =
 								`Task execution exceeded the ${DEFAULT_TASK_RUNTIME_TIMEOUT_MINUTES}-minute runtime limit. Use resume: "${record!.id}" to continue this agent.`;
 							const warningText =
@@ -922,17 +1040,31 @@ export class TaskController {
 							};
 						}
 						if (promptOrTimeout.type === "aborted") {
+							runLogger.warn("task_blocking_aborted", { recordId: record!.id });
 							throw new Error("Task execution was aborted.");
 						}
 						if (promptOrTimeout.type === "failed") {
+							runLogger.error("task_blocking_prompt_failed", {
+								recordId: record!.id,
+								error: promptOrTimeout.error instanceof Error ? promptOrTimeout.error.message : String(promptOrTimeout.error),
+							});
 							throw promptOrTimeout.error;
 						}
 
 						if (promptOrTimeout.terminal.source === 'diagnostic') {
+							runLogger.warn("task_blocking_diagnostic", {
+								recordId: record!.id,
+								outputLength: promptOrTimeout.terminal.text.length,
+							});
 							throw new Error(promptOrTimeout.terminal.text || "The sub-agent stopped with a diagnostic.");
 						}
 
 						const output = promptOrTimeout.terminal.text;
+						runLogger.info("task_blocking_completed", {
+							recordId: record!.id,
+							outputLength: output.length,
+							hasWarnings: warnings.length > 0,
+						});
 						const header = `${record!.displayName} (${record!.id}) completed. Use resume: "${record!.id}" to continue this agent.`;
 						const warningText =
 							warnings.length > 0
@@ -958,6 +1090,11 @@ export class TaskController {
 						};
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
+					runLogger.error("task_blocking_crashed", {
+						recordId: record!.id,
+						error: message,
+						outputLength: session?.messages?.length,
+					});
 					const extracted = TaskController.extractOutput(session.messages as any[], message);
 					const warningText =
 						warnings.length > 0
@@ -991,6 +1128,7 @@ export class TaskController {
 						},
 					};
 				} finally {
+					runLogger.debug("task_blocking_completed_cleanup", { recordId: record!.id });
 					if (context.signal && onAbort) {
 						context.signal.removeEventListener("abort", onAbort);
 					}
@@ -1002,6 +1140,10 @@ export class TaskController {
 		} catch (err) {
 			// Catch failures from withRecordRunLock itself (lock acquisition).
 			const message = err instanceof Error ? err.message : String(err);
+			runLogger.error("task_lock_failed", {
+				recordId: record?.id,
+				error: message,
+			});
 			return {
 				content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed during execution: ${message}` }],
 				details: {
@@ -1081,11 +1223,23 @@ export class TaskController {
 		opts: { timeout?: number; wait_all?: boolean; kill_on_timeout?: boolean },
 		context: TaskExecuteContext,
 	): Promise<TaskResult> {
-		const { metadataStore, sessionManager } = context;
+		const { metadataStore, sessionManager, runtime } = context;
+		const logger = runtime?.logger ?? makeNoopDebugLogger();
+		const runLogger = logger.child({
+			component: "wait_for_agent",
+			runId: createRunCorrelationId("wait"),
+		});
 		const warnings: string[] = [];
+
+		runLogger.info("wait_for_agent_start", {
+			agentCountRequested: agentIds?.length,
+			waitAll: opts.wait_all === true,
+			killOnTimeout: opts.kill_on_timeout === true,
+		});
 
 		// Validate input
 		if (!agentIds || agentIds.length === 0) {
+			runLogger.warn("wait_for_agent_missing_ids");
 			return {
 				content: [{ type: "text", text: "wait_for_agent requires at least one agent_id." }],
 				details: { warnings, error: "missing_agent_ids" },
@@ -1116,11 +1270,16 @@ export class TaskController {
 			const completedOrKilled = agents
 				.filter((agent) => agent.status === "completed" || agent.status === "killed")
 				.map((agent) => agent.id);
-			for (const id of completedOrKilled) {
-				sessionManager.clearAsyncResult(id);
-			}
-			if (completedOrKilled.length > 0 && context.consumeWaitForAgentIds) {
-				context.consumeWaitForAgentIds(completedOrKilled);
+			if (completedOrKilled.length > 0) {
+				runLogger.debug("wait_for_agent_consume_terminal", {
+					count: completedOrKilled.length,
+				});
+				for (const id of completedOrKilled) {
+					sessionManager.clearAsyncResult(id);
+				}
+				if (context.consumeWaitForAgentIds) {
+					context.consumeWaitForAgentIds(completedOrKilled);
+				}
 			}
 		};
 
@@ -1131,6 +1290,13 @@ export class TaskController {
 
 		// ---- First pass: classify all agents ----
 		const firstResults = uniqueIds.map(buildResult);
+		runLogger.debug("wait_for_agent_initial_classify", {
+			agentCount: firstResults.length,
+			completedCount: firstResults.filter((r) => r.status === "completed").length,
+			runningCount: firstResults.filter((r) => r.status === "running").length,
+			unknownCount: firstResults.filter((r) => r.status === "unknown").length,
+			timedOutCount: firstResults.filter((r) => r.status === "timed_out_still_running").length,
+		});
 
 		const hasTerminalResult = firstResults.some(r => r.status === "completed" || r.status === "killed");
 		const runningIds = firstResults
@@ -1140,6 +1306,10 @@ export class TaskController {
 		// If any agent already has terminal output, return immediately unless the
 		// caller asked to wait for all remaining running agents.
 		if (!waitAll && hasTerminalResult) {
+			runLogger.debug("wait_for_agent_returning_terminal", {
+				mode: "existing_terminal_fast_path",
+				agentCount: firstResults.length,
+			});
 			// Consume async results so in-memory resources are released
 			for (const r of firstResults) {
 				if (r.status === "completed") {
@@ -1151,6 +1321,9 @@ export class TaskController {
 
 		// If no agents are running (all unknown), return immediately.
 		if (runningIds.length === 0) {
+			runLogger.debug("wait_for_agent_no_running", {
+				agentCount: firstResults.length,
+		});
 			return formatWaitResult(firstResults);
 		}
 
@@ -1173,6 +1346,11 @@ export class TaskController {
 			});
 
 			const winner = await Promise.race([waitCompletion, timeoutPromise]);
+			runLogger.debug("wait_for_agent_wait_race", {
+				winner,
+				waitAll,
+				ids: runningIds,
+			});
 			waitAbortController.abort();
 
 			// Yield to the microtask queue so finish() can run storeAsyncResult
@@ -1180,6 +1358,10 @@ export class TaskController {
 			await new Promise<void>((resolve) => { queueMicrotask(resolve); });
 
 			if (winner === "__timeout__") {
+				runLogger.warn("wait_for_agent_timed_out", {
+					timeoutMs,
+					timedIds: runningIds,
+				});
 				const timeoutResults = uniqueIds.map(id => {
 					const r = buildResult(id);
 					if (r.status === "running") {
@@ -1197,9 +1379,14 @@ export class TaskController {
 						.map(r => r.id);
 
 					if (timedOutIds.length > 0) {
+						runLogger.warn("wait_for_agent_kill_escalation_started", {
+							count: timedOutIds.length,
+							windowMinutes: timeoutMinutes,
+						});
 						// Send soft-kill instruction to each timed-out agent.
 						for (const id of timedOutIds) {
 							try {
+								runLogger.warn("wait_for_agent_soft_kill_sent", { agentId: id });
 								sessionManager.sendKillMessage(id, timeoutMinutes);
 							} catch { /* best-effort */ }
 						}
@@ -1214,17 +1401,24 @@ export class TaskController {
 						});
 
 						const killResult = await Promise.race([killCompleted, killTimeoutPromise]);
+						runLogger.debug("wait_for_agent_kill_wait_result", {
+							killResult,
+						});
 						killAbortController.abort();
 
 						// Track which agents were explicitly hard-aborted.
 						const hardAbortedIds = new Set<string>();
 
 						if (killResult === "__kill_timeout__") {
+							runLogger.warn("wait_for_agent_kill_timeout_hit", {
+								timedOutIds,
+							});
 							// Kill window expired — hard-abort still-running agents.
 							for (const id of timedOutIds) {
 								const r = buildResult(id);
 								if (r.status === "running" || r.status === "timed_out_still_running") {
 									try {
+										runLogger.warn("wait_for_agent_hard_abort", { agentId: id });
 										sessionManager.abortSession(id);
 										hardAbortedIds.add(id);
 									} catch { /* best-effort */ }
@@ -1250,6 +1444,10 @@ export class TaskController {
 							}
 							return r;
 						});
+						runLogger.warn("wait_for_agent_kill_results", {
+							timedOutCount: timedOutIds.length,
+							killedCount: hardAbortedIds.size,
+						});
 						for (const r of escalationResults) {
 							if (r.status === "completed") {
 								sessionManager.clearAsyncResult(r.id);
@@ -1265,6 +1463,10 @@ export class TaskController {
 						sessionManager.clearAsyncResult(r.id);
 					}
 				}
+				runLogger.warn("wait_for_agent_timeout_results", {
+					timedOutCount: timeoutResults.filter((r) => r.status === "timed_out_still_running").length,
+					completedCount: timeoutResults.filter((r) => r.status === "completed").length,
+				});
 				return formatWaitResult(timeoutResults);
 			}
 
@@ -1274,13 +1476,20 @@ export class TaskController {
 				// Still-open sessions that were running remain "running"
 				return r;
 			});
+			runLogger.info("wait_for_agent_final_results", {
+				completedCount: finalResults.filter((r) => r.status === "completed").length,
+				runningCount: finalResults.filter((r) => r.status === "running").length,
+			});
 			for (const r of finalResults) {
 				if (r.status === "completed") {
 					sessionManager.clearAsyncResult(r.id);
 				}
 			}
 			return formatWaitResult(finalResults);
-		} catch {
+		} catch (error) {
+			runLogger.error("wait_for_agent_failure", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			// Best-effort: return whatever we have
 			const fallbackResults = uniqueIds.map(id => {
 				try { return buildResult(id); } catch {

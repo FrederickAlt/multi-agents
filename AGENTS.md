@@ -194,6 +194,14 @@ Concurrent `Task` calls are serialized through a metadata lock promise to preven
 
 Sub-agent `AgentSession` objects are disposed after each `Task` call. The on-disk session file is preserved so `resume` can reopen it. This prevents unbounded memory accumulation when many sub-agents are spawned.
 
+### Debug logging
+
+The extension includes an isolated debug logger for tracing Task and async wait/kill flow.
+
+- Enablement: local constant in `subagent/debug-logger.ts`, `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` (default `false`).
+- Logs: `.task-subagents-<sessionId>.debug.jsonl` in the root session directory when enabled.
+- Redaction: sensitive keys (`authorization`, `bearer`, `cookie`, `password`, `secret`, `secret_key`, `token`, `apikey`, `api_key`, `access_token`, `refresh_token`) are redacted; values are truncated for bounded size.
+
 ## Dependencies
 
 - **Runtime**: `@mariozechner/pi-coding-agent`, `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`, `@mariozechner/pi-tui` — the Pi platform packages they are found at `~/p/AI/pi_extensions/pi-mono/packages/coding-agent` etc.

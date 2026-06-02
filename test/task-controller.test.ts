@@ -33,6 +33,7 @@ import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "..
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
 import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
 import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE } from "../subagent/output-extraction.js";
+import type { DebugLogger } from "../subagent/debug-logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,6 +72,23 @@ function makeMockMetadataFile(records: SubagentRecord[] = []): MetadataFile {
 }
 
 function fakeDiagnostics(): readonly AgentDiagnostic[] { return []; }
+
+function makeSpyDebugLogger(sink: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }>): DebugLogger {
+	const create = (context: Record<string, unknown>): DebugLogger => {
+		return {
+			isEnabled: true,
+			child: (childContext) => create({ ...context, ...childContext }),
+			log: (level, event, payload = {}) => {
+				sink.push({ level, event, context, payload });
+			},
+			debug: (event, payload) => create(context).log("debug", event, payload),
+			info: (event, payload) => create(context).log("info", event, payload),
+			warn: (event, payload) => create(context).log("warn", event, payload),
+			error: (event, payload) => create(context).log("error", event, payload),
+		};
+	};
+	return create({});
+}
 
 // ---------------------------------------------------------------------------
 // Static utility methods
@@ -496,6 +514,30 @@ describe("TaskController.execute", () => {
 		expect(details.agentType).toBe("explorer");
 		expect(details.error).toBeUndefined();
 		expect(details.output).toBe("Task completed successfully!");
+	});
+
+	it("emits execute breadcrumbs via runtime logger", async () => {
+		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
+		const runtime: RuntimeContext = {
+			treeDepth: 0,
+			depthPolicy: defaultRootPolicy(),
+			logger: makeSpyDebugLogger(logs),
+		};
+
+		mockSession.messages = [
+			{ role: "user", content: "Do something" },
+			{ role: "assistant", content: [{ type: "text", text: "Task completed successfully!" }] },
+		];
+
+		await controller.execute(
+			makeParams(),
+			makeContext({ runtime }),
+		);
+
+		const emitted = logs.map((entry) => entry.event);
+		expect(emitted).toContain("task_run_start");
+		expect(emitted).toContain("task_blocking_completed");
+		expect(emitted).toContain("task_session_setup_completed");
 	});
 
 	it("returns a unique hex ID that persists in metadata", async () => {
@@ -2293,11 +2335,21 @@ describe("TaskController.execute", () => {
 			for (const cb of subs) cb({ type: "agent_end" });
 		});
 
+		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
+		const runtime: RuntimeContext = {
+			treeDepth: 0,
+			depthPolicy: defaultRootPolicy(),
+			logger: makeSpyDebugLogger(logs),
+		};
 		const result = await controller.waitForAgent(
 			[agentId],
 			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
+			makeContext({ runtime }),
 		);
+		const emitted = logs.map((entry) => entry.event);
+		expect(emitted).toContain("wait_for_agent_kill_escalation_started");
+		expect(emitted).toContain("wait_for_agent_soft_kill_sent");
+		expect(emitted).toContain("wait_for_agent_kill_results");
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("completed");
@@ -2329,11 +2381,21 @@ describe("TaskController.execute", () => {
 		// sendKillMessage is a no-op (agent doesn't respond to kill)
 		fakeSessionManager.sendKillMessage = vi.fn();
 
+		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
+		const runtime: RuntimeContext = {
+			treeDepth: 0,
+			depthPolicy: defaultRootPolicy(),
+			logger: makeSpyDebugLogger(logs),
+		};
 		const result = await controller.waitForAgent(
 			[agentId],
 			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
+			makeContext({ runtime }),
 		);
+
+		const emitted = logs.map((entry) => entry.event);
+		expect(emitted).toContain("wait_for_agent_kill_escalation_started");
+		expect(emitted).toContain("wait_for_agent_hard_abort");
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("killed");

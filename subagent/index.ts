@@ -35,6 +35,11 @@ import {
 	type RenderContext,
 } from "./prompt-composition.js";
 import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE, needsFinalResponsePrompt } from "./output-extraction.js";
+import {
+	makeSessionDebugLogger,
+	makeNoopDebugLogger,
+} from "./debug-logger.js";
+import type { DebugLogger } from "./debug-logger.js";
 
 export {
 	buildTemplateValues,
@@ -297,8 +302,8 @@ export function configureTaskToolForRuntime(
 		async execute(_toolCallId, wParams, _signal, _onUpdate, ctx) {
 			const controller = new TaskController();
 
-			const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
-			const sm = getOrCreateSessionManager();
+			const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager, runtime.logger);
+			const sm = getOrCreateSessionManager(runtime.logger);
 
 			const agentDiscoveryAdapter: AgentDiscoveryAdapter = {
 				discover() {
@@ -390,11 +395,12 @@ export const __testing = {
 	},
 };
 
-function getOrCreateSessionManager(): SubagentSessionManager {
+function getOrCreateSessionManager(logger?: DebugLogger): SubagentSessionManager {
 	if (!_sessionManager) {
 		_sessionManager = new SubagentSessionManager(
 			new PiSessionManagerProvider(),
 			new PiAgentSessionFactory(),
+			logger,
 		);
 		_sessionManager.setOnAsyncResultReady((id) => {
 			_asyncAgentNotifier.markCompleted(id);
@@ -491,7 +497,8 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const renderCurrentRootPromptForDump = (ctx: { cwd: string; sessionManager: any }): string => {
-		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
+		const logger = makeSessionDebugLogger(ctx.sessionManager);
+		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager, logger);
 		activeStore.load();
 		const agent = resolveRootAgentForSession(activeStore.selectedMainAgent);
 		return renderComposedAgentSystemPrompt({
@@ -538,8 +545,8 @@ export default function (pi: ExtensionAPI) {
 		ctx: any,
 		runtime: RuntimeContext,
 	): Promise<TaskResult> => {
-		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
-		const sm = getOrCreateSessionManager();
+		const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager, runtime.logger);
+		const sm = getOrCreateSessionManager(runtime.logger);
 
 		// Build adapter objects from concrete classes.
 		// MetadataStore / SubagentSessionManager already satisfy their
@@ -604,7 +611,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event, ctx) => {
-		const activeStore = store ?? MetadataStore.fromSessionManager(ctx.sessionManager);
+		const activeStore = store ?? MetadataStore.fromSessionManager(ctx.sessionManager, mainRuntime.logger ?? makeNoopDebugLogger());
 		try {
 			activeStore.load();
 			resolveRootAgentForSession(activeStore.selectedMainAgent);
@@ -636,9 +643,12 @@ export default function (pi: ExtensionAPI) {
 		dumpNextProviderRequest = false;
 		lastProviderSystemPrompt = undefined;
 		lastRootPromptParts = undefined;
-		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
+		const rootLogger = makeSessionDebugLogger(ctx.sessionManager);
+		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager, rootLogger);
+		mainRuntime.logger = rootLogger;
 		mainRuntime.store = activeStore;
 		store = activeStore;
+		rootLogger.info("root_session_start", { sessionDir: ctx.sessionManager.getSessionDir() });
 		activeStore.load();
 		// Restore the agent set by /agent X before newSession.
 		// globalThis is used because the extension module is reloaded during
@@ -728,17 +738,26 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
+		mainRuntime.logger?.info?.("root_session_shutdown", {
+			reason: event.reason,
+			hasStore: Boolean(store),
+		});
 		_sessionManager?.disposeAll();
 		_sessionManager = undefined;
 		_asyncAgentNotifier.clear();
 		if (event.reason === "new") {
+			mainRuntime.logger?.info?.("root_session_cleanup_start");
 			store?.cleanup();
 			store = undefined;
+			mainRuntime.logger?.info?.("root_session_cleanup_done");
 		}
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!store) store = MetadataStore.fromSessionManager(ctx.sessionManager);
+		if (!store) {
+			const logger = mainRuntime.logger ?? makeNoopDebugLogger();
+			store = MetadataStore.fromSessionManager(ctx.sessionManager, logger);
+		}
 		const agent = resolveRootAgentForSession(store.selectedMainAgent);
 		mainRuntime.store = store;
 		mainRuntime.treeDepth = 0;
@@ -821,7 +840,7 @@ export default function (pi: ExtensionAPI) {
 				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
 				return;
 			}
-			const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager);
+			const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager, mainRuntime.logger ?? makeNoopDebugLogger());
 			store = activeStore;
 			activeStore.selectedMainAgent = agent.name;
 			mainRuntime.store = activeStore;

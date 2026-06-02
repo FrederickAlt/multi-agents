@@ -189,3 +189,17 @@ The built-in specialist agents have `depth: 0` and cannot spawn further sub-agen
 ## Persistence
 
 Sub-agent metadata is stored beside the main session in a sidecar file named `.task-subagents-<sessionId>.json`. Sub-agent sessions use Pi's normal session files. They survive quitting and resuming the same main session, and are cleared when the main session is replaced with `/new`.
+
+## Debug logging (isolated)
+
+The extension includes an isolated debug logger for `Task`, `wait_for_agent`, and session lifecycle breadcrumbs.
+
+- **Enablement:** For local debugging only, edit `subagent/debug-logger.ts` and set the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` to `true`. There is no Pi flag and no extension config surface.
+- **Publishing default:** the constant must remain `false` for published builds so normal extension use does not write local forensic logs by default.
+- **Log destination:** when enabled, each session writes JSONL events to `.task-subagents-<sessionId>.debug.jsonl` in the main session directory (same directory as `.task-subagents-<sessionId>.json`).
+- **Logged breadcrumbs:** lightweight root/session/Task/async chain data: run IDs, record IDs, parent IDs, agent types, depths, lifecycle events, counts, lengths, and flags.
+- **Not logged:** full Task prompts, model outputs, context file contents, tool schemas/parameters, API keys, tokens, passwords, secrets, authorization values, or full path-like values.
+- **Redaction/truncation:** logger output is redaction-first:
+  - Sensitive-ish keys such as `authorization`, `bearer`, `cookie`, `password`, `secret`, `secret_key`, `token`, `apikey`, `api_key`, `access_token`, `refresh_token`, plus prompt/output/context/tool-schema/path keys, are replaced with `"[redacted]"`.
+  - Deep/large values are truncated and collection sizes are capped.
+- **Safety:** logging never throws into runtime behavior; failures are swallowed and normal execution continues.
