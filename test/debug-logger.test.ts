@@ -32,11 +32,11 @@ describe("debug logger", () => {
 	}
 	});
 
-	it("defaults to no-op when disabled", () => {
+	it("can be explicitly disabled", () => {
 		const logger = makeSessionDebugLogger({
 			getSessionDir: () => tempDir,
 			getSessionId: () => "session-disabled",
-		});
+		}, { enabled: false });
 
 		expect(logger.isEnabled).toBe(false);
 		logger.info("task_run_start", { message: "should not persist" });

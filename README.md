@@ -78,8 +78,8 @@ Async completion notifications are delivered at safe root-agent run boundaries: 
 
 The extension includes a dedicated, isolated debug logger for Task/wait lifecycle paths.
 
-- **Enablement**: for local incident debugging only, edit `subagent/debug-logger.ts` and set the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` to `true`. There is no Pi flag and no extension config.
-- **Publishing default**: the constant must remain `false` in published builds so ordinary users do not write extra local forensic logs by default.
+- **Enablement**: the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` in `subagent/debug-logger.ts` controls logging. It is currently `true` so incident breadcrumbs are written by default in this checkout. There is no Pi flag and no extension config.
+- **Publishing note**: if a build should avoid extra local forensic logs, set the constant to `false` before publishing.
 - **Log file**: `.task-subagents-<sessionId>.debug.jsonl` in the session directory, one JSON object per line.
 - **What is logged**: breadcrumbs such as root/session start and shutdown, Task run IDs, sub-agent record IDs, parent IDs, agent types, depths, async/wait/kill lifecycle events, counts, lengths, and boolean state flags.
 - **What is not logged**: full prompts, model outputs, context file contents, tool schemas/parameters, and path-like values are not intended to be recorded; callers pass lightweight metadata only.

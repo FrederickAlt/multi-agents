@@ -194,8 +194,8 @@ Sub-agent metadata is stored beside the main session in a sidecar file named `.t
 
 The extension includes an isolated debug logger for `Task`, `wait_for_agent`, and session lifecycle breadcrumbs.
 
-- **Enablement:** For local debugging only, edit `subagent/debug-logger.ts` and set the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` to `true`. There is no Pi flag and no extension config surface.
-- **Publishing default:** the constant must remain `false` for published builds so normal extension use does not write local forensic logs by default.
+- **Enablement:** The single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` in `subagent/debug-logger.ts` controls logging. It is currently `true`, so sessions write debug breadcrumbs by default in this checkout. There is no Pi flag and no extension config surface.
+- **Publishing note:** set the constant to `false` before publishing if a build should avoid writing extra local forensic logs by default.
 - **Log destination:** when enabled, each session writes JSONL events to `.task-subagents-<sessionId>.debug.jsonl` in the main session directory (same directory as `.task-subagents-<sessionId>.json`).
 - **Logged breadcrumbs:** lightweight root/session/Task/async chain data: run IDs, record IDs, parent IDs, agent types, depths, lifecycle events, counts, lengths, and flags.
 - **Not logged:** full Task prompts, model outputs, context file contents, tool schemas/parameters, API keys, tokens, passwords, secrets, authorization values, or full path-like values.

@@ -198,7 +198,7 @@ Sub-agent `AgentSession` objects are disposed after each `Task` call. The on-dis
 
 The extension includes an isolated debug logger for tracing Task and async wait/kill flow.
 
-- Enablement: local constant in `subagent/debug-logger.ts`, `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` (default `false`).
+- Enablement: local constant in `subagent/debug-logger.ts`, `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` (currently `true` in this checkout).
 - Logs: `.task-subagents-<sessionId>.debug.jsonl` in the root session directory when enabled.
 - Redaction: sensitive keys (`authorization`, `bearer`, `cookie`, `password`, `secret`, `secret_key`, `token`, `apikey`, `api_key`, `access_token`, `refresh_token`) are redacted; values are truncated for bounded size.
 

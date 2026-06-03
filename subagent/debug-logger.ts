@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-export const MULTI_AGENTS_DEBUG_LOGGING_ENABLED = false;
+export const MULTI_AGENTS_DEBUG_LOGGING_ENABLED = true;
 
 export type DebugLogLevel = "debug" | "info" | "warn" | "error";
 
