@@ -33,6 +33,8 @@ const HUMAN_NAMES = [
 // Types
 // ---------------------------------------------------------------------------
 
+export type TerminalOutcome = "completed" | "crashed" | "timed_out" | "aborted" | "abort_request_failed";
+
 export interface SubagentRecord {
 	id: string;
 	humanName: string;
@@ -43,6 +45,10 @@ export interface SubagentRecord {
 	depth: number;
 	createdAt: string;
 	updatedAt: string;
+	terminalOutcome?: TerminalOutcome;
+	terminalError?: string;
+	abortReason?: string;
+	terminalAt?: string;
 }
 
 export interface MetadataFile {

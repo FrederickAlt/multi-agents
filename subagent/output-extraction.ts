@@ -41,6 +41,29 @@ function findMatchingToolCall(messages: any[], toolResultIndex: number): any | u
 	return undefined;
 }
 
+function sanitizeTextForDiagnostic(text: string, maxLength = 220): string {
+	const normalized = text.trim().replace(/\s+/g, " ");
+	if (normalized.length <= maxLength) return normalized;
+	return `${normalized.slice(0, maxLength)}…(+${normalized.length - maxLength} chars)`;
+}
+
+function getPendingToolCallDiagnosticFromMessages(messages: any[]): string {
+	const msg = messages[messages.length - 1];
+	if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) return "";
+	const toolCalls = msg.content.filter((part: any) => part?.type === "toolCall");
+	if (toolCalls.length === 0) return "";
+	const toolCall = toolCalls[toolCalls.length - 1];
+	const toolName = typeof toolCall.name === "string" ? toolCall.name : "tool";
+	const toolCallArgs = toolCall.arguments;
+	if (toolName === "bash" && typeof toolCallArgs?.command === "string" && toolCallArgs.command.trim()) {
+		return `Last transcript activity: assistant was executing tool ${toolName}: ${sanitizeTextForDiagnostic(toolCallArgs.command)}`;
+	}
+	if (toolCallArgs && typeof toolCallArgs === "string" && toolCallArgs.trim()) {
+		return `Last transcript activity: assistant was executing tool ${toolName}: ${sanitizeTextForDiagnostic(toolCallArgs)}`;
+	}
+	return `Last transcript activity: assistant was executing tool ${toolName}.`;
+}
+
 function getTerminalToolResultDiagnosticFromMessages(messages: any[]): string {
 	const index = messages.length - 1;
 	const msg = messages[index];
@@ -54,9 +77,8 @@ function getTerminalToolResultDiagnosticFromMessages(messages: any[]): string {
 	const command = toolName === "bash" && typeof toolCall?.arguments?.command === "string"
 		? toolCall.arguments.command.trim()
 		: "";
-	return command ? `${prefix}\nCommand: ${command}` : prefix;
+	return command ? `${prefix}\nCommand: ${sanitizeTextForDiagnostic(command)}` : prefix;
 }
-
 /**
  * Extract the last assistant text content from a message array.
  */
@@ -82,6 +104,10 @@ export function getTerminalTextFromMessages(messages: any[]): string {
 export function getTerminalDiagnosticFromMessages(messages: any[]): string {
 	const msg = messages[messages.length - 1];
 	if (msg?.role === "assistant") {
+		const pendingTool = getPendingToolCallDiagnosticFromMessages(messages);
+		if (pendingTool) {
+			return pendingTool;
+		}
 		if ((msg.stopReason === "error" || msg.stopReason === "aborted") && typeof msg.errorMessage === "string") {
 			return msg.errorMessage.trim() ? msg.errorMessage : "";
 		}
@@ -93,13 +119,13 @@ export function getTerminalDiagnosticFromMessages(messages: any[]): string {
 export function extractTerminalOutput(
 	messages: any[],
 ): { text: string; source: 'assistant' | 'diagnostic' | 'none' } {
-	const assistantText = getTerminalTextFromMessages(messages);
-	if (assistantText) {
-		return { text: assistantText, source: 'assistant' };
-	}
 	const diagnostic = getTerminalDiagnosticFromMessages(messages);
 	if (diagnostic) {
 		return { text: diagnostic, source: 'diagnostic' };
+	}
+	const assistantText = getTerminalTextFromMessages(messages);
+	if (assistantText) {
+		return { text: assistantText, source: 'assistant' };
 	}
 	return { text: '', source: 'none' };
 }
@@ -120,6 +146,10 @@ export function extractOutput(
 	messages: any[],
 	error?: string,
 ): { text: string; source: 'assistant' | 'diagnostic' | 'none' } {
+	const pendingTool = getPendingToolCallDiagnosticFromMessages(messages);
+	if (pendingTool) {
+		return { text: pendingTool, source: 'diagnostic' };
+	}
 	const assistantText = getFinalTextFromMessages(messages);
 	if (assistantText) {
 		return { text: assistantText, source: 'assistant' };

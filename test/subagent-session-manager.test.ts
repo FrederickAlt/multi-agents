@@ -13,6 +13,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Type } from "typebox";
 import { MetadataStore } from "../subagent/metadata.js";
 import {
+	ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS,
+	ABORT_FINAL_SUMMARY_MESSAGE,
+	ABORT_FINAL_SUMMARY_TIMEOUT_MS,
 	PiAgentSessionFactory,
 	SubagentSessionManager,
 	type SessionSetupContext,
@@ -742,7 +745,7 @@ describe("SubagentSessionManager", () => {
 			expect(onReady).not.toHaveBeenCalled();
 		});
 
-		it("does not fire result-ready callback during the original soft-kill abort", async () => {
+		it("does not fire result-ready callback during the original finish-request abort", async () => {
 			const sm = createManager();
 			const onReady = vi.fn();
 			sm.setOnAsyncResultReady(onReady);
@@ -792,7 +795,7 @@ describe("SubagentSessionManager", () => {
 			expect(onReady).not.toHaveBeenCalled();
 		});
 
-		it("does not overwrite or re-notify after a soft-kill prompt rejects following hard abort", async () => {
+		it("does not overwrite or re-notify after a finish request rejects following forced abort", async () => {
 			const sm = createManager();
 			const onReady = vi.fn();
 			sm.setOnAsyncResultReady(onReady);
@@ -807,17 +810,111 @@ describe("SubagentSessionManager", () => {
 			sm.sendKillMessage("kill-late", 1);
 			sm.abortSession("kill-late");
 
-			expect(sm.getAsyncResult("kill-late")?.error).toBe("killed");
+			expect(sm.getAsyncResult("kill-late")?.error).toBe("aborted");
 			expect(onReady).toHaveBeenCalledTimes(1);
 
-			rejectKillPrompt?.(new Error("late kill prompt failure"));
+			rejectKillPrompt?.(new Error("late finish-request prompt failure"));
 			await Promise.resolve();
 
-			expect(sm.getAsyncResult("kill-late")?.error).toBe("killed");
+			expect(sm.getAsyncResult("kill-late")?.error).toBe("aborted");
 			expect(onReady).toHaveBeenCalledTimes(1);
 		});
 
-		it("transitions running to soft-killing to completed", async () => {
+		it("finish request path does not abort before steering", async () => {
+			const sm = createManager();
+			const id = "finish-before-abort";
+			const calls: string[] = [];
+			const session = makeMockSession();
+			session.abort = vi.fn(() => { calls.push("abort"); }) as any;
+			(session as any).steer = vi.fn(() => {
+				calls.push("steer");
+				return Promise.resolve();
+			});
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "finished" }] }];
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 1);
+			await Promise.resolve();
+
+			expect(calls).toEqual(["steer"]);
+			expect(session.abort).not.toHaveBeenCalled();
+			expect((session as any).steer).toHaveBeenCalledTimes(1);
+		});
+
+		it("uses steer when available for finish request", async () => {
+			const sm = createManager();
+			const id = "kill-steer";
+			const session = makeMockSession();
+			let steerResolve: (() => void) | undefined;
+			session.steer = vi.fn(() => new Promise<void>((resolve) => {
+				steerResolve = resolve;
+			})) as any;
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "finish-request steer result" }] }];
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 1);
+			steerResolve?.();
+			await Promise.resolve();
+
+			expect(session.steer).toHaveBeenCalledTimes(1);
+			expect((session.prompt as any)).not.toHaveBeenCalled();
+			expect(sm.isCompleted(id)).toBe(true);
+			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
+			expect(sm.getAsyncResult(id)?.terminalError).toBeUndefined();
+			expect(sm.isKillInProgress(id)).toBe(false);
+		});
+
+		it("finish request failure does not prevent storing the original run output", async () => {
+			const sm = createManager();
+			const id = "finish-failed-original";
+			const session = makeMockSession();
+			(session as any).steer = vi.fn().mockRejectedValue(new Error("still processing"));
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "original final" }] }];
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 1);
+			await Promise.resolve();
+
+			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("abort_request_failed");
+			expect(sm.isCompleted(id)).toBe(false);
+
+			sm.finalizeAsyncRun(id, { output: "original final", warnings: [], terminalOutcome: "completed" });
+
+			expect(sm.getAsyncResult(id)?.output).toBe("original final");
+			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
+			expect(sm.isCompleted(id)).toBe(true);
+		});
+
+		it("falls back to streamingBehavior steer when steer helper is unavailable", async () => {
+			const sm = createManager();
+			const id = "kill-fallback";
+			const session = makeMockSession();
+			let resolveKillPrompt: (() => void) | undefined;
+			let promptArgs: any[] | undefined;
+			session.prompt = vi.fn((_message: string, opts?: unknown) => {
+				promptArgs = [(_message as string), opts as any];
+				return new Promise<void>((resolve) => {
+					resolveKillPrompt = resolve;
+				});
+			}) as any;
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 1);
+			resolveKillPrompt?.();
+			await Promise.resolve();
+
+			expect(session.steer).toBeUndefined();
+			expect(session.prompt).toHaveBeenCalledTimes(1);
+			expect(promptArgs?.[1]).toMatchObject({ streamingBehavior: "steer" });
+			expect(sm.isCompleted(id)).toBe(true);
+			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
+		});
+
+		it("transitions running finish request to completed", async () => {
 			const sm = createManager();
 			const onReady = vi.fn();
 			sm.setOnAsyncResultReady(onReady);
@@ -828,7 +925,7 @@ describe("SubagentSessionManager", () => {
 			session.prompt = vi.fn(() => new Promise<void>((resolve) => {
 				resolveKillPrompt = resolve;
 			})) as any;
-			session.messages = [{ role: "assistant", content: [{ type: "text", text: "soft-kill final output" }] }];
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "finish-request final output" }] }];
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
 
@@ -842,11 +939,11 @@ describe("SubagentSessionManager", () => {
 			expect(sm.isKillInProgress(id)).toBe(false);
 			expect(sm.isCompleted(id)).toBe(true);
 			expect(sm.hasOpenSession(id)).toBe(false);
-			expect(sm.getAsyncResult(id)?.output).toBe("soft-kill final output");
+			expect(sm.getAsyncResult(id)?.output).toBe("finish-request final output");
 			expect(onReady).toHaveBeenCalledWith(id);
 		});
 
-		it("transitions running to soft-killing to hard-aborted", async () => {
+		it("transitions running finish request to forced abort", async () => {
 			const sm = createManager();
 			const onReady = vi.fn();
 			sm.setOnAsyncResultReady(onReady);
@@ -865,19 +962,218 @@ describe("SubagentSessionManager", () => {
 			expect(sm.isKillInProgress(id)).toBe(true);
 			sm.abortSession(id);
 
-			expect(sm.getAsyncResult(id)?.error).toBe("killed");
+			expect(sm.getAsyncResult(id)?.error).toBe("aborted");
 			expect(sm.isKillInProgress(id)).toBe(false);
 			expect(sm.isCompleted(id)).toBe(true);
 			expect(sm.hasOpenSession(id)).toBe(false);
 
-			rejectKillPrompt?.(new Error("late kill prompt failure"));
+			rejectKillPrompt?.(new Error("late finish-request prompt failure"));
 			await Promise.resolve();
 
-			expect(sm.getAsyncResult(id)?.error).toBe("killed");
+			expect(sm.getAsyncResult(id)?.error).toBe("aborted");
 			expect(onReady).toHaveBeenCalledTimes(1);
 		});
 
-		it("transitions running to hard-aborted", () => {
+		it("final abort summary cancels in-flight work, disables tools, and records an aborted summary", async () => {
+			const sm = createManager();
+			const id = "abort-summary";
+			const calls: string[] = [];
+			const session = makeMockSession(["bash", "read"]);
+			session.abort = vi.fn(() => {
+				calls.push("abort");
+				setTimeout(() => {
+					for (const cb of session.callbacks) cb({ type: "agent_end" });
+				}, 0);
+				return Promise.resolve();
+			}) as any;
+			(session as any).abortBash = vi.fn(() => { calls.push("abortBash"); });
+			const setActiveToolsByName = vi.fn(() => { calls.push("setTools"); });
+			(session as any).setActiveToolsByName = setActiveToolsByName;
+			session.prompt = vi.fn(() => {
+				calls.push("prompt");
+				session.messages = [{ role: "assistant", content: [{ type: "text", text: "final abort summary" }] }];
+				setTimeout(() => {
+					for (const cb of session.callbacks) cb({ type: "agent_end" });
+				}, 0);
+				return Promise.resolve();
+			}) as any;
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			const result = await sm.requestAbortSummary(id, 1000);
+
+			expect(calls).toEqual(["abortBash", "abort", "setTools", "prompt"]);
+			expect(setActiveToolsByName).toHaveBeenCalledWith([]);
+			expect(session.prompt).toHaveBeenCalledWith(ABORT_FINAL_SUMMARY_MESSAGE, { streamingBehavior: "steer" });
+			expect(result).toMatchObject({ status: "summarized", output: "final abort summary", toolOverrideApplied: true });
+			expect(sm.getAsyncResult(id)).toMatchObject({
+				output: "final abort summary",
+				error: "aborted",
+				abortReason: "final_summary",
+				terminalOutcome: "aborted",
+			});
+		});
+
+		it("final abort summary can replace an abort-request-failed diagnostic", async () => {
+			const sm = createManager();
+			const id = "abort-summary-after-failed-request";
+			const session = makeMockSession(["bash"]);
+			session.abort = vi.fn(() => {
+				setTimeout(() => {
+					for (const cb of session.callbacks) cb({ type: "agent_end" });
+				}, 0);
+				return Promise.resolve();
+			}) as any;
+			(session as any).setActiveToolsByName = vi.fn();
+			session.prompt = vi.fn(() => {
+				session.messages = [{ role: "assistant", content: [{ type: "text", text: "summary after failed finish request" }] }];
+				setTimeout(() => {
+					for (const cb of session.callbacks) cb({ type: "agent_end" });
+				}, 0);
+				return Promise.resolve();
+			}) as any;
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+			sm.storeAsyncResult(id, {
+				output: "",
+				error: "still processing",
+				warnings: [],
+				terminalOutcome: "abort_request_failed",
+			});
+
+			const result = await sm.requestAbortSummary(id, 1000);
+
+			expect(result.status).toBe("summarized");
+			expect(sm.getAsyncResult(id)).toMatchObject({
+				output: "summary after failed finish request",
+				error: "aborted",
+				terminalOutcome: "aborted",
+			});
+		});
+
+		it("final abort summary waits for cancel idle and includes just-finished tool output before prompting", async () => {
+			vi.useFakeTimers();
+			try {
+				const sm = createManager();
+				const id = "abort-summary-tool-output";
+				const session = makeMockSession(["bash"]);
+				(session as any).setActiveToolsByName = vi.fn();
+				session.abort = vi.fn(() => {
+					setTimeout(() => {
+						session.messages.push({
+							role: "toolResult",
+							toolName: "bash",
+							content: [{ type: "text", text: "tests passed before abort" }],
+						});
+						for (const cb of session.callbacks) cb({ type: "agent_end" });
+					}, 100);
+				}) as any;
+				session.prompt = vi.fn(() => {
+					expect(session.messages).toContainEqual(expect.objectContaining({
+						role: "toolResult",
+						content: [{ type: "text", text: "tests passed before abort" }],
+					}));
+					session.messages.push({ role: "assistant", content: [{ type: "text", text: "summary includes tests passed" }] });
+					return Promise.resolve();
+				}) as any;
+				sm.trackSession(id, session);
+				sm.markAsyncRunning(id);
+
+				const promise = sm.requestAbortSummary(id, 1000);
+				await vi.advanceTimersByTimeAsync(100);
+				await Promise.resolve();
+				expect(session.prompt).toHaveBeenCalledTimes(1);
+				for (const cb of [...session.callbacks]) cb({ type: "agent_end" });
+
+				await expect(promise).resolves.toMatchObject({ status: "summarized", output: "summary includes tests passed" });
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("final abort summary does not reuse stale assistant output when summary turn produces no answer", async () => {
+			vi.useFakeTimers();
+			try {
+				const sm = createManager();
+				const id = "abort-summary-stale";
+				const session = makeMockSession(["bash"]);
+				(session as any).setActiveToolsByName = vi.fn();
+				session.messages = [{ role: "assistant", content: [{ type: "text", text: "old assistant text" }] }];
+				session.prompt = vi.fn().mockResolvedValue(undefined) as any;
+				sm.trackSession(id, session);
+				sm.markAsyncRunning(id);
+
+				const promise = sm.requestAbortSummary(id, 1000);
+				await vi.advanceTimersByTimeAsync(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS);
+				for (const cb of [...session.callbacks]) cb({ type: "agent_end" });
+
+				await expect(promise).resolves.toMatchObject({ status: "no_output", toolOverrideApplied: true });
+				expect(sm.getAsyncResult(id)).toBeUndefined();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("final abort summary retries already-processing prompt acceptance during cancel grace", async () => {
+			vi.useFakeTimers();
+			try {
+				const sm = createManager();
+				const id = "abort-summary-retry";
+				const session = makeMockSession(["bash"]);
+				(session as any).setActiveToolsByName = vi.fn();
+				session.abort = vi.fn().mockResolvedValue(undefined) as any;
+				let attempts = 0;
+				session.prompt = vi.fn(() => {
+					attempts += 1;
+					if (attempts < 3) {
+						return Promise.reject(new Error("Agent is already processing."));
+					}
+					session.messages = [{ role: "assistant", content: [{ type: "text", text: "retry summary" }] }];
+					setTimeout(() => {
+						for (const cb of session.callbacks) cb({ type: "agent_end" });
+					}, 0);
+					return Promise.resolve();
+				}) as any;
+				sm.trackSession(id, session);
+				sm.markAsyncRunning(id);
+
+				const promise = sm.requestAbortSummary(id, 1000);
+				await vi.advanceTimersByTimeAsync(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS);
+				await vi.advanceTimersByTimeAsync(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS / 10);
+				await vi.advanceTimersByTimeAsync(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS / 10);
+				await vi.advanceTimersByTimeAsync(0);
+
+				await expect(promise).resolves.toMatchObject({ status: "summarized", output: "retry summary" });
+				expect(session.prompt).toHaveBeenCalledTimes(3);
+				expect((session as any).setActiveToolsByName).toHaveBeenCalledTimes(3);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("final abort summary is bounded and leaves forced abort fallback to caller", async () => {
+			vi.useFakeTimers();
+			try {
+				const sm = createManager();
+				const id = "abort-summary-timeout";
+				const session = makeMockSession(["bash"]);
+				(session as any).setActiveToolsByName = vi.fn();
+				session.prompt = vi.fn(() => new Promise(() => {})) as any;
+				sm.trackSession(id, session);
+				sm.markAsyncRunning(id);
+
+				const promise = sm.requestAbortSummary(id);
+				await vi.advanceTimersByTimeAsync(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS + ABORT_FINAL_SUMMARY_TIMEOUT_MS);
+
+				await expect(promise).resolves.toMatchObject({ status: "timed_out", toolOverrideApplied: true });
+				expect(sm.getAsyncResult(id)).toBeUndefined();
+				expect(session.abort).toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("transitions running to forced abort", () => {
 			const sm = createManager();
 			const id = "hard-abort";
 			const session = makeMockSession();
@@ -887,11 +1183,28 @@ describe("SubagentSessionManager", () => {
 
 			sm.abortSession(id);
 
-			expect(sm.getAsyncResult(id)?.error).toBe("killed");
+			expect(sm.getAsyncResult(id)?.error).toBe("aborted");
 			expect(sm.getAsyncResult(id)?.output).toBe("pre-abort output");
 			expect(sm.isKillInProgress(id)).toBe(false);
 			expect(sm.isCompleted(id)).toBe(true);
 			expect(sm.hasOpenSession(id)).toBe(false);
+		});
+
+		it("forced abort with an empty transcript does not expose killed as output or terminal error", () => {
+			const sm = createManager();
+			const id = "hard-abort-empty";
+			const session = makeMockSession();
+			session.messages = [];
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.abortSession(id);
+
+			const stored = sm.getAsyncResult(id);
+			expect(stored?.output).toBe("");
+			expect(stored?.error).toBe("aborted");
+			expect(stored?.terminalError).toBeUndefined();
+			expect(JSON.stringify(stored)).not.toContain("killed");
 		});
 	});
 });

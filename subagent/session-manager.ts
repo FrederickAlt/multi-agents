@@ -20,8 +20,17 @@ import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mari
 import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
 import { extractOutput } from "./output-extraction.js";
 import type { AgentConfig } from "./agents.js";
-import type { MetadataStore, SubagentRecord } from "./metadata.js";
+import type { MetadataStore, SubagentRecord, TerminalOutcome } from "./metadata.js";
 import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
+
+export const ABORT_FINAL_SUMMARY_TIMEOUT_MS = 5 * 60 * 1000;
+export const ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS = 5 * 1000;
+const ABORT_FINAL_SUMMARY_RETRY_DELAY_MS = 250;
+export const ABORT_FINAL_SUMMARY_MESSAGE = `[System] The parent agent is aborting this run and asking you to stop now. Do not call tools. Do not start new work. Provide a concise final summary only: work completed, current state, tests/results, blockers, and how the preserved transcript can be resumed.`;
+
+export type AbortSummaryResult =
+	| { status: "summarized"; output: string; toolOverrideApplied: boolean }
+	| { status: "unavailable" | "failed" | "timed_out" | "no_output"; error?: string; toolOverrideApplied: boolean };
 
 // ---------------------------------------------------------------------------
 // Injectable adapter interfaces
@@ -205,7 +214,7 @@ export class SubagentSessionManager {
 	private openSessions = new Map<string, AgentSession>();
 	private runLocks = new Map<string, Promise<void>>();
 	private completedSessions = new Set<string>();
-	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[]; abortReason?: string }>();
+	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string }>();
 	private asyncResultWaiters = new Map<string, Set<() => void>>();
 	private asyncInFlight = new Set<string>();
 	private killInProgress = new Set<string>();
@@ -455,7 +464,7 @@ export class SubagentSessionManager {
 	}
 
 	/** Store the output/error of a completed async sub-agent session. */
-	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void {
+	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string }): void {
 		this.logger.debug("session_async_result_stored", {
 			recordId: id,
 			outputLength: result.output.length,
@@ -471,7 +480,7 @@ export class SubagentSessionManager {
 	}
 
 	/** Retrieve the stored output/error from a completed async sub-agent. */
-	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string } | undefined {
+	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string } | undefined {
 		return this.asyncResults.get(id);
 	}
 
@@ -530,7 +539,7 @@ export class SubagentSessionManager {
 	 */
 	finalizeAsyncRun(
 		id: string,
-		result: { output: string; error?: string; warnings: string[]; abortReason?: string },
+		result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string },
 		options?: { allowOverwrite?: boolean },
 	): void {
 		this._finalizeAsyncRun(id, result, {
@@ -585,6 +594,10 @@ export class SubagentSessionManager {
 			return false;
 		}
 		if (!options.allowOverwrite && this.asyncResults.has(id)) {
+			const existing = this.asyncResults.get(id);
+			if ((options.source === undefined || options.source === "task-controller") && existing?.terminalOutcome === "abort_request_failed") {
+				return true;
+			}
 			return false;
 		}
 		return true;
@@ -610,7 +623,7 @@ export class SubagentSessionManager {
 
 	private _finalizeAsyncRun(
 		id: string,
-		result: { output: string; error?: string; warnings: string[]; abortReason?: string },
+		result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string },
 		options: { allowOverwrite?: boolean; source?: "task-controller" | "soft-kill" | "hard-abort" } = {},
 	): void {
 		this.asyncInFlight.delete(id);
@@ -654,12 +667,12 @@ export class SubagentSessionManager {
 		}
 	}
 
-	// ---- Kill / abort ----
+	// ---- Finish request / abort ----
 
 	/**
-	 * Check whether a kill flow (soft-kill or hard-abort) is currently in progress
-	 * for the given session ID. Used by the async finish handler to avoid
-	 * overwriting the lifecycle-owned result.
+	 * Check whether a finish request or forced abort is currently in progress for
+	 * the given session ID. Used by the async finish handler to avoid overwriting
+	 * the lifecycle-owned result.
 	 */
 	isKillInProgress(id: string): boolean {
 		return this.killInProgress.has(id);
@@ -687,44 +700,215 @@ export class SubagentSessionManager {
 
 		logger.info("session_send_kill_started", { timeoutMinutes });
 
-		// Abort the current prompt; the original async handler observes
-		// kill flow state and leaves result ownership to this kill flow.
-		try { session.abort(); } catch { /* best-effort */ }
+		const sendFinishRequest = (): Promise<unknown> => {
+			const steer = (session as any).steer;
+			if (typeof steer === "function") {
+				return Promise.resolve(steer.call(session, killMessage));
+			}
+			return Promise.resolve(session.prompt(killMessage, { streamingBehavior: "steer" } as any));
+		};
 
-		// Give the agent one last turn with the kill instruction.
-		session.prompt(killMessage).then(
+		sendFinishRequest().then(
 			() => {
 				// Agent finished successfully — store fresh output.
 				const extracted = extractOutput(session.messages as any[]);
 				logger.debug("session_send_kill_prompt_completed", { outputLength: extracted.text.length });
-				this._finalizeAsyncRun(id, { output: extracted.text, warnings: [] }, { allowOverwrite: true, source: "soft-kill" });
-			},
-			(error: any) => {
-				// Kill prompt crashed — store error + partial output.
-				const message = error instanceof Error ? error.message : String(error);
-				const extracted = extractOutput(session.messages as any[], message || undefined);
-				logger.warn("session_send_kill_prompt_failed", { error: message });
 				this._finalizeAsyncRun(
 					id,
 					{
 						output: extracted.text,
-						error: message || "The sub-agent stopped without producing any output.",
 						warnings: [],
+						terminalOutcome: "completed",
 					},
 					{ allowOverwrite: true, source: "soft-kill" },
 				);
+			},
+			(error: any) => {
+				if (this.asyncRunLifecycle.get(id) === "completed" || this.asyncRunLifecycle.get(id) === "hard-aborting") {
+					logger.debug("session_send_kill_prompt_failure_ignored_after_abort", { state: this._runLifecycleState(id) });
+					return;
+				}
+				const message = error instanceof Error ? error.message : String(error);
+				const diagnostic = message || "failed to queue finish request";
+				const extracted = extractOutput(session.messages as any[]);
+				logger.warn("session_send_kill_prompt_failed", { error: diagnostic });
+				this.asyncRunLifecycle.set(id, "running");
+				this.asyncInFlight.add(id);
+				this.killInProgress.delete(id);
+				this.storeAsyncResult(id, {
+					output: extracted.text,
+					error: diagnostic,
+					warnings: [],
+					terminalOutcome: "abort_request_failed",
+					terminalError: diagnostic,
+				});
 			},
 		);
 	}
 
 	/**
-	 * Hard-abort a session immediately.
+	 * Request a bounded final summary before a forced abort. Tools are disabled
+	 * for runtimes that expose setActiveToolsByName(); otherwise the prompt text
+	 * still explicitly forbids tools and the caller keeps the force-abort fallback.
+	 */
+	async requestAbortSummary(
+		id: string,
+		timeoutMs = ABORT_FINAL_SUMMARY_TIMEOUT_MS,
+	): Promise<AbortSummaryResult> {
+		const session = this.openSessions.get(id) as any;
+		const existingResult = this.asyncResults.get(id);
+		if (!session || (existingResult && existingResult.terminalOutcome !== "abort_request_failed")) {
+			return { status: "unavailable", toolOverrideApplied: false };
+		}
+
+		const logger = this.logger.child({ component: "subagent_session_manager", recordId: id });
+		const setActiveToolsByName = session.setActiveToolsByName;
+		const getActiveToolNames = session.getActiveToolNames;
+		const toolOverrideApplied = typeof setActiveToolsByName === "function";
+
+		logger.warn("session_abort_summary_started", {
+			timeoutMs,
+			toolOverrideApplied,
+			cancelGraceMs: ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS,
+		});
+
+		const sleep = (ms: number) => new Promise<void>((resolve) => {
+			setTimeout(resolve, ms);
+		});
+		const isAlreadyProcessing = (error: unknown) => /already processing|still processing|currently processing/i.test(
+			error instanceof Error ? error.message : String(error),
+		);
+
+		try {
+			// AgentSession.abort() requests model/agent cancellation and waits for idle;
+			// bash/tool cancellation is separate in current Pi, so call abortBash().
+			// Start the agent_end wait before aborting so a quickly finishing tool result
+			// cannot be missed before we inject the no-tools summary prompt.
+			let stopObservingCancelEnd: (() => void) | undefined;
+			const sessionEndPromise = new Promise<void>((resolve) => {
+				if (this.completedSessions.has(id)) {
+					resolve();
+					return;
+				}
+				if (typeof session.subscribe !== "function") {
+					return;
+				}
+				const unsubscribe = session.subscribe((event: any) => {
+					if (event.type === "agent_end") {
+						try { unsubscribe(); } catch { /* best-effort listener cleanup */ }
+						resolve();
+					}
+				});
+				stopObservingCancelEnd = () => {
+					try { unsubscribe(); } catch { /* best-effort listener cleanup */ }
+				};
+			});
+			if (typeof session.abortBash === "function") {
+				try { session.abortBash(); } catch { /* best-effort bash/tool cancellation */ }
+			}
+			if (typeof session.abort === "function") {
+				try {
+					Promise.resolve(session.abort()).catch((error: unknown) => {
+						logger.warn("session_abort_summary_cancel_failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					});
+				} catch (error) {
+					logger.warn("session_abort_summary_cancel_failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
+			await Promise.race([
+				sessionEndPromise,
+				sleep(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS),
+			]);
+			stopObservingCancelEnd?.();
+			await Promise.resolve();
+
+			if (!toolOverrideApplied && typeof getActiveToolNames === "function") {
+				logger.warn("session_abort_summary_no_tool_override", { activeToolCount: getActiveToolNames.call(session).length });
+			}
+
+			let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+			const timeout = new Promise<"timed_out">((resolve) => {
+				timeoutHandle = setTimeout(() => resolve("timed_out"), timeoutMs);
+			});
+			const sendAndWait = (async (): Promise<number> => {
+				if (typeof session.prompt !== "function") {
+					throw new Error("Session cannot accept a final summary prompt.");
+				}
+				const deadline = Date.now() + ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS;
+				let lastError: unknown;
+				do {
+					if (toolOverrideApplied) {
+						setActiveToolsByName.call(session, []);
+					}
+					const summaryStartIndex = Array.isArray(session.messages) ? session.messages.length : 0;
+					try {
+						await session.prompt(ABORT_FINAL_SUMMARY_MESSAGE, { streamingBehavior: "steer" });
+						await this.waitForSessionEnd(id);
+						return summaryStartIndex;
+					} catch (error) {
+						lastError = error;
+						if (!isAlreadyProcessing(error) || Date.now() >= deadline) {
+							throw error;
+						}
+						await sleep(Math.min(ABORT_FINAL_SUMMARY_RETRY_DELAY_MS, Math.max(0, deadline - Date.now())));
+					}
+				} while (Date.now() < deadline);
+				throw lastError;
+			})();
+
+			try {
+				const result = await Promise.race([sendAndWait, timeout]);
+				if (result === "timed_out") {
+					logger.warn("session_abort_summary_timed_out", { timeoutMs, toolOverrideApplied });
+					return { status: "timed_out", toolOverrideApplied };
+				}
+				const newMessages = Array.isArray(session.messages) ? session.messages.slice(result) : [];
+				const extracted = extractOutput(newMessages as any[]);
+				if (extracted.source !== "assistant" || !extracted.text) {
+					logger.warn("session_abort_summary_no_output", { toolOverrideApplied });
+					return { status: "no_output", toolOverrideApplied };
+				}
+				this._finalizeAsyncRun(
+					id,
+					{
+						output: extracted.text,
+						error: "aborted",
+						warnings: [],
+						abortReason: "final_summary",
+						terminalOutcome: "aborted",
+						terminalError: extracted.source === "diagnostic" ? extracted.text : undefined,
+					},
+					{ allowOverwrite: true, source: "hard-abort" },
+				);
+				logger.warn("session_abort_summary_completed", {
+					outputLength: extracted.text.length,
+					toolOverrideApplied,
+				});
+				return { status: "summarized", output: extracted.text, toolOverrideApplied };
+			} finally {
+				if (timeoutHandle !== undefined) {
+					clearTimeout(timeoutHandle);
+				}
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.warn("session_abort_summary_failed", { error: message, toolOverrideApplied });
+			return { status: "failed", error: message, toolOverrideApplied };
+		}
+	}
+
+	/**
+	 * Forcibly abort a session immediately.
 	 *
-	 * Marks kill-in-progress before aborting so the original async reject
-	 * handler doesn't interfere. Extracts best available transcript content
-	 * via shared extraction, stores the result as async output with killed
-	 * status, marks the session completed, and disposes it. The transcript
-	 * file persists on disk for later resume.
+	 * Marks abort-in-progress before aborting so the original async reject handler
+	 * doesn't interfere. Extracts best available transcript content via shared
+	 * extraction, stores the result as async output with aborted status, marks the
+	 * session completed, and disposes it. The transcript file persists on disk for
+	 * later resume.
 	 */
 	abortSession(id: string): void {
 		const session = this.openSessions.get(id);
@@ -741,7 +925,7 @@ export class SubagentSessionManager {
 		this.logger.warn("session_hard_abort_started", { recordId: id });
 
 		// Capture partial output before abort using shared extraction.
-		const extracted = extractOutput(session.messages as any[], "killed");
+		const extracted = extractOutput(session.messages as any[]);
 
 		try { session.abort(); } catch { /* best-effort */ }
 
@@ -749,8 +933,11 @@ export class SubagentSessionManager {
 			id,
 			{
 				output: extracted.text || "",
-				error: "killed",
+				error: "aborted",
 				warnings: [],
+				abortReason: "forced_abort",
+				terminalOutcome: "aborted",
+				terminalError: extracted.source === "diagnostic" ? extracted.text : undefined,
 			},
 			{ allowOverwrite: true, source: "hard-abort" },
 		);

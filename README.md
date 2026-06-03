@@ -81,7 +81,7 @@ The extension includes a dedicated, isolated debug logger for Task/wait lifecycl
 - **Enablement**: the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` in `subagent/debug-logger.ts` controls logging. It is currently `true` so incident breadcrumbs are written by default in this checkout. There is no Pi flag and no extension config.
 - **Publishing note**: if a build should avoid extra local forensic logs, set the constant to `false` before publishing.
 - **Log file**: `.task-subagents-<sessionId>.debug.jsonl` in the session directory, one JSON object per line.
-- **What is logged**: breadcrumbs such as root/session start and shutdown, Task run IDs, sub-agent record IDs, parent IDs, agent types, depths, async/wait/kill lifecycle events, counts, lengths, and boolean state flags.
+- **What is logged**: breadcrumbs such as root/session start and shutdown, Task run IDs, sub-agent record IDs, parent IDs, agent types, depths, async/wait/abort lifecycle events, counts, lengths, and boolean state flags.
 - **What is not logged**: full prompts, model outputs, context file contents, tool schemas/parameters, and path-like values are not intended to be recorded; callers pass lightweight metadata only.
 - **Redaction and safety**:
   - Sensitive-ish keys (`authorization`, `bearer`, `cookie`, `password`, `secret`, `secret_key`, `token`, `apikey`, `api_key`, `access_token`, `refresh_token`) plus prompt/output/context/tool-schema/path keys are redacted by the logger.

@@ -281,7 +281,7 @@ export function configureTaskToolForRuntime(
 		})),
 		kill_on_timeout: Type.Optional(Type.Boolean({
 			default: false,
-			description: "When true, on timeout sends a soft-kill instruction to each still-running agent to finish within the same timeout duration. Agents that don't finish in that kill window are hard-aborted (transcripts persist for resume).",
+			description: "When true, if the wait times out, asks each still-running agent for a final answer within the same timeout. If still running, cancels in-flight work, waits up to 5s for session/tool completion, disables tools for a bounded final-summary prompt, then forcibly aborts as a fallback. Transcripts persist for resume.",
 		})),
 	});
 
@@ -297,6 +297,7 @@ export function configureTaskToolForRuntime(
 			"Pass multiple IDs to wait on several agents at once — by default returns when any finishes.",
 			"Set wait_all:true to wait until all listed running agents finish or timeout expires.",
 			"Pass timeout (in minutes, default 5) to bound the wait.",
+			"Set kill_on_timeout:true only when you want timeout escalation: request a final answer, then cancel in-flight work and attempt a no-tools final summary before forced abort fallback.",
 		],
 		parameters: waitForAgentParams,
 		async execute(_toolCallId, wParams, _signal, _onUpdate, ctx) {

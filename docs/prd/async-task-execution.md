@@ -26,10 +26,10 @@ Add a `blocking` parameter to the `Task` tool (default `true`, preserving backwa
 12. As a root agent, I want `wait_for_agent` to return structured per-agent output, so that I can distinguish which agent produced which result.
 13. As a root agent, I want `wait_for_agent` to report the status of agents that are still running, so that I know which agents remain outstanding.
 14. As a root agent, I want `wait_for_agent` to accept a `timeout` parameter (default 5 minutes), so that I can bound how long I wait before getting a status update.
-15. As a root agent, I want `wait_for_agent` to support a `kill_on_timeout` option, so that I can escalate from waiting to demanding that the sub-agent wrap up.
-16. As a root agent, I want `kill_on_timeout` to send the sub-agent a soft-kill warning ("finish in under X minutes"), so that the sub-agent has a chance to produce a final answer before being aborted.
-17. As a root agent, I want the sub-agent to be hard-aborted if it does not finish within the kill timeout, so that the parent is not blocked indefinitely.
-18. As a root agent, I want a hard-aborted sub-agent's transcript to persist for resume, so that I can continue the work later.
+15. As a root agent, I want `wait_for_agent` to support a `kill_on_timeout` compatibility option, so that I can escalate from passive waiting to a bounded finish/abort sequence.
+16. As a root agent, I want `kill_on_timeout` to first ask the sub-agent to produce a final answer within the same timeout duration, so that the sub-agent has a chance to finish cleanly.
+17. As a root agent, I want a still-running sub-agent to have in-flight work cancelled, observe a short session/tool completion grace period, disable tools, and attempt a bounded final summary before forced abort fallback, so that the parent gets the best available final state without blocking indefinitely.
+18. As a root agent, I want an aborted sub-agent's transcript to persist for resume, so that I can continue the work later.
 19. As a root agent, I want `wait_for_agent` to always be available as a tool, so that the system prompt does not change mid-conversation and invalidate the cache.
 20. As a root agent, I want `wait_for_agent` to work even on agents that were spawned in blocking mode (returning their output again from the persisted session file), so that the tool behaves uniformly regardless of how the agent was spawned.
 21. As a root agent, I want the output from a stopped sub-agent to be extracted outcome-agnostically — whether the agent succeeded, crashed, timed out, or was aborted — so that I always get the best available content from the session transcript.
@@ -52,13 +52,13 @@ A new tool registered alongside `Task` with parameters:
 - `agent_ids`: list of hex IDs to wait on (required)
 - `timeout`: minutes to wait before returning a status update (optional, default 5)
 - `wait_all`: whether to wait for all listed running agents instead of returning when any finishes (optional, default false)
-- `kill_on_timeout`: whether to escalate to kill on timeout (optional, default false)
+- `kill_on_timeout`: compatibility-named option that escalates timeout handling into a bounded finish request, final-summary attempt, and forced abort fallback (optional, default false)
 
 The tool is always registered. Its description explains that it works for async agents and can also retrieve output from finished blocking agents.
 
 When called, the tool checks each listed agent. For finished agents, it extracts and returns the output. For still-running agents, it waits on session completion. By default it returns as soon as any listed agent finishes; with `wait_all: true`, it waits until all listed running agents finish or the timeout expires. The response includes structured per-agent output showing which completed, which are still running, and the status of any unknown IDs.
 
-On timeout, still-running agents are reported as "timed out, still running." If `kill_on_timeout: true`, the sub-agent receives a soft-kill message instructing it to finish within the same timeout duration. If it still does not finish within the kill window, the session is hard-aborted. The transcript persists for resume.
+On timeout, still-running agents are reported as "timed out, still running." If `kill_on_timeout: true`, the sub-agent is first asked to produce a final answer within the same timeout duration. If it still does not finish, the extension cancels/aborts in-flight work, waits up to 5 seconds for session or tool completion, disables tools for a final-summary request where supported, and attempts a bounded final summary. If the final summary does not complete, the session is forcibly aborted as a fallback. The transcript persists for resume.
 
 ### 3. Notification system
 
@@ -110,7 +110,7 @@ Tests should verify external behavior — what the parent agent observes — not
 
 ### Modules to test
 
-- **`TaskController`** (existing test file): Add tests for `blocking: false` (returns immediately with agent ID), `blocking: true` (unchanged), `waitForAgents()` (returns per-agent output, handles timeout, handles unknown IDs, handles kill_on_timeout escalation), shared outcome-agnostic extraction (returns partial output on crash, returns error when transcript empty).
+- **`TaskController`** (existing test file): Add tests for `blocking: false` (returns immediately with agent ID), `blocking: true` (unchanged), `waitForAgents()` (returns per-agent output, handles timeout, handles unknown IDs, handles `kill_on_timeout` finish/abort escalation), shared outcome-agnostic extraction (returns partial output on crash, returns error when transcript empty).
 - **`SubagentSessionManager`** (existing test file): Add tests for async result-ready notification callback registration and waiting for result storage without blocking the parent session.
 - **`AsyncAgentNotifier`** (new test file): Test the notification state machine in isolation — consolidated message content, reminder counter, counter reset on new completion, empty state produces no notification, multiple agents in one message. These tests operate on pure state transitions with no Pi runtime dependency.
 - **Async notification runtime integration**: Add a behavior-level regression test for stale notification delivery. Through the extension-facing `sendMessage`/`input`/`turn_end`/`agent_end` interface, simulate an async completion becoming due during a root-agent run, retrieve the result with `wait_for_agent` before the run ends, then end the run and submit the next user input. The parent should not observe the previously consumed agent ID in a later notification. This test should fail if notifications are queued as frozen deferred text from `turn_end` and pass when notification content is built only after run-boundary revalidation.

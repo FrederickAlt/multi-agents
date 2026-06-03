@@ -47,7 +47,9 @@ Parallel work does not need a special mode. Pi can execute sibling tool calls co
 }
 ```
 
-`wait_for_agent` accepts one or more sub-agent IDs. It returns completed output when available, reports still-running agents, and can escalate with `kill_on_timeout` to soft-kill then hard-abort agents that do not finish within the wait window. By default, multi-agent waits return when any listed running agent finishes; set `wait_all: true` to wait until every listed running agent finishes or the timeout expires. Structured results report `completed`, `running`, `timed_out_still_running`, `killed`, and `unknown` statuses.
+`wait_for_agent` accepts one or more sub-agent IDs. It returns completed output when available and reports still-running agents. By default, multi-agent waits return when any listed running agent finishes; set `wait_all: true` to wait until every listed running agent finishes or the timeout expires.
+
+If `kill_on_timeout: true`, timeout handling escalates in bounded phases: first the agent is asked to produce a final answer within the same timeout window; if it is still running, in-flight work is cancelled/aborted, the session waits up to 5 seconds for session or tool completion, tools are disabled for a final-summary request, and a bounded final-summary prompt is attempted. If the final summary does not complete, the session is forcibly aborted as a fallback. Transcripts persist and can be resumed. Structured results include completed, running, timed-out, aborted, and unknown outcomes; the legacy structured status `killed` may still appear for compatibility but represents the timeout escalation's final-summary abort or forced-abort fallback.
 
 Use it for async `Task(blocking:false)` calls, and for finished blocking agents when you want to re-read persisted output.
 

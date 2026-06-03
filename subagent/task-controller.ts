@@ -26,8 +26,9 @@ import {
 	checkTaskAllowed,
 	childPolicy,
 } from "./depth-policy.js";
-import type { MetadataFile, MetadataStore, SubagentRecord } from "./metadata.js";
+import type { MetadataFile, MetadataStore, SubagentRecord, TerminalOutcome } from "./metadata.js";
 import type {
+	AbortSummaryResult,
 	ModelResolver,
 	SessionSetupContext,
 } from "./session-manager.js";
@@ -37,6 +38,7 @@ import {
 	extractOutput,
 	extractTerminalOutput,
 	getFinalTextFromMessages,
+	getTerminalDiagnosticFromMessages,
 } from "./output-extraction.js";
 import {
 	createRunCorrelationId,
@@ -99,15 +101,15 @@ export interface SessionAdapter {
 	 */
 	waitForSessionEnd(id: string): Promise<void>;
 	/** Store the output/error result of a completed async session. */
-	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string }): void;
+	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string }): void;
 	/** Finalize async completion and apply lifecycle transitions and cleanup. */
 	finalizeAsyncRun(
 		id: string,
-		result: { output: string; error?: string; warnings: string[]; abortReason?: string },
+		result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string },
 		options?: { allowOverwrite?: boolean },
 	): void;
 	/** Retrieve a previously stored async result. */
-	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string } | undefined;
+	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string } | undefined;
 	/** Wait until a completed async session result has been stored. */
 	waitForAsyncResult(id: string, signal?: AbortSignal): Promise<void>;
 	/** Clear a consumed async result from memory. */
@@ -121,19 +123,20 @@ export interface SessionAdapter {
 	/** Check if there is an open session for the given record ID. */
 	hasOpenSession(id: string): boolean;
 	/**
-	 * Send a soft-kill instruction to a running async session.
-	 * Aborts the current prompt, then sends a kill message as a new prompt
-	 * giving the agent one more turn to produce a final answer.
+	 * Request that a running async session produce a final answer.
 	 */
 	sendKillMessage(id: string, timeoutMinutes: number): void;
 	/**
-	 * Hard-abort a session immediately.
+	 * Request a bounded no-tools final summary before forced abort.
+	 */
+	requestAbortSummary?(id: string): Promise<AbortSummaryResult>;
+	/**
+	 * Forcibly abort a session immediately.
 	 * The transcript persists on disk for later resume.
 	 */
 	abortSession(id: string): void;
 	/**
-	 * Check whether a kill flow (soft-kill or hard-abort) is in progress for the
-	 * given session ID.
+	 * Check whether a finish request or forced abort is in progress for the given session ID.
 	 */
 	isKillInProgress(id: string): boolean;
 }
@@ -187,7 +190,7 @@ export interface TaskExecuteContext {
 	/** Optional streaming update callback (used for progress emission). */
 	onUpdate?: (partial: TaskResult) => void;
 	/**
-	 * Optional callback to consume terminal wait_for_agent IDs (completed / killed)
+	 * Optional callback to consume terminal wait_for_agent IDs (completed / aborted)
 	 * from external notification tracking systems.
 	 */
 	consumeWaitForAgentIds?: (agentIds: string[]) => void;
@@ -214,6 +217,9 @@ interface AgentRunSnapshot {
 	output?: string;
 	error?: string;
 	abortReason?: string;
+	terminalOutcome?: TerminalOutcome;
+	terminalError?: string;
+	terminalAt?: string;
 	warnings?: string[];
 }
 
@@ -226,6 +232,9 @@ export interface AgentWaitResult {
 	output?: string;
 	error?: string;
 	abortReason?: string;
+	terminalOutcome?: TerminalOutcome;
+	terminalError?: string;
+	terminalAt?: string;
 	warnings?: string[];
 	sessionFile?: string;
 }
@@ -241,6 +250,9 @@ export interface TaskDetails {
 	warnings: string[];
 	error?: string;
 	abortReason?: string;
+	terminalOutcome?: TerminalOutcome;
+	terminalError?: string;
+	terminalAt?: string;
 	output?: string;
 	/** Per-agent results from wait_for_agent (multi-agent retrieval). */
 	agents?: AgentWaitResult[];
@@ -353,8 +365,63 @@ export class TaskController {
 	/**
 	 * Classify a single sub-agent run from stored metadata and session state.
 	 */
+	private static inferTerminalOutcomeFromResult(
+		err: string | undefined,
+		sessionMessages: any[] | undefined,
+	): TerminalOutcome {
+		if (err === undefined) {
+			const terminalDiagnostic = sessionMessages ? getTerminalDiagnosticFromMessages(sessionMessages) : "";
+			if (!terminalDiagnostic) {
+				const lastAssistant = sessionMessages
+					? [...sessionMessages].reverse().find((message) => message?.role === "assistant")
+					: undefined;
+				if (lastAssistant?.stopReason === "aborted") return "aborted";
+				if (lastAssistant?.stopReason === "error") return "crashed";
+				return "crashed";
+			}
+			if (/aborted|abort/i.test(terminalDiagnostic)) return "aborted";
+			if (/killed|terminate/i.test(terminalDiagnostic)) return "aborted";
+			return "crashed";
+		}
+		if (err === "killed") return "aborted";
+		if (err === "abort_request_failed") return "abort_request_failed";
+		const lastAssistant = sessionMessages
+			? [...sessionMessages].reverse().find((message) => message?.role === "assistant")
+			: undefined;
+		const stopReason = lastAssistant?.stopReason;
+		if (stopReason === "aborted") return "aborted";
+		if (/aborted|abort/i.test(err)) return "aborted";
+		return "crashed";
+	}
+
+	private static persistTerminalOutcome(
+		metadataStore: MetadataStore,
+		record: SubagentRecord,
+		terminalOutcome: TerminalOutcome | undefined,
+		terminalError?: string,
+		abortReason?: string,
+	): SubagentRecord {
+		const terminalAt =
+			terminalOutcome === undefined
+				? undefined
+				: terminalOutcome === record.terminalOutcome && record.terminalAt
+					? record.terminalAt
+					: new Date().toISOString();
+		const nextRecord: SubagentRecord = {
+			...record,
+			terminalOutcome,
+			terminalError,
+			abortReason,
+			terminalAt,
+		};
+		if (typeof (metadataStore as { upsertRecord?: (record: SubagentRecord) => void }).upsertRecord === "function") {
+			metadataStore.upsertRecord(nextRecord);
+		}
+		return nextRecord;
+	}
+
 	private static classifyRunSnapshot(record: SubagentRecord, sessionManager: SessionAdapter): AgentRunSnapshot {
-		const base: Omit<AgentRunSnapshot, 'state' | 'output' | 'error' | 'abortReason' | 'warnings'> = {
+		const base: Omit<AgentRunSnapshot, 'state' | 'output' | 'error' | 'abortReason' | 'warnings' | 'terminalOutcome' | 'terminalError' | 'terminalAt'> = {
 			id: record.id,
 			displayName: record.displayName,
 			agentType: record.agentType,
@@ -363,49 +430,105 @@ export class TaskController {
 
 		const asyncResult = sessionManager.getAsyncResult(record.id);
 		if (asyncResult) {
+			const terminalOutcome = asyncResult.terminalOutcome
+				|| (asyncResult.error
+					? TaskController.inferTerminalOutcomeFromResult(asyncResult.error, undefined)
+					: asyncResult.output
+						? "completed"
+						: record.terminalOutcome);
 			return {
 				...base,
-				state: asyncResult.error === 'killed' ? 'killed' : 'result_ready_memory',
+				state: asyncResult.error === 'killed' || (terminalOutcome === "aborted" && asyncResult.abortReason) ? 'killed' : 'result_ready_memory',
 				output: asyncResult.output,
 				error: asyncResult.error,
 				abortReason: asyncResult.abortReason,
+				terminalOutcome: terminalOutcome,
+				terminalError: asyncResult.terminalError,
+				terminalAt: asyncResult.terminalAt ?? record.terminalAt,
 				warnings: asyncResult.warnings,
 			};
 		}
 
 		if (sessionManager.isAsyncRunning(record.id)) {
-			return { ...base, state: 'running_async' };
+			return {
+				...base,
+				state: 'running_async',
+				...(record.terminalOutcome ? { terminalOutcome: record.terminalOutcome } : {}),
+				...(record.terminalError ? { terminalError: record.terminalError } : {}),
+				...(record.abortReason ? { abortReason: record.abortReason } : {}),
+				...(record.terminalAt ? { terminalAt: record.terminalAt } : {}),
+			};
 		}
 
 		if (sessionManager.isCompleted(record.id)) {
 			const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
+			const terminalOutcome = record.terminalOutcome
+				?? (persisted?.source === 'diagnostic'
+					? TaskController.inferTerminalOutcomeFromResult(persisted.text, undefined)
+					: undefined);
 			return {
 				...base,
 				state: 'result_ready_transcript',
 				...(persisted ? { output: persisted.text } : {}),
 				...(persisted?.source === 'diagnostic' ? { error: persisted.text } : {}),
+				...(terminalOutcome ? { terminalOutcome } : {}),
+				...(record.terminalError || (persisted?.source === 'diagnostic' ? { terminalError: persisted.text } : {}) ? {
+					terminalError: record.terminalError ?? persisted?.text,
+				} : {}),
+				...(record.abortReason ? { abortReason: record.abortReason } : {}),
+				...(record.terminalAt ? { terminalAt: record.terminalAt } : {}),
 			};
 		}
 
 		if (sessionManager.hasOpenSession(record.id)) {
-			return { ...base, state: 'running_open' };
+			return {
+				...base,
+				state: 'running_open',
+				...(record.terminalOutcome ? { terminalOutcome: record.terminalOutcome } : {}),
+				...(record.terminalError ? { terminalError: record.terminalError } : {}),
+				...(record.terminalAt ? { terminalAt: record.terminalAt } : {}),
+			};
 		}
 
 		if (record.sessionFile) {
 			const persisted = TaskController.extractOutputFromSessionFile(record.sessionFile);
 			if (persisted !== undefined) {
+				const terminalOutcome = record.terminalOutcome
+					?? (persisted.source === 'diagnostic'
+						? TaskController.inferTerminalOutcomeFromResult(persisted.text, undefined)
+						: undefined);
 				return {
 					...base,
 					state: 'result_ready_transcript',
 					...(persisted ? { output: persisted.text } : {}),
 					...(persisted.source === 'diagnostic' ? { error: persisted.text } : {}),
+					...(terminalOutcome ? { terminalOutcome } : {}),
+					...(record.terminalError || (persisted?.source === 'diagnostic' ? { terminalError: persisted.text } : {}) ? {
+						terminalError: record.terminalError ?? persisted?.text,
+					} : {}),
+					...(record.abortReason ? { abortReason: record.abortReason } : {}),
+					...(record.terminalAt ? { terminalAt: record.terminalAt } : {}),
 				};
 			}
 			// Session file exists but has no assistant text or error diagnostic.
-			return { ...base, state: 'result_ready_transcript' };
+			return {
+				...base,
+				state: 'result_ready_transcript',
+				...(record.terminalOutcome ? { terminalOutcome: record.terminalOutcome } : {}),
+				...(record.terminalError ? { terminalError: record.terminalError } : {}),
+				...(record.abortReason ? { abortReason: record.abortReason } : {}),
+				...(record.terminalAt ? { terminalAt: record.terminalAt } : {}),
+			};
 		}
 
-		return { id: record.id, state: 'unknown' };
+		return {
+			id: record.id,
+			state: 'unknown',
+			...(record.terminalOutcome ? { terminalOutcome: record.terminalOutcome } : {}),
+			...(record.terminalError ? { terminalError: record.terminalError } : {}),
+			...(record.abortReason ? { abortReason: record.abortReason } : {}),
+			...(record.terminalAt ? { terminalAt: record.terminalAt } : {}),
+		};
 	}
 
 	private static classifyRunSnapshotFromId(
@@ -434,6 +557,9 @@ export class TaskController {
 				displayName: snapshot.displayName,
 				agentType: snapshot.agentType,
 				status: 'running',
+				terminalOutcome: snapshot.terminalOutcome,
+				terminalError: snapshot.terminalError,
+				terminalAt: snapshot.terminalAt,
 				sessionFile: snapshot.sessionFile,
 			};
 		}
@@ -447,6 +573,9 @@ export class TaskController {
 				output: snapshot.output,
 				error: snapshot.error,
 				abortReason: snapshot.abortReason,
+				terminalOutcome: snapshot.terminalOutcome,
+				terminalError: snapshot.terminalError,
+				terminalAt: snapshot.terminalAt,
 				warnings: snapshot.warnings,
 				sessionFile: snapshot.sessionFile,
 			};
@@ -461,12 +590,21 @@ export class TaskController {
 				output: snapshot.output,
 				error: snapshot.error,
 				abortReason: snapshot.abortReason,
+				terminalOutcome: snapshot.terminalOutcome,
+				terminalError: snapshot.terminalError,
+				terminalAt: snapshot.terminalAt,
 				warnings: snapshot.warnings,
 				sessionFile: snapshot.sessionFile,
 			};
 		}
 
-		return { id: snapshot.id, status: 'unknown' };
+		return {
+			id: snapshot.id,
+			status: 'unknown',
+			terminalOutcome: snapshot.terminalOutcome,
+			terminalError: snapshot.terminalError,
+			terminalAt: snapshot.terminalAt,
+		};
 	}
 
 	// ---- Instance methods ----
@@ -672,6 +810,17 @@ export class TaskController {
 				const preRunRejection = rejectUnconsumedAsyncResult(preRunSnapshot);
 				if (preRunRejection) return preRunRejection;
 
+				const clearTerminalOutcome = (): SubagentRecord => {
+					const refreshed = metadataStore.findRecord(record!.id) ?? record!;
+					const nextRecord = TaskController.persistTerminalOutcome(
+						metadataStore,
+						refreshed,
+						undefined,
+					);
+					record = nextRecord;
+					return nextRecord;
+				};
+
 				// Obtain the resource loader via the injected factory
 				let resourceLoader: DefaultResourceLoader;
 				try {
@@ -819,6 +968,16 @@ export class TaskController {
 						} catch (err) {
 							const message = err instanceof Error ? err.message : String(err);
 							runLogger.warn("task_async_steer_failed", { recordId: record!.id, error: message });
+							const refreshedRecord = metadataStore.findRecord(record!.id);
+							if (refreshedRecord) {
+								record = TaskController.persistTerminalOutcome(
+									metadataStore,
+									refreshedRecord,
+									"abort_request_failed",
+									message,
+									"steer_failed",
+								);
+							}
 							return {
 								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) failed to queue steering message. Use wait_for_agent with agent_id "${record!.id}" to retrieve output from the original run.\n\n${message}` }],
 								details: {
@@ -830,6 +989,7 @@ export class TaskController {
 									sessionFile: record!.sessionFile,
 									warnings,
 									error: message,
+									terminalOutcome: "abort_request_failed",
 								},
 							};
 						}
@@ -837,7 +997,8 @@ export class TaskController {
 
 					// Async path: start prompt in background, return immediately.
 					// The session stays tracked; `wait_for_agent` retrieves output later.
-					sessionManager.markAsyncRunning(record!.id);
+					clearTerminalOutcome();
+						sessionManager.markAsyncRunning(record!.id);
 					runLogger.debug("task_async_marked_running", {
 					recordId: record!.id,
 				});
@@ -856,11 +1017,30 @@ export class TaskController {
 					) => {
 						context.signal?.removeEventListener("abort", abort);
 						try { metadataStore.touchRecord(record!.id); } catch { /* best-effort */ }
+						const baseRecord = metadataStore.findRecord(record!.id);
+						if (!baseRecord) {
+							return;
+						}
 						if (resolved) {
 							const extracted = terminal ?? TaskController.extractTerminalOutput(session.messages as any[]);
+							const terminalOutcome = extracted.source === 'assistant'
+								? "completed"
+								: extracted.source === 'diagnostic'
+									? TaskController.inferTerminalOutcomeFromResult(extracted.text, session.messages as any[])
+									: undefined;
+							record = TaskController.persistTerminalOutcome(
+								metadataStore,
+								baseRecord,
+								terminalOutcome,
+								extracted.source === 'diagnostic' ? extracted.text : undefined,
+								undefined,
+							);
 							sessionManager.finalizeAsyncRun(record!.id, {
 								output: extracted.text,
 								...(extracted.source === 'diagnostic' ? { error: extracted.text } : {}),
+								terminalOutcome,
+								terminalError: extracted.source === 'diagnostic' ? extracted.text : undefined,
+								terminalAt: record?.terminalAt,
 								warnings,
 							});
 							runLogger.info("task_async_completed", {
@@ -870,9 +1050,24 @@ export class TaskController {
 							});
 						} else {
 							const extracted = TaskController.extractOutput(session.messages as any[], errorMessage);
+							const terminalOutcome = TaskController.inferTerminalOutcomeFromResult(
+								errorMessage,
+								session.messages as any[],
+							);
+							record = TaskController.persistTerminalOutcome(
+								metadataStore,
+								baseRecord,
+								terminalOutcome,
+								extracted.source === 'diagnostic' ? extracted.text : errorMessage,
+								undefined,
+							);
 							sessionManager.finalizeAsyncRun(record!.id, {
 								output: extracted.text,
 								error: errorMessage,
+								terminalOutcome,
+								terminalError: extracted.source === 'diagnostic' ? extracted.text : errorMessage,
+								terminalAt: record?.terminalAt,
+								abortReason: terminalOutcome === "aborted" ? "async_result" : undefined,
 								warnings,
 							});
 							runLogger.warn("task_async_failed", {
@@ -983,6 +1178,7 @@ export class TaskController {
 							};
 						}
 
+						clearTerminalOutcome();
 						const promptRace = [] as Array<
 							Promise<
 								| { type: "completed"; terminal: { text: string; source: 'assistant' | 'diagnostic' | 'none' } }
@@ -1058,6 +1254,24 @@ export class TaskController {
 							});
 							throw new Error(promptOrTimeout.terminal.text || "The sub-agent stopped with a diagnostic.");
 						}
+						if (promptOrTimeout.terminal.source === 'none') {
+							const warningText =
+								warnings.length > 0
+									? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
+									: "";
+							return {
+								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is no longer running, but no final assistant output was captured. Use resume: "${record!.id}" to continue this agent.\n\nNo final assistant output was captured.${warningText}` }],
+								details: {
+									id: record!.id,
+									displayName: record!.displayName,
+									agentType: record!.agentType,
+									description: params.description,
+									resumed: Boolean(params.resume),
+									sessionFile: record!.sessionFile,
+									warnings,
+								},
+							};
+						}
 
 						const output = promptOrTimeout.terminal.text;
 						runLogger.info("task_blocking_completed", {
@@ -1090,23 +1304,24 @@ export class TaskController {
 						};
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
+					const terminalError = message || "sub-agent stopped unexpectedly.";
 					runLogger.error("task_blocking_crashed", {
 						recordId: record!.id,
-						error: message,
+						error: terminalError,
 						outputLength: session?.messages?.length,
 					});
-					const extracted = TaskController.extractOutput(session.messages as any[], message);
+					const extracted = TaskController.extractOutput(session.messages as any[], terminalError);
 					const warningText =
 						warnings.length > 0
 							? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
 							: "";
 					let contentText: string;
 					if (extracted.source === 'assistant') {
-						contentText = `${record!.displayName} (${record!.id}) crashed but produced partial output. Use resume: "${record!.id}" to retry or continue.\n\n${extracted.text}${warningText}`;
+						contentText = `${record!.displayName} (${record!.id}) stopped with an error after producing partial output. Use resume: "${record!.id}" to retry or continue.\n\n${extracted.text}${warningText}`;
 					} else if (extracted.source === 'diagnostic') {
-						contentText = `${record!.displayName} (${record!.id}) crashed. Use resume: "${record!.id}" to retry or continue this agent.\n\n${extracted.text}${warningText}`;
+						contentText = `${record!.displayName} (${record!.id}) stopped with an error. Use resume: "${record!.id}" to retry or continue this agent.\n\n${extracted.text}${warningText}`;
 					} else {
-						contentText = `${record!.displayName} (${record!.id}) crashed. Use resume: "${record!.id}" to retry or continue this agent.\n\nThe sub-agent stopped without producing any output.${warningText}`;
+						contentText = `${record!.displayName} (${record!.id}) stopped with an error. Use resume: "${record!.id}" to retry or continue this agent.\n\nThe sub-agent stopped without producing any output.${warningText}`;
 					}
 					return {
 						content: [
@@ -1123,7 +1338,7 @@ export class TaskController {
 							resumed: Boolean(params.resume),
 							sessionFile: record!.sessionFile,
 							warnings,
-							error: message,
+							error: terminalError,
 							...(extracted.source === 'assistant' ? { output: extracted.text } : {}),
 						},
 					};
@@ -1197,7 +1412,7 @@ export class TaskController {
 	 * - `completed`: finished and output was captured (async or from persisted session)
 	 * - `running`: still in-flight at the time of return
 	 * - `timed_out_still_running`: was still running when the timeout expired
-	 * - `killed`: hard-aborted after soft-kill window expired; transcript persists for resume
+	 * - `killed`: compatibility status for a timeout escalation that ended in final-summary abort or forced-abort fallback; transcript persists for resume
 	 * - `unknown`: the agent ID has no corresponding record
 	 *
 	 * When multiple IDs are supplied the default behavior is to return as soon
@@ -1213,9 +1428,10 @@ export class TaskController {
 	 * @param opts.timeout  Minutes to wait before returning a status update (default 5).
 	 * @param opts.wait_all  When true, waits for all listed running agents to finish
 	 *   before returning. Default false (return when any finishes).
-	 * @param opts.kill_on_timeout  When true, on timeout sends a soft-kill instruction to
-	 *   each still-running agent to finish within the same timeout duration.
-	 *   Agents that don't finish in that kill window are hard-aborted.
+	 * @param opts.kill_on_timeout  Compatibility-named timeout escalation: request
+	 *   a final answer within the same timeout duration, then cancel in-flight work,
+	 *   wait briefly for session/tool completion, attempt a no-tools final summary,
+	 *   and forcibly abort as the fallback.
 	 * @param context  Injected runtime dependencies.
 	 */
 	async waitForAgent(
@@ -1262,23 +1478,67 @@ export class TaskController {
 		/** Deduplicate IDs while preserving order. */
 		const uniqueIds = [...new Set(agentIds)];
 
+		const persistAgentTerminalResult = (agent: AgentWaitResult): void => {
+			if (agent.status !== "completed" && agent.status !== "killed") {
+				return;
+			}
+			const record = metadataStore.findRecord(agent.id);
+			if (!record) {
+				return;
+			}
+
+			const terminalError = agent.terminalError ?? agent.error;
+			const outcome =
+				agent.terminalOutcome
+					|| (terminalError
+						? TaskController.inferTerminalOutcomeFromResult(terminalError, undefined)
+						: agent.output
+							? "completed"
+							: undefined);
+			TaskController.persistTerminalOutcome(
+				metadataStore,
+				record,
+				outcome,
+				terminalError,
+				agent.abortReason,
+			);
+		};
+
+		const persistTimeoutOutcome = (
+			agentId: string,
+			terminalOutcome: TerminalOutcome,
+			terminalError?: string,
+			abortReason?: string,
+		): void => {
+			const record = metadataStore.findRecord(agentId);
+			if (!record) {
+				return;
+			}
+			TaskController.persistTerminalOutcome(
+				metadataStore,
+				record,
+				terminalOutcome,
+				terminalError,
+				abortReason,
+			);
+		};
+
 		/**
-		 * Consume completed / killed IDs from external state (e.g. pending reminders)
+		 * Consume completed / aborted IDs from external state (e.g. pending reminders)
 		 * when wait_for_agent has already returned terminal data for them.
 		 */
 		const consumeTerminalResults = (agents: AgentWaitResult[]) => {
-			const completedOrKilled = agents
-				.filter((agent) => agent.status === "completed" || agent.status === "killed")
-				.map((agent) => agent.id);
+			const completedOrKilled = agents.filter((agent) => agent.status === "completed" || agent.status === "killed");
 			if (completedOrKilled.length > 0) {
 				runLogger.debug("wait_for_agent_consume_terminal", {
 					count: completedOrKilled.length,
 				});
-				for (const id of completedOrKilled) {
-					sessionManager.clearAsyncResult(id);
+				for (const agent of completedOrKilled) {
+					persistAgentTerminalResult(agent);
+					sessionManager.clearAsyncResult(agent.id);
 				}
 				if (context.consumeWaitForAgentIds) {
-					context.consumeWaitForAgentIds(completedOrKilled);
+					context.consumeWaitForAgentIds(completedOrKilled.map((agent) => agent.id));
 				}
 			}
 		};
@@ -1310,12 +1570,6 @@ export class TaskController {
 				mode: "existing_terminal_fast_path",
 				agentCount: firstResults.length,
 			});
-			// Consume async results so in-memory resources are released
-			for (const r of firstResults) {
-				if (r.status === "completed") {
-					sessionManager.clearAsyncResult(r.id);
-				}
-			}
 			return formatWaitResult(firstResults);
 		}
 
@@ -1362,107 +1616,159 @@ export class TaskController {
 					timeoutMs,
 					timedIds: runningIds,
 				});
-				const timeoutResults = uniqueIds.map(id => {
+				const timeoutResults = uniqueIds.map((id) => {
 					const r = buildResult(id);
 					if (r.status === "running") {
-						return { ...r, status: "timed_out_still_running" as const };
+						persistTimeoutOutcome(id, "timed_out", undefined, "wait_for_agent_timeout");
+						return {
+							...r,
+							status: "timed_out_still_running" as const,
+							terminalOutcome: "timed_out" as const,
+							abortReason: "wait_for_agent_timeout",
+						};
 					}
 					return r;
 				});
 
-				// If kill_on_timeout is enabled, escalate to soft-kill then hard-abort.
-				// Wait for all timed-out agents to finish OR until the kill window ends.
-				const killOnTimeout = opts.kill_on_timeout === true;
-				if (killOnTimeout) {
-					const timedOutIds = timeoutResults
-						.filter(r => r.status === "timed_out_still_running")
-						.map(r => r.id);
+				const timedOutIds = timeoutResults
+					.filter((r) => r.status === "timed_out_still_running")
+					.map((r) => r.id);
 
-					if (timedOutIds.length > 0) {
-						runLogger.warn("wait_for_agent_kill_escalation_started", {
-							count: timedOutIds.length,
-							windowMinutes: timeoutMinutes,
+				// If kill_on_timeout is enabled, request a final answer, then move through
+				// bounded final-summary/forced-abort fallback if the agent remains running.
+				const killOnTimeout = opts.kill_on_timeout === true;
+				if (killOnTimeout && timedOutIds.length > 0) {
+					runLogger.warn("wait_for_agent_kill_escalation_started", {
+						count: timedOutIds.length,
+						windowMinutes: timeoutMinutes,
+					});
+					// Send a finish request to each timed-out agent.
+					for (const id of timedOutIds) {
+						try {
+							runLogger.warn("wait_for_agent_soft_kill_sent", { agentId: id });
+							sessionManager.sendKillMessage(id, timeoutMinutes);
+							persistTimeoutOutcome(id, "timed_out", "Finish request sent.", "wait_for_agent_finish_request");
+						} catch (error) {
+							persistTimeoutOutcome(
+								id,
+								"abort_request_failed",
+								error instanceof Error ? error.message : String(error),
+								"wait_for_agent_soft_kill_failed",
+							);
+						}
+					}
+
+					// Wait for all agents to finish, or for a real result to be stored. An
+					// abort_request_failed diagnostic means the finish request was not accepted;
+					// keep waiting for original output or the abort window.
+					const killAbortController = new AbortController();
+					const waitForFinishResult = async (id: string) => {
+						await Promise.race([
+							sessionManager.waitForSessionEnd(id),
+							sessionManager.waitForAsyncResult(id, killAbortController.signal),
+						]);
+						const result = sessionManager.getAsyncResult(id);
+						if (result && result.terminalOutcome !== "abort_request_failed") {
+							return id;
+						}
+						await sessionManager.waitForSessionEnd(id);
+						return id;
+					};
+					const killCompleted = Promise.all(
+						timedOutIds.map(waitForFinishResult),
+					).then(() => "__kill_completed__" as const);
+					const killTimeoutPromise = new Promise<"__kill_timeout__">((resolve) => {
+						setTimeout(() => resolve("__kill_timeout__"), timeoutMs);
+					});
+
+					const killResult = await Promise.race([killCompleted, killTimeoutPromise]);
+					runLogger.debug("wait_for_agent_kill_wait_result", {
+						killResult,
+					});
+					killAbortController.abort();
+
+					// Track which agents were explicitly forcibly aborted.
+					const hardAbortedIds = new Set<string>();
+
+					if (killResult === "__kill_timeout__") {
+						runLogger.warn("wait_for_agent_kill_timeout_hit", {
+							timedOutIds,
 						});
-						// Send soft-kill instruction to each timed-out agent.
-						for (const id of timedOutIds) {
+						const stillRunningIds = timedOutIds.filter((id) => {
+							const r = buildResult(id);
+							return r.status === "running" || r.status === "timed_out_still_running";
+						});
+						const summaryResults = await Promise.all(stillRunningIds.map(async (id) => {
+							if (!sessionManager.requestAbortSummary) {
+								return [id, { status: "unavailable", toolOverrideApplied: false } as AbortSummaryResult] as const;
+							}
 							try {
-								runLogger.warn("wait_for_agent_soft_kill_sent", { agentId: id });
-								sessionManager.sendKillMessage(id, timeoutMinutes);
+								return [id, await sessionManager.requestAbortSummary(id)] as const;
+							} catch (error) {
+								return [id, {
+									status: "failed",
+									error: error instanceof Error ? error.message : String(error),
+									toolOverrideApplied: false,
+								} as AbortSummaryResult] as const;
+							}
+						}));
+
+						for (const [id, summary] of summaryResults) {
+							runLogger.warn("wait_for_agent_abort_summary_result", {
+								agentId: id,
+								status: summary.status,
+								toolOverrideApplied: summary.toolOverrideApplied,
+							});
+							if (summary.status === "summarized") {
+								persistTimeoutOutcome(
+									id,
+									"aborted",
+									undefined,
+									"final_summary",
+								);
+								continue;
+							}
+							try {
+								runLogger.warn("wait_for_agent_hard_abort", { agentId: id });
+								sessionManager.abortSession(id);
+								hardAbortedIds.add(id);
+								persistTimeoutOutcome(
+									id,
+									"aborted",
+									"Agent forcibly aborted after timeout.",
+									"wait_for_agent_abort_timeout",
+								);
 							} catch { /* best-effort */ }
 						}
-
-						// Wait for all agents to finish, or force kill when the window expires.
-						const killAbortController = new AbortController();
-						const killCompleted = Promise.all(
-							timedOutIds.map((id) => sessionManager.waitForAsyncResult(id, killAbortController.signal).then(() => id)),
-						).then(() => "__kill_completed__" as const);
-						const killTimeoutPromise = new Promise<"__kill_timeout__">((resolve) => {
-							setTimeout(() => resolve("__kill_timeout__"), timeoutMs);
-						});
-
-						const killResult = await Promise.race([killCompleted, killTimeoutPromise]);
-						runLogger.debug("wait_for_agent_kill_wait_result", {
-							killResult,
-						});
-						killAbortController.abort();
-
-						// Track which agents were explicitly hard-aborted.
-						const hardAbortedIds = new Set<string>();
-
-						if (killResult === "__kill_timeout__") {
-							runLogger.warn("wait_for_agent_kill_timeout_hit", {
-								timedOutIds,
-							});
-							// Kill window expired — hard-abort still-running agents.
-							for (const id of timedOutIds) {
-								const r = buildResult(id);
-								if (r.status === "running" || r.status === "timed_out_still_running") {
-									try {
-										runLogger.warn("wait_for_agent_hard_abort", { agentId: id });
-										sessionManager.abortSession(id);
-										hardAbortedIds.add(id);
-									} catch { /* best-effort */ }
-								}
-							}
-							// Yield after aborts so finish() handlers run.
-							await new Promise<void>((resolve) => { queueMicrotask(resolve); });
-						}
-
-						// Yield while any pending handlers settle after either completion or timeout.
+						// Yield after aborts so finish() handlers run.
 						await new Promise<void>((resolve) => { queueMicrotask(resolve); });
-
-						// Re-classify: completed agents stay completed; hard-aborted agents become killed.
-						const escalationResults = uniqueIds.map((id) => {
-							const r = buildResult(id);
-							if (hardAbortedIds.has(id)) {
-								return {
-									...r,
-									status: "killed" as const,
-									error: r.error ?? "killed",
-									abortReason: "wait_for_agent_kill_timeout",
-								};
-							}
-							return r;
-						});
-						runLogger.warn("wait_for_agent_kill_results", {
-							timedOutCount: timedOutIds.length,
-							killedCount: hardAbortedIds.size,
-						});
-						for (const r of escalationResults) {
-							if (r.status === "completed") {
-								sessionManager.clearAsyncResult(r.id);
-							}
-						}
-						return formatWaitResult(escalationResults);
 					}
+
+					// Yield while any pending handlers settle after either completion or timeout.
+					await new Promise<void>((resolve) => { queueMicrotask(resolve); });
+
+					// Re-classify: completed agents stay completed; forcibly aborted agents use the compatibility status.
+					const escalationResults = uniqueIds.map((id) => {
+						const r = buildResult(id);
+						if (hardAbortedIds.has(id)) {
+							return {
+								...r,
+								status: "killed" as const,
+								error: r.error ?? "aborted",
+								abortReason: "wait_for_agent_abort_timeout",
+								terminalOutcome: "aborted",
+							};
+						}
+						return r;
+					});
+					runLogger.warn("wait_for_agent_kill_results", {
+						timedOutCount: timedOutIds.length,
+						abortedCount: hardAbortedIds.size,
+					});
+					return formatWaitResult(escalationResults);
 				}
 
 				// Non-escalation path (or no timed-out agents): return immediately
-				for (const r of timeoutResults) {
-					if (r.status === "completed") {
-						sessionManager.clearAsyncResult(r.id);
-					}
-				}
 				runLogger.warn("wait_for_agent_timeout_results", {
 					timedOutCount: timeoutResults.filter((r) => r.status === "timed_out_still_running").length,
 					completedCount: timeoutResults.filter((r) => r.status === "completed").length,
@@ -1480,11 +1786,6 @@ export class TaskController {
 				completedCount: finalResults.filter((r) => r.status === "completed").length,
 				runningCount: finalResults.filter((r) => r.status === "running").length,
 			});
-			for (const r of finalResults) {
-				if (r.status === "completed") {
-					sessionManager.clearAsyncResult(r.id);
-				}
-			}
 			return formatWaitResult(finalResults);
 		} catch (error) {
 			runLogger.error("wait_for_agent_failure", {
@@ -1507,11 +1808,11 @@ export class TaskController {
 	): TaskResult {
 		const lines: string[] = [];
 
-		const completed = agents.filter(a => a.status === "completed");
-		const running = agents.filter(a => a.status === "running");
-		const timedOut = agents.filter(a => a.status === "timed_out_still_running");
-		const killed = agents.filter(a => a.status === "killed");
-		const unknown = agents.filter(a => a.status === "unknown");
+		const completed = agents.filter((a) => a.status === "completed");
+		const running = agents.filter((a) => a.status === "running");
+		const timedOut = agents.filter((a) => a.status === "timed_out_still_running");
+		const killed = agents.filter((a) => a.status === "killed");
+		const unknown = agents.filter((a) => a.status === "unknown");
 
 		// Top-level details (backwards-compatible with single-agent callers)
 		const first = agents[0];
@@ -1521,58 +1822,117 @@ export class TaskController {
 			topLevel.displayName = first.displayName;
 			topLevel.agentType = first.agentType;
 			topLevel.sessionFile = first.sessionFile;
+			topLevel.terminalOutcome = first.terminalOutcome;
+			topLevel.terminalError = first.terminalError;
+			topLevel.terminalAt = first.terminalAt;
 		}
+
+		const formatDiagnostic = (a: AgentWaitResult): string | undefined => {
+			if (a.error) {
+				return a.error;
+			}
+			if (a.terminalError) {
+				return a.terminalError;
+			}
+			return undefined;
+		};
+		const setWarnings = (a: AgentWaitResult) => {
+			topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
+		};
 
 		if (agents.length === 1) {
 			// Single-agent: use the old-style detailed output for backwards compat
 			const a = agents[0];
 			const displayName = a.displayName || a.agentType || a.id;
+			const outcome = a.terminalOutcome;
+			const terminalSummary = formatDiagnostic(a);
+			const noFinalOutputSummary = terminalSummary && !/^(aborted|killed)$/i.test(terminalSummary)
+				? terminalSummary
+				: "No final assistant output was captured.";
 			if (a.status === "completed") {
-				if (a.error !== undefined) {
-					topLevel.error = a.error;
+				if (outcome === "aborted") {
+					topLevel.error = terminalSummary ?? "sub-agent terminated before producing final output.";
 					topLevel.abortReason = a.abortReason;
-					topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
-					const hasPartialOutput = a.output && a.output.length > 0 && a.output !== a.error;
-					if (hasPartialOutput) {
+					setWarnings(a);
+					if (a.output) {
 						topLevel.output = a.output;
-						lines.push(`${displayName} (${a.id}) crashed but produced partial output. Use resume: "${a.id}" to retry or continue this agent.`);
-						lines.push("");
-						lines.push(a.error);
+						lines.push(`${displayName} (${a.id}) was aborted before producing a final assistant result. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
 						lines.push("");
 						lines.push(a.output);
 					} else {
-						lines.push(`${displayName} (${a.id}) crashed. Use resume: "${a.id}" to retry or continue this agent.`);
+						lines.push(`${displayName} (${a.id}) was aborted before producing a final assistant result. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
 						lines.push("");
-						lines.push(a.error || "The sub-agent stopped without producing any output.");
+						lines.push(noFinalOutputSummary);
 					}
-				} else {
-					topLevel.output = a.output;
-					topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
-					lines.push(`${displayName} (${a.id}) completed. Use resume: "${a.id}" to continue this agent.`);
+				} else if (outcome === "abort_request_failed") {
+					topLevel.error = terminalSummary ?? "Unable to queue a request to finish the run.";
+					topLevel.abortReason = a.abortReason;
+					setWarnings(a);
+					lines.push(`${displayName} (${a.id}) could not queue the finish request. The transcript was preserved and can be resumed with resume: "${a.id}".`);
+					lines.push("");
+					lines.push(a.output || "No final assistant output was captured.");
+					if (terminalSummary && terminalSummary !== a.output) {
+						lines.push("");
+						lines.push(terminalSummary);
+					}
+				} else if (outcome === "crashed") {
 					if (a.output) {
+						lines.push(`${displayName} (${a.id}) stopped with an error after producing partial output. Use resume: "${a.id}" to retry or continue this agent.`);
 						lines.push("");
 						lines.push(a.output);
-					} else if (!a.output) {
+						topLevel.output = a.output;
+					} else {
+						lines.push(`${displayName} (${a.id}) stopped with an error before producing output. Use resume: "${a.id}" to retry or continue this agent.`);
 						lines.push("");
-						lines.push("(no output)");
+						lines.push(terminalSummary || "No final assistant output was captured.");
 					}
+					topLevel.error = terminalSummary || "sub-agent stopped unexpectedly.";
+						topLevel.abortReason = a.abortReason;
+						setWarnings(a);
+				} else if (outcome === "timed_out") {
+					topLevel.error = terminalSummary;
+					topLevel.abortReason = a.abortReason;
+					setWarnings(a);
+					lines.push(`${displayName} (${a.id}) timed out. The transcript was preserved and can be resumed with resume: "${a.id}".`);
+					lines.push("");
+					lines.push(a.output || terminalSummary || "No final assistant output was captured.");
+				} else if (!a.output) {
+					setWarnings(a);
+					lines.push(`${displayName} (${a.id}) is no longer running, but no final assistant output was captured. The transcript was preserved and can be resumed with resume: "${a.id}".`);
+					lines.push("");
+					lines.push("No final assistant output was captured.");
+				} else {
+					setWarnings(a);
+					topLevel.output = a.output;
+					lines.push(`${displayName} (${a.id}) completed. Use resume: "${a.id}" to continue this agent.`);
+					lines.push("");
+					lines.push(a.output);
 				}
 			} else if (a.status === "running") {
-				lines.push(`${displayName} (${a.id}) is still running. Call wait_for_agent again to check.`);
+				if (a.terminalOutcome === "timed_out") {
+					lines.push(`${displayName} (${a.id}) timed out while still running. No final assistant output captured yet.`);
+				} else {
+					lines.push(`${displayName} (${a.id}) is still running. No final assistant output captured yet. Call wait_for_agent again to check.`);
+				}
 			} else if (a.status === "timed_out_still_running") {
-				lines.push(`${displayName} (${a.id}) is still running (timed out waiting). Call wait_for_agent again to check.`);
+				lines.push(`${displayName} (${a.id}) timed out while still running and produced no final assistant output. Call wait_for_agent again to check.`);
 			} else if (a.status === "killed") {
-				topLevel.error = a.error ?? "killed";
+				topLevel.error = a.error ?? "aborted";
 				topLevel.abortReason = a.abortReason;
 				topLevel.output = a.output;
-				topLevel.warnings = [...warnings, ...(a.warnings ?? [])];
+				setWarnings(a);
 				const hasOutput = a.output && a.output.length > 0;
 				if (hasOutput) {
-					lines.push(`${displayName} (${a.id}) was hard-aborted after kill window expired. Partial output may be available. Use resume: "${a.id}" to continue this agent.`);
+					lines.push(`${displayName} (${a.id}) was aborted while still running. Partial output may be available. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
 					lines.push("");
 					lines.push(a.output);
 				} else {
-					lines.push(`${displayName} (${a.id}) was hard-aborted after kill window expired. Use resume: "${a.id}" to continue this agent.`);
+					lines.push(`${displayName} (${a.id}) was aborted while still running. No final assistant output was captured. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
+					const fallback = noFinalOutputSummary;
+					if (fallback) {
+						lines.push("");
+						lines.push(fallback);
+					}
 				}
 			} else {
 				topLevel.error = "unknown_agent_id";
@@ -1583,22 +1943,27 @@ export class TaskController {
 			lines.push(`wait_for_agent results for ${agents.length} agent(s):`);
 
 			if (completed.length > 0) {
-				lines.push(`\n## Completed (${completed.length})`);
+				lines.push(`
+## Completed (${completed.length})`);
 				for (const a of completed) {
 					const name = a.displayName || a.agentType || a.id;
-					lines.push(`- ${name} (${a.id})`);
-					if (a.error !== undefined) {
+					const state = a.output
+						? (a.terminalOutcome && a.terminalOutcome !== "completed" ? a.terminalOutcome : "completed")
+						: (a.terminalOutcome && a.terminalOutcome !== "completed" ? a.terminalOutcome : "no final output");
+					lines.push(`- ${name} (${a.id}) [${state}]`);
+					if (a.error) {
 						lines.push(`  Error: ${a.error}`);
 					} else if (a.output) {
 						lines.push(`  ${a.output}`);
 					} else {
-						lines.push(`  (no output captured)`);
+						lines.push(`  No final assistant output was captured. Transcript preserved; use resume: "${a.id}".`);
 					}
 				}
 			}
 
 			if (running.length > 0) {
-				lines.push(`\n## Still Running (${running.length})`);
+				lines.push(`
+## Still Running (${running.length})`);
 				for (const a of running) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
@@ -1606,7 +1971,8 @@ export class TaskController {
 			}
 
 			if (timedOut.length > 0) {
-				lines.push(`\n## Timed Out, Still Running (${timedOut.length})`);
+				lines.push(`
+## Timed Out, Still Running (${timedOut.length})`);
 				for (const a of timedOut) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
@@ -1614,7 +1980,8 @@ export class TaskController {
 			}
 
 			if (killed.length > 0) {
-				lines.push(`\n## Hard-Aborted (${killed.length})`);
+				lines.push(`
+## Aborted (${killed.length})`);
 				for (const a of killed) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id}) [transcript saved, resumable]`);
@@ -1622,7 +1989,8 @@ export class TaskController {
 			}
 
 			if (unknown.length > 0) {
-				lines.push(`\n## Unknown IDs (${unknown.length})`);
+				lines.push(`
+## Unknown IDs (${unknown.length})`);
 				for (const a of unknown) {
 					lines.push(`- ${a.id}`);
 				}
@@ -1634,4 +2002,4 @@ export class TaskController {
 			details: topLevel,
 		};
 	}
-}
+	}

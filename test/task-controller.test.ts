@@ -6,7 +6,7 @@
  * getFinalTextFromMessages).  All three adapters are injected so
  * the controller never touches concrete classes.
  */
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -314,6 +314,58 @@ describe("TaskController.extractOutput", () => {
 		expect(result.text).toContain("git rebase --continue");
 	});
 
+	it("returns pending-tool-call diagnostic when last message is an unfinished tool call", () => {
+		const messages = [
+			{
+				role: "assistant",
+				content: [{
+					type: "toolCall",
+					id: "tool-1",
+					name: "bash",
+					arguments: { command: "curl https://example.com/very/long/command?query=that-is-just-an-example" },
+				}],
+				stopReason: "toolUse",
+			},
+		];
+		const result = TaskController.extractOutput(messages);
+		expect(result.source).toBe("diagnostic");
+		expect(result.text).toContain("Last transcript activity: assistant was executing tool bash:");
+	});
+
+	it("returns pending-tool-call diagnostic even when terminal assistant also has text", () => {
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "I am about to inspect the repo." },
+					{ type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "ls" } },
+				],
+				stopReason: "toolUse",
+			},
+		];
+		const result = TaskController.extractTerminalOutput(messages);
+		expect(result.source).toBe("diagnostic");
+		expect(result.text).toContain("Last transcript activity: assistant was executing tool bash: ls");
+	});
+
+	it("returns pending-tool-call diagnostic without a command when unavailable", () => {
+		const messages = [
+			{
+				role: "assistant",
+				content: [{
+					type: "toolCall",
+					id: "tool-1",
+					name: "read",
+					arguments: { path: "/tmp/file.txt" },
+				}],
+				stopReason: "toolUse",
+			},
+		];
+		const result = TaskController.extractOutput(messages);
+		expect(result.source).toBe("diagnostic");
+		expect(result.text).toContain("Last transcript activity: assistant was executing tool read.");
+	});
+
 	it("returns 'none' source when no assistant and no error", () => {
 		const messages: any[] = [];
 		const result = TaskController.extractOutput(messages);
@@ -339,6 +391,23 @@ describe("TaskController.extractOutput", () => {
 		const result = TaskController.extractOutput(messages);
 		expect(result.text).toBe("second");
 		expect(result.source).toBe("assistant");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// User-facing terminology
+// ---------------------------------------------------------------------------
+
+describe("user-facing timeout/abort terminology", () => {
+	it("does not use kill terminology in docs or tool descriptions except the compatibility parameter name", () => {
+		const files = ["README.md", "subagent/README.md", "subagent/index.ts"];
+		const combined = files
+			.map((file) => readFileSync(join(process.cwd(), file), "utf-8"))
+			.join("\n")
+			.replaceAll("kill_on_timeout", "")
+			.replace(/legacy structured status `killed`[^.]*\./gi, "");
+
+		expect(combined).not.toMatch(/try killing|soft-kill|soft kill|hard-abort|hard-aborted|hard abort|kill window|killed|killing/i);
 	});
 });
 
@@ -445,6 +514,7 @@ describe("TaskController.execute", () => {
 			),
 			getAsyncResult: vi.fn((id: string) => sessionManager.getAsyncResult(id)),
 			waitForAsyncResult: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForAsyncResult(id, signal)),
+			requestAbortSummary: vi.fn().mockResolvedValue({ status: "unavailable", toolOverrideApplied: false }),
 			clearAsyncResult: vi.fn((id: string) => sessionManager.clearAsyncResult(id)),
 			markAsyncRunning: vi.fn((id: string) => sessionManager.markAsyncRunning(id)),
 			clearAsyncRunning: vi.fn((id: string) => sessionManager.clearAsyncRunning(id)),
@@ -667,7 +737,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("Model error");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Model error");
 		expect(text).toContain("Use resume:");
 	});
@@ -681,7 +751,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("529 overloaded");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("529 overloaded");
 		expect(text).not.toContain("completed");
 	});
@@ -937,7 +1007,7 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("final after guard");
 	});
 
-	it("returns (no output) when the final-response retries still have no assistant text", async () => {
+	it("reports no final output when the final-response retries still have no assistant text", async () => {
 		mockSession.messages = [];
 		mockSession.prompt = vi.fn().mockResolvedValue(undefined);
 
@@ -948,7 +1018,10 @@ describe("TaskController.execute", () => {
 			expect(mockSession.prompt).toHaveBeenNthCalledWith(call, FINAL_RESPONSE_REQUIRED_MESSAGE);
 		}
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("(no output)");
+		expect(text).toContain("No final assistant output was captured.");
+		expect(text).toContain("resume:");
+		expect(text).not.toContain("completed.");
+		expect(text).not.toContain("(no output)");
 	});
 
 	// ---- onUpdate callback ----
@@ -1261,9 +1334,8 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("async crash");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("async crash");
-		expect(text).not.toContain("partial output");
 	});
 
 	it("stores resolved terminal assistant diagnostics as async errors", async () => {
@@ -1283,7 +1355,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("Request was aborted");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Request was aborted");
 	});
 
@@ -1426,7 +1498,7 @@ describe("TaskController.execute", () => {
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(agent.status).toBe("timed_out_still_running");
-		expect(text).toContain("timed out waiting");
+		expect(text).toContain("timed out");
 		expect(text).not.toContain("final output is still being finalized");
 	});
 	// ---- In-flight guard ----
@@ -1984,6 +2056,28 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("blocking result output");
 	});
 
+	it("surfaces pending terminal tool-call diagnostic from persisted stopped transcript", async () => {
+		const fs = await import("node:fs");
+		const record = makeRecord("badc0ffe", "explorer");
+		record.sessionFile = join(tempDir, "pending-tool.jsonl");
+		metadataStore.upsertRecord(record);
+		fs.writeFileSync(record.sessionFile, JSON.stringify({
+			type: "message",
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "npm test" } }],
+				stopReason: "toolUse",
+			},
+		}) + "\n");
+
+		const result = await controller.waitForAgent([record.id], {}, makeContext());
+
+		expect(result.details.error).toContain("Last transcript activity: assistant was executing tool bash: npm test");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Last transcript activity: assistant was executing tool bash: npm test");
+		expect(text).not.toContain("completed.");
+	});
+
 	it("surfaces terminal persisted tool-result errors", async () => {
 		const fs = await import("node:fs");
 		const record = makeRecord("feedbabe", "explorer");
@@ -2012,7 +2106,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toContain("Command aborted");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Command aborted");
 		expect(text).toContain("bash");
 		expect(text).toContain("git rebase --continue");
@@ -2095,7 +2189,7 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("Connection lost");
 		expect(result.details.output).toBe("here is a partial answer");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed but produced partial output");
+		expect(text).toMatch(/stopped with an error after producing partial output|crashed but produced partial output/);
 		expect(text).toContain("here is a partial answer");
 		expect(text).toContain("Use resume:");
 	});
@@ -2109,9 +2203,8 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("Model error");
 		expect(result.details.output).toBeUndefined();
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Model error");
-		expect(text).not.toContain("partial output");
 	});
 
 	it("returns generic fallback when crash leaves no transcript and error is empty string", async () => {
@@ -2121,10 +2214,10 @@ describe("TaskController.execute", () => {
 
 		const result = await controller.execute(makeParams(), makeContext());
 
-		expect(result.details.error).toBe("");
+			expect(result.details.error).toBe("sub-agent stopped unexpectedly.");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
-		expect(text).toContain("without producing any output");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+			expect(text).toContain("sub-agent stopped unexpectedly.");
 	});
 
 	// ---- Shared outcome-agnostic extraction (async crash paths via waitForAgent) ----
@@ -2148,9 +2241,8 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("async boom");
 		expect(result.details.output).toBe("partial async output");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed but produced partial output");
+		expect(text).toMatch(/stopped with an error after producing partial output|crashed but produced partial output/);
 		expect(text).toContain("partial async output");
-		expect(text).toContain("async boom");
 	});
 
 	it("returns diagnostic via waitForAgent when async agent crashed with no assistant text", async () => {
@@ -2169,9 +2261,8 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("async crash");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("async crash");
-		expect(text).not.toContain("partial output");
 	});
 
 	// ---- Shared outcome-agnostic extraction (async empty error fallback) ----
@@ -2191,10 +2282,10 @@ describe("TaskController.execute", () => {
 
 		const result = await controller.waitForAgent([agentId], {}, makeContext());
 
-		expect(result.details.error).toBe("");
+			expect(result.details.error).toBe("sub-agent stopped unexpectedly.");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("crashed");
-		expect(text).toContain("without producing any output");
+			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+			expect(text).toContain("before producing output");
 	});
 
 	// ---- Consistent behavior between blocking and async ----
@@ -2215,7 +2306,7 @@ describe("TaskController.execute", () => {
 		expect(blockingResult.details.error).toBe(crashError);
 		const blockingText = blockingResult.content[0]?.type === "text" ? blockingResult.content[0].text : "";
 		expect(blockingText).toContain(partialText);
-		expect(blockingText).toContain("crashed but produced partial output");
+		expect(blockingText).toMatch(/crashed but produced partial output|stopped with an error after producing partial output/);
 
 		// Reset for async
 		mockSession = {
@@ -2244,7 +2335,7 @@ describe("TaskController.execute", () => {
 		expect(asyncResult.details.error).toBe(crashError);
 		const asyncText = asyncResult.content[0]?.type === "text" ? asyncResult.content[0].text : "";
 		expect(asyncText).toContain(partialText);
-		expect(asyncText).toContain("crashed");
+		expect(asyncText).toMatch(/stopped with an error after producing partial output|crashed but produced partial output/);
 	});
 
 	// ---- Successful output still works through shared path ----
@@ -2278,6 +2369,9 @@ describe("TaskController.execute", () => {
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("timed_out_still_running");
+		expect(agents[0].terminalOutcome).toBe("timed_out");
+		expect(result.details.terminalOutcome).toBe("timed_out");
+		expect(agents[0].abortReason).toBe("wait_for_agent_timeout");
 
 		// Agent should NOT be aborted (non-destructive)
 		expect(mockSession.abort).not.toHaveBeenCalled();
@@ -2298,13 +2392,13 @@ describe("TaskController.execute", () => {
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("timed_out_still_running");
 
-		// Agent should NOT be aborted and NOT receive kill message
+		// Agent should NOT be aborted and NOT receive a finish request
 		expect(mockSession.abort).not.toHaveBeenCalled();
 		expect(fakeSessionManager.sendKillMessage).not.toHaveBeenCalled();
 	});
 
-	it("soft-kill: agent finishes within kill window and returns output", async () => {
-		// Agent that finishes after soft-kill
+	it("finish request: agent finishes within abort window and returns output", async () => {
+		// Agent that finishes after the finish request
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
@@ -2319,13 +2413,13 @@ describe("TaskController.execute", () => {
 		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
-		// Simulate soft-kill success: sendKillMessage stores fresh result,
+		// Simulate finish-request success: sendKillMessage stores fresh result,
 		// then waitForSessionEnd resolves
 		const origSendKill = fakeSessionManager.sendKillMessage;
 		fakeSessionManager.sendKillMessage = vi.fn((id: string, _mins: number) => {
-			// Simulate agent finishing after receiving kill message
+			// Simulate agent finishing after receiving the finish request
 			sessionManager.storeAsyncResult(id, {
-				output: "final answer after soft-kill",
+				output: "final answer after finish request",
 				warnings: [],
 			});
 			// Mark session as completed so waitForSessionEnd resolves
@@ -2353,16 +2447,83 @@ describe("TaskController.execute", () => {
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("completed");
-		expect(agents[0].output).toBe("final answer after soft-kill");
+		expect(agents[0].output).toBe("final answer after finish request");
 
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("completed");
-		expect(text).toContain("final answer after soft-kill");
+		expect(text).toContain("final answer after finish request");
 
 		fakeSessionManager.sendKillMessage = origSendKill;
 	});
 
-	it("hard-abort: agent does not finish within kill window and is killed", async () => {
+	it("finish-request result unblocks abort-on-timeout wait before session_end", async () => {
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => () => {}),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		fakeSessionManager.sendKillMessage = vi.fn((id: string) => {
+			sessionManager.storeAsyncResult(id, {
+				output: "finish request final",
+				warnings: [],
+				terminalOutcome: "completed",
+			});
+		});
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].status).toBe("completed");
+		expect(agents[0].output).toBe("finish request final");
+		expect(fakeSessionManager.abortSession).not.toHaveBeenCalledWith(agentId);
+	});
+
+	it("abort_request_failed is reported without claiming completion and remains resumable", async () => {
+		const recordId = "ab0faded";
+		const record = makeRecord(recordId, "explorer");
+		const result = await waitForAgentTool(
+			[recordId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue({
+						output: "original partial transcript",
+						error: "Agent is already processing.",
+						warnings: [],
+						terminalOutcome: "abort_request_failed",
+						terminalError: "Agent is already processing.",
+					}),
+					clearAsyncResult: vi.fn(),
+				} as any,
+			}),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].terminalOutcome).toBe("abort_request_failed");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("could not queue the finish request");
+		expect(text).toContain("resume:");
+		expect(text).toContain("original partial transcript");
+		expect(text).not.toContain("completed.");
+	});
+
+	it("abort fallback: agent does not finish within abort window and uses compatibility killed status", async () => {
 		// Agent that never finishes
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
@@ -2378,8 +2539,9 @@ describe("TaskController.execute", () => {
 		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
-		// sendKillMessage is a no-op (agent doesn't respond to kill)
+		// sendKillMessage is a no-op (agent doesn't respond to finish request)
 		fakeSessionManager.sendKillMessage = vi.fn();
+		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "timed_out", toolOverrideApplied: true });
 
 		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
 		const runtime: RuntimeContext = {
@@ -2396,21 +2558,104 @@ describe("TaskController.execute", () => {
 		const emitted = logs.map((entry) => entry.event);
 		expect(emitted).toContain("wait_for_agent_kill_escalation_started");
 		expect(emitted).toContain("wait_for_agent_hard_abort");
+		expect(fakeSessionManager.requestAbortSummary).toHaveBeenCalledWith(agentId);
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("killed");
-		expect(agents[0].abortReason).toBe("wait_for_agent_kill_timeout");
-		expect(result.details.abortReason).toBe("wait_for_agent_kill_timeout");
+		expect(agents[0].abortReason).toBe("wait_for_agent_abort_timeout");
+		expect(result.details.abortReason).toBe("wait_for_agent_abort_timeout");
 
-		// Hard-abort should have been called
+		// Forced-abort fallback should have been called
 		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(agentId);
 
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("hard-aborted");
+		expect(text).toContain("aborted while still running");
 		expect(text).toContain("Use resume:");
+		expect(text).not.toContain("killed");
+		expect(agents[0].output).not.toBe("killed");
+		expect(agents[0].terminalError).not.toBe("killed");
 	});
 
-	it("hard-aborted agent has persisted session file for resume", async () => {
+	it("abort-on-timeout reports final summary as aborted output without force aborting", async () => {
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => () => {}),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		fakeSessionManager.sendKillMessage = vi.fn();
+		fakeSessionManager.requestAbortSummary = vi.fn(async (id: string) => {
+			sessionManager.storeAsyncResult(id, {
+				output: "final abort summary",
+				error: "aborted",
+				warnings: [],
+				abortReason: "final_summary",
+				terminalOutcome: "aborted",
+			});
+			return { status: "summarized", output: "final abort summary", toolOverrideApplied: true };
+		});
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(fakeSessionManager.requestAbortSummary).toHaveBeenCalledWith(agentId);
+		expect(fakeSessionManager.abortSession).not.toHaveBeenCalledWith(agentId);
+		expect(agents[0].status).toBe("killed");
+		expect(agents[0].terminalOutcome).toBe("aborted");
+		expect(agents[0].abortReason).toBe("final_summary");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("aborted while still running");
+		expect(text).toContain("The transcript was preserved");
+		expect(text).toContain("resume:");
+		expect(text).toContain("final abort summary");
+		expect(text).not.toContain("completed.");
+	});
+
+	it("final summary no-output path falls back to forced abort with resumable no-output wording", async () => {
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => () => {}),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		fakeSessionManager.sendKillMessage = vi.fn();
+		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "no_output", toolOverrideApplied: true });
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(agentId);
+		const agents = result.details.agents as AgentWaitResult[];
+		expect(agents[0].terminalOutcome).toBe("aborted");
+		expect(agents[0].output).toBe("");
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("No final assistant output was captured");
+		expect(text).toContain("The transcript was preserved");
+		expect(text).toContain("resume:");
+		expect(text).not.toContain("completed.");
+	});
+
+	it("aborted agent has persisted session file for resume", async () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
@@ -2445,8 +2690,8 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("Use resume:");
 	});
 
-	it("per-agent status reporting for mixed outcomes (completed + killed)", async () => {
-		// Two agents both running — one will finish during kill, one will be killed
+	it("per-agent status reporting for mixed outcomes (completed + compatibility killed)", async () => {
+		// Two agents both running — one will finish during the finish request, one will be aborted
 		const subsA: Array<(e: any) => void> = [];
 		const mockSessionA = {
 			dispose: vi.fn(),
@@ -2479,7 +2724,7 @@ describe("TaskController.execute", () => {
 		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const idB = (spawnB.details as TaskDetails).id!;
 
-		// Agent A finishes during kill window: sendKillMessage stores fresh result
+		// Agent A finishes during the abort window: sendKillMessage stores fresh result
 		const origSendKill = fakeSessionManager.sendKillMessage;
 		fakeSessionManager.sendKillMessage = vi.fn((id: string) => {
 			if (id === idA) {
@@ -2490,7 +2735,7 @@ describe("TaskController.execute", () => {
 				(sessionManager as any).completedSessions?.add?.(id);
 				for (const cb of subsA) cb({ type: "agent_end" });
 			}
-			// Agent B: no response to kill (will be hard-aborted)
+			// Agent B: no response to the finish request (will be forcibly aborted)
 		});
 
 		const result = await controller.waitForAgent(
@@ -2515,7 +2760,7 @@ describe("TaskController.execute", () => {
 		// Multi-agent text should show both statuses
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("## Completed");
-		expect(text).toContain("## Hard-Aborted");
+			expect(text).toContain("## Aborted");
 
 		fakeSessionManager.sendKillMessage = origSendKill;
 	});
@@ -2547,9 +2792,9 @@ describe("TaskController.execute", () => {
 		expect(agents[0].status).toBe("killed");
 
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("hard-aborted");
+				expect(text).toContain("aborted while still running");
 		expect(text).toContain("Use resume:");
-		expect(result.details.error).toBe("killed");
+		expect(result.details.error).toBe("aborted");
 	});
 
 	it("waitForAgent consumes completed agents from notifier to avoid stale reminders", async () => {
@@ -2586,6 +2831,100 @@ describe("TaskController.execute", () => {
 		expect(__testing.asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
 	});
 
+	it("no-output stopped result does not report normal completed success", async () => {
+		const recordId = "feedbabe";
+		const record = makeRecord(recordId, "explorer");
+
+		const result = await waitForAgentTool(
+			[recordId],
+			{},
+			makeContext({
+				metadataStore: {
+					...fakeMetadataStore,
+					findRecord: vi.fn().mockReturnValue(record),
+				} as any,
+				sessionManager: {
+					...fakeSessionManager,
+					getAsyncResult: vi.fn().mockReturnValue({ output: "", warnings: [] }),
+					clearAsyncResult: vi.fn(),
+				} as any,
+			}),
+		);
+
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("No final assistant output was captured.");
+		expect(text).toContain("resume:");
+		expect(text).not.toContain("completed.");
+		expect(text).not.toContain("(no output)");
+		expect(result.details.output).toBeUndefined();
+	});
+
+	it("repeated timeout waits preserve terminal metadata and do not claim completion", async () => {
+		const recordId = "c0ffee01";
+		const terminalAt = "2024-02-03T04:05:06.000Z";
+		metadataStore.upsertRecord({
+			...makeRecord(recordId, "explorer"),
+			terminalOutcome: "timed_out",
+			terminalAt,
+			abortReason: "wait_for_agent_timeout",
+		});
+		const runningSessionManager = {
+			...fakeSessionManager,
+			getAsyncResult: vi.fn().mockReturnValue(undefined),
+			isAsyncRunning: vi.fn().mockReturnValue(true),
+			waitForAsyncResult: vi.fn(() => new Promise(() => {})),
+		} as any;
+
+		const first = await waitForAgentTool([recordId], { timeout: 0 }, makeContext({ sessionManager: runningSessionManager }));
+		const second = await waitForAgentTool([recordId], { timeout: 0 }, makeContext({ sessionManager: runningSessionManager }));
+
+		expect((first.details.agents as AgentWaitResult[])[0].terminalOutcome).toBe("timed_out");
+		expect((second.details.agents as AgentWaitResult[])[0].terminalOutcome).toBe("timed_out");
+		expect(metadataStore.findRecord(recordId)?.terminalAt).toBe(terminalAt);
+		const text = second.content[0]?.type === "text" ? second.content[0].text : "";
+		expect(text).toContain("timed out");
+		expect(text).not.toContain("completed.");
+	});
+
+	it("repeated aborted no-output waits preserve terminal metadata and resumable wording", async () => {
+		const recordId = "c0ffee02";
+		const terminalAt = "2024-02-03T04:05:06.000Z";
+		const record = {
+			...makeRecord(recordId, "explorer"),
+			sessionFile: join(tempDir, "aborted-empty.jsonl"),
+			terminalOutcome: "aborted" as const,
+			terminalAt,
+			abortReason: "wait_for_agent_abort_timeout",
+		};
+		metadataStore.upsertRecord(record);
+		const fs = await import("node:fs");
+		fs.writeFileSync(record.sessionFile, "");
+		let inMemory = true;
+		const abortedSessionManager = {
+			...fakeSessionManager,
+			getAsyncResult: vi.fn(() => inMemory ? {
+				output: "",
+				error: "aborted",
+				warnings: [],
+				terminalOutcome: "aborted",
+				abortReason: "wait_for_agent_abort_timeout",
+			} : undefined),
+			clearAsyncResult: vi.fn(() => { inMemory = false; }),
+			isCompleted: vi.fn().mockReturnValue(true),
+		} as any;
+
+		const first = await waitForAgentTool([recordId], {}, makeContext({ sessionManager: abortedSessionManager }));
+		const second = await waitForAgentTool([recordId], {}, makeContext({ sessionManager: abortedSessionManager }));
+
+		expect((first.details.agents as AgentWaitResult[])[0].terminalOutcome).toBe("aborted");
+		expect((second.details.agents as AgentWaitResult[])[0].terminalOutcome).toBe("aborted");
+		expect(metadataStore.findRecord(recordId)?.terminalAt).toBe(terminalAt);
+		const text = second.content[0]?.type === "text" ? second.content[0].text : "";
+		expect(text).toContain("No final assistant output was captured");
+		expect(text).toContain("resume:");
+		expect(text).not.toContain("completed.");
+	});
+
 	it("waitForAgent keeps running agents unconsumed after timeout", async () => {
 		const recordId = "cafebabe";
 		const record = makeRecord(recordId, "explorer");
@@ -2611,6 +2950,8 @@ describe("TaskController.execute", () => {
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents).toHaveLength(1);
 		expect(agents[0].status).toBe("timed_out_still_running");
+		expect(agents[0].terminalOutcome).toBe("timed_out");
+		expect(result.details.terminalOutcome).toBe("timed_out");
 
 		// Timeout path should not clear notifier state.
 		expect(__testing.asyncAgentNotifier.getUnconsumed()).toEqual([recordId]);
@@ -2646,7 +2987,7 @@ describe("TaskController.execute", () => {
 		expect(agents[0].output).toBe("killed output");
 	});
 
-	it("returns immediately when one agent is killed and another is still running", async () => {
+	it("returns immediately when one agent has compatibility killed status and another is still running", async () => {
 		const killedId = "deadbeef";
 		const runningId = "cafebabe";
 		const killedRecord = makeRecord(killedId, "explorer");
@@ -2709,7 +3050,7 @@ describe("TaskController.execute", () => {
 		expect(__testing.asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
 	});
 
-	it("killed agent with partial output shows output in result", async () => {
+	it("compatibility killed status with partial output shows output in result", async () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
@@ -2729,9 +3070,11 @@ describe("TaskController.execute", () => {
 		fakeSessionManager.abortSession = vi.fn((id: string) => {
 			// Store partial output simulating what the real session manager would do
 			sessionManager.storeAsyncResult(id, {
-				output: "partial work before kill",
-				error: "killed",
+				output: "partial work before abort",
+				error: "aborted",
 				warnings: [],
+				abortReason: "forced_abort",
+				terminalOutcome: "aborted",
 			});
 			// Then call the real abortSession
 			(sessionManager as any).completedSessions?.add?.(id);
@@ -2751,14 +3094,14 @@ describe("TaskController.execute", () => {
 
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Partial output may be available");
-		expect(text).toContain("partial work before kill");
+		expect(text).toContain("partial work before abort");
 
 		fakeSessionManager.abortSession = origAbortSession;
 	});
 
-	// ---- Race-safe coordination between kill and async finish (#25 review) ----
+	// ---- Race-safe coordination between finish request and async finish (#25 review) ----
 
-	it("soft-kill marks kill-in-progress before aborting to prevent race", async () => {
+	it("finish request marks kill-in-progress before aborting to prevent race", async () => {
 		// Setup: session with deferred prompt rejection (simulates abort causing rejection)
 		const subs: Array<(e: any) => void> = [];
 		let promptReject: ((err: any) => void) | null = null;
@@ -2769,7 +3112,7 @@ describe("TaskController.execute", () => {
 			abort: vi.fn(() => {
 				// Simulate abort causing prompt rejection (real production behavior)
 				if (promptReject) {
-					promptReject(new Error("aborted by soft-kill"));
+					promptReject(new Error("aborted by finish request"));
 					promptReject = null;
 				}
 			}),
@@ -2792,7 +3135,7 @@ describe("TaskController.execute", () => {
 		// Yield to allow async handlers to run
 		await new Promise((r) => setTimeout(r, 10));
 
-		// Kill-in-progress should still be set — the kill prompt (second
+		// Kill-in-progress should still be set — the finish request prompt (second
 		// session.prompt call) never resolves in this test.
 		expect(sessionManager.isKillInProgress(agentId)).toBe(true);
 
@@ -2801,7 +3144,7 @@ describe("TaskController.execute", () => {
 	});
 
 	it("async finish handler skips disposal when kill is in progress", async () => {
-		// Setup: simulate an agent that gets soft-killed mid-flight
+		// Setup: simulate an agent that receives a finish request mid-flight
 		const subs: Array<(e: any) => void> = [];
 		let promptReject: ((err: any) => void) | null = null;
 		const disposeSpy = vi.fn();
@@ -2874,7 +3217,7 @@ describe("TaskController.execute", () => {
 		const stored = sessionManager.getAsyncResult(agentId);
 		expect(stored).toBeDefined();
 		expect(stored!.output).toBe("partial data before abort");
-		expect(stored!.error).toBe("killed");
+		expect(stored!.error).toBe("aborted");
 	});
 
 	it("abortSession marks session completed and disposes it", async () => {
@@ -2910,14 +3253,14 @@ describe("TaskController.execute", () => {
 		expect(sessionManager.hasOpenSession(agentId)).toBe(false);
 	});
 
-	it("soft-kill success: real sendKillMessage stores output and cleans up", async () => {
-		// Simulate a real soft-kill where:
-		// 1. sendKillMessage aborts original prompt
+	it("finish-request success: real sendKillMessage stores output and cleans up", async () => {
+		// Simulate a real finish request where:
+		// 1. sendKillMessage steers the original prompt
 		// 2. finish() skips disposal (kill in progress)
-		// 3. kill prompt succeeds and stores final result
+		// 3. finish-request prompt succeeds and stores final result
 		const subs: Array<(e: any) => void> = [];
 		let promptReject: ((err: any) => void) | null = null;
-		let killPromptResolve: ((val: any) => void) | null = null;
+		let finishPromptResolve: ((val: any) => void) | null = null;
 		let callCount = 0;
 
 		mockSession = {
@@ -2929,8 +3272,8 @@ describe("TaskController.execute", () => {
 					// Original prompt: hangs until aborted
 					return new Promise((_, reject) => { promptReject = reject; });
 				}
-				// Kill prompt: succeeds
-				return new Promise((resolve) => { killPromptResolve = resolve; });
+				// Finish-request prompt: succeeds
+				return new Promise((resolve) => { finishPromptResolve = resolve; });
 			}),
 			abort: vi.fn(() => {
 				if (promptReject) {
@@ -2939,7 +3282,7 @@ describe("TaskController.execute", () => {
 				}
 			}),
 			messages: [
-				{ role: "assistant", content: [{ type: "text", text: "final answer after kill" }] },
+				{ role: "assistant", content: [{ type: "text", text: "final answer after finish request" }] },
 			],
 			getActiveToolNames: () => [],
 		};
@@ -2951,31 +3294,31 @@ describe("TaskController.execute", () => {
 		// Start the real sendKillMessage
 		sessionManager.sendKillMessage(agentId, 5);
 
-		// Verify kill-in-progress is set during the kill flow
+		// Verify kill-in-progress is set during the finish-request flow
 		expect(sessionManager.isKillInProgress(agentId)).toBe(true);
 
-		// Resolve the kill prompt (agent finishes after receiving kill message)
-		killPromptResolve!(undefined);
+		// Resolve the finish-request prompt (agent finishes after receiving the finish request)
+		finishPromptResolve!(undefined);
 
 		// Yield to let .then() handlers run
 		await new Promise((r) => setTimeout(r, 10));
 
-		// After kill prompt resolves, cleanup should have happened
+		// After finish-request prompt resolves, cleanup should have happened
 		expect(sessionManager.isKillInProgress(agentId)).toBe(false);
 		expect(sessionManager.isCompleted(agentId)).toBe(true);
 
-		// The stored result should be the kill prompt success output
+		// The stored result should be the finish-request success output
 		const stored = sessionManager.getAsyncResult(agentId);
 		expect(stored).toBeDefined();
-		expect(stored!.output).toBe("final answer after kill");
+		expect(stored!.output).toBe("final answer after finish request");
 		expect(stored!.error).toBeUndefined();
 	});
 
-	it("soft-kill failure: real sendKillMessage stores error with partial output", async () => {
-		// Kill prompt crashes — verify error + partial output stored
+	it("finish-request failure: real sendKillMessage stores error with partial output", async () => {
+		// Finish-request prompt errors — verify error + partial output stored
 		const subs: Array<(e: any) => void> = [];
 		let promptReject: ((err: any) => void) | null = null;
-		let killPromptReject: ((err: any) => void) | null = null;
+		let finishPromptReject: ((err: any) => void) | null = null;
 		let callCount = 0;
 
 		mockSession = {
@@ -2986,7 +3329,7 @@ describe("TaskController.execute", () => {
 				if (callCount === 1) {
 					return new Promise((_, reject) => { promptReject = reject; });
 				}
-				return new Promise((_, reject) => { killPromptReject = reject; });
+				return new Promise((_, reject) => { finishPromptReject = reject; });
 			}),
 			abort: vi.fn(() => {
 				if (promptReject) {
@@ -3006,19 +3349,20 @@ describe("TaskController.execute", () => {
 
 		sessionManager.sendKillMessage(agentId, 5);
 
-		// Reject the kill prompt
-		killPromptReject!(new Error("model crash during kill"));
+		// Reject the finish-request prompt
+		finishPromptReject!(new Error("model error during finish request"));
 
 		await new Promise((r) => setTimeout(r, 10));
 
-		// Kill-in-progress should be cleared
+		// Finish request failure is reported without finalizing the original run.
 		expect(sessionManager.isKillInProgress(agentId)).toBe(false);
-		expect(sessionManager.isCompleted(agentId)).toBe(true);
+		expect(sessionManager.isCompleted(agentId)).toBe(false);
+		expect(sessionManager.isAsyncRunning(agentId)).toBe(true);
 
-		// Partial output + error should be stored
 		const stored = sessionManager.getAsyncResult(agentId);
 		expect(stored).toBeDefined();
 		expect(stored!.output).toBe("tried to finish");
-		expect(stored!.error).toBe("model crash during kill");
+		expect(stored!.error).toBe("model error during finish request");
+		expect(stored!.terminalOutcome).toBe("abort_request_failed");
 	});
 });
