@@ -18,7 +18,7 @@ import * as fs from "node:fs";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
-import { extractOutput } from "./output-extraction.js";
+import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
 import type { AgentConfig } from "./agents.js";
 import type { MetadataStore, SubagentRecord, TerminalOutcome } from "./metadata.js";
 import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
@@ -710,9 +710,21 @@ export class SubagentSessionManager {
 
 		sendFinishRequest().then(
 			() => {
-				// Agent finished successfully — store fresh output.
-				const extracted = extractOutput(session.messages as any[]);
-				logger.debug("session_send_kill_prompt_completed", { outputLength: extracted.text.length });
+				const extracted = extractTerminalOutput(session.messages as any[]);
+				logger.debug("session_send_kill_prompt_completed", {
+					outputLength: extracted.text.length,
+					source: extracted.source,
+				});
+				if (extracted.source !== "assistant") {
+					logger.warn("session_send_kill_prompt_returned_without_final_output", {
+						outputLength: extracted.text.length,
+						source: extracted.source,
+					});
+					this.asyncRunLifecycle.set(id, "running");
+					this.asyncInFlight.add(id);
+					this.killInProgress.delete(id);
+					return;
+				}
 				this._finalizeAsyncRun(
 					id,
 					{
@@ -762,6 +774,7 @@ export class SubagentSessionManager {
 		}
 
 		const logger = this.logger.child({ component: "subagent_session_manager", recordId: id });
+		this._startHardAbort(id);
 		const setActiveToolsByName = session.setActiveToolsByName;
 		const getActiveToolNames = session.getActiveToolNames;
 		const toolOverrideApplied = typeof setActiveToolsByName === "function";

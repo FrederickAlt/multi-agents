@@ -269,6 +269,10 @@ function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined
 	return agents.find((agent) => agent.name === name);
 }
 
+function isPendingToolDiagnostic(text: string | undefined): boolean {
+	return /^Last transcript activity: assistant was executing tool\b/.test(text ?? "");
+}
+
 // ---------------------------------------------------------------------------
 // TaskController
 // ---------------------------------------------------------------------------
@@ -430,20 +434,25 @@ export class TaskController {
 
 		const asyncResult = sessionManager.getAsyncResult(record.id);
 		if (asyncResult) {
-			const terminalOutcome = asyncResult.terminalOutcome
+			const pendingToolDiagnostic = isPendingToolDiagnostic(asyncResult.output);
+			const rawTerminalOutcome = asyncResult.terminalOutcome
 				|| (asyncResult.error
 					? TaskController.inferTerminalOutcomeFromResult(asyncResult.error, undefined)
 					: asyncResult.output
 						? "completed"
 						: record.terminalOutcome);
+			const terminalOutcome = pendingToolDiagnostic && rawTerminalOutcome === "completed"
+				? (record.terminalOutcome === "aborted" || record.terminalOutcome === "timed_out" ? record.terminalOutcome : "crashed")
+				: rawTerminalOutcome;
+			const terminalError = asyncResult.terminalError ?? (pendingToolDiagnostic ? asyncResult.output : undefined);
 			return {
 				...base,
 				state: asyncResult.error === 'killed' || (terminalOutcome === "aborted" && asyncResult.abortReason) ? 'killed' : 'result_ready_memory',
 				output: asyncResult.output,
-				error: asyncResult.error,
+				error: asyncResult.error ?? (pendingToolDiagnostic ? asyncResult.output : undefined),
 				abortReason: asyncResult.abortReason,
 				terminalOutcome: terminalOutcome,
-				terminalError: asyncResult.terminalError,
+				terminalError,
 				terminalAt: asyncResult.terminalAt ?? record.terminalAt,
 				warnings: asyncResult.warnings,
 			};
@@ -1696,7 +1705,9 @@ export class TaskController {
 						});
 						const stillRunningIds = timedOutIds.filter((id) => {
 							const r = buildResult(id);
-							return r.status === "running" || r.status === "timed_out_still_running";
+							return r.status === "running"
+								|| r.status === "timed_out_still_running"
+								|| (r.terminalOutcome === "abort_request_failed" && sessionManager.hasOpenSession(id));
 						});
 						const summaryResults = await Promise.all(stillRunningIds.map(async (id) => {
 							if (!sessionManager.requestAbortSummary) {

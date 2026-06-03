@@ -866,6 +866,33 @@ describe("SubagentSessionManager", () => {
 			expect(sm.isKillInProgress(id)).toBe(false);
 		});
 
+		it("does not complete a finish request when steer returns with only a pending tool call", async () => {
+			const sm = createManager();
+			const id = "kill-steer-pending-tool";
+			const session = makeMockSession();
+			session.steer = vi.fn().mockResolvedValue(undefined) as any;
+			session.messages = [{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
+				stopReason: "toolUse",
+			}];
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.sendKillMessage(id, 1);
+			await Promise.resolve();
+
+			expect(sm.getAsyncResult(id)).toBeUndefined();
+			expect(sm.isCompleted(id)).toBe(false);
+			expect(sm.isAsyncRunning(id)).toBe(true);
+			expect(sm.isKillInProgress(id)).toBe(false);
+
+			sm.finalizeAsyncRun(id, { output: "original final after tool", warnings: [], terminalOutcome: "completed" });
+
+			expect(sm.getAsyncResult(id)?.output).toBe("original final after tool");
+			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
+		});
+
 		it("finish request failure does not prevent storing the original run output", async () => {
 			const sm = createManager();
 			const id = "finish-failed-original";
@@ -897,7 +924,10 @@ describe("SubagentSessionManager", () => {
 			session.prompt = vi.fn((_message: string, opts?: unknown) => {
 				promptArgs = [(_message as string), opts as any];
 				return new Promise<void>((resolve) => {
-					resolveKillPrompt = resolve;
+					resolveKillPrompt = () => {
+						session.messages = [{ role: "assistant", content: [{ type: "text", text: "finish-request prompt result" }] }];
+						resolve();
+					};
 				});
 			}) as any;
 			sm.trackSession(id, session);

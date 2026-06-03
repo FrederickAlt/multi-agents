@@ -2523,6 +2523,47 @@ describe("TaskController.execute", () => {
 		expect(text).not.toContain("completed.");
 	});
 
+	it("abort-on-timeout escalates to final summary after a failed finish request while the session remains open", async () => {
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => () => {}),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+		fakeSessionManager.sendKillMessage = vi.fn((id: string) => {
+			sessionManager.storeAsyncResult(id, {
+				output: "finish request failed because already processing",
+				error: "Agent is already processing.",
+				warnings: [],
+				terminalOutcome: "abort_request_failed",
+				terminalError: "Agent is already processing.",
+			});
+		});
+		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "timed_out", toolOverrideApplied: true });
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(fakeSessionManager.requestAbortSummary).toHaveBeenCalledWith(agentId);
+		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(agentId);
+		expect(agents[0].status).toBe("killed");
+		expect(agents[0].terminalOutcome).toBe("aborted");
+		expect(text).toContain("aborted while still running");
+		expect(text).not.toContain("could not queue the finish request");
+		expect(text).not.toContain("completed.");
+	});
+
 	it("abort fallback: agent does not finish within abort window and uses compatibility killed status", async () => {
 		// Agent that never finishes
 		const subs: Array<(e: any) => void> = [];
@@ -2574,6 +2615,103 @@ describe("TaskController.execute", () => {
 		expect(text).not.toContain("killed");
 		expect(agents[0].output).not.toBe("killed");
 		expect(agents[0].terminalError).not.toBe("killed");
+	});
+
+	it("abort-on-timeout does not report completed when finish-request steering returns during a pending bash tool", async () => {
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => () => {}),
+			prompt: vi.fn(() => new Promise(() => {})),
+			steer: vi.fn().mockResolvedValue(undefined),
+			abort: vi.fn(),
+			messages: [{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
+				stopReason: "toolUse",
+			}],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "timed_out", toolOverrideApplied: true });
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(mockSession.steer).toHaveBeenCalledTimes(1);
+		expect(fakeSessionManager.requestAbortSummary).toHaveBeenCalledWith(agentId);
+		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(agentId);
+		expect(agents[0].status).toBe("killed");
+		expect(agents[0].terminalOutcome).toBe("aborted");
+		expect(text).toContain("aborted while still running");
+		expect(text).toContain("Last transcript activity: assistant was executing tool bash: sleep 120");
+		expect(text).not.toContain("completed.");
+	});
+
+	it("abort-on-timeout captures a no-tools final summary when cancellation leaves the session promptable", async () => {
+		const callbacks: Array<(e: any) => void> = [];
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn((cb) => {
+				callbacks.push(cb);
+				return () => {
+					const index = callbacks.indexOf(cb);
+					if (index >= 0) callbacks.splice(index, 1);
+				};
+			}),
+			prompt: vi.fn((message: string, opts?: unknown) => {
+				if ((opts as any)?.streamingBehavior === "steer") {
+					mockSession.messages.push({ role: "assistant", content: [{ type: "text", text: "abort summary after cancelling sleep" }] });
+					for (const cb of [...callbacks]) cb({ type: "agent_end" });
+					return Promise.resolve();
+				}
+				return new Promise(() => {});
+			}),
+			steer: vi.fn().mockResolvedValue(undefined),
+			abort: vi.fn(() => {
+				for (const cb of [...callbacks]) cb({ type: "agent_end" });
+				return Promise.resolve();
+			}),
+			abortBash: vi.fn(),
+			setActiveToolsByName: vi.fn(),
+			messages: [{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
+				stopReason: "toolUse",
+			}],
+			getActiveToolNames: () => ["bash"],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+		fakeSessionManager.requestAbortSummary = vi.fn((id: string) => sessionManager.requestAbortSummary(id, 1000));
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+
+		const result = await controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext(),
+		);
+
+		const agents = result.details.agents as AgentWaitResult[];
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(fakeSessionManager.requestAbortSummary).toHaveBeenCalledWith(agentId);
+		expect(mockSession.abortBash).toHaveBeenCalledTimes(1);
+		expect(mockSession.setActiveToolsByName).toHaveBeenCalledWith([]);
+		expect(fakeSessionManager.abortSession).not.toHaveBeenCalledWith(agentId);
+		expect(agents[0].status).toBe("killed");
+		expect(agents[0].terminalOutcome).toBe("aborted");
+		expect(agents[0].abortReason).toBe("final_summary");
+		expect(agents[0].output).toBe("abort summary after cancelling sleep");
+		expect(text).toContain("abort summary after cancelling sleep");
+		expect(text).not.toContain("completed.");
 	});
 
 	it("abort-on-timeout reports final summary as aborted output without force aborting", async () => {
