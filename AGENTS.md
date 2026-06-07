@@ -45,14 +45,14 @@ Registers the `Task` and `wait_for_agent` tools plus the `/agent` and `/dump-pro
 
 - **Task tool execution** (`runTask`): resolves agent config, checks spawn permissions, allocates hex IDs, creates or resumes sessions, runs the prompt, returns results.
 - **Prompt composition**: delegates to `prompt-composition.ts` so Root agents and Task sub-agents use the same Agent-definition rendering path.
-- **Metadata persistence** (`loadMetadata`, `saveMetadata`, `metadataPath`): stores sub-agent records in a sidecar JSON file (`.task-subagents-<sessionId>.json`) next to the root session. Concurrent-safe via a promise-based lock.
+- **Metadata persistence** (`MetadataStore`): stores sub-agent records in a sidecar JSON file (`.task-subagents-<sessionId>.json`) next to the root session. Concurrent-safe via a promise-based lock.
 - **Session lifecycle**: sessions are disposed after each `Task` call to prevent unbounded memory. The on-disk session file is preserved so resuming reopens from disk.
 - **Commands**:
   - `/agent <name>` — selects a configured agent persona as the Root agent for the current session. Persisted in session metadata.
   - `/dump-prompt [next]` — dumps the current rendered multi-agents Root prompt, or with `next` dumps the exact prompt sent on the next provider request.
 - **Events**: hooks `session_start`, `session_shutdown`, and `before_agent_start` to manage metadata, clean up sessions on `/new`, resolve the default/session-local Root agent, and inject rendered Agent definition prompts.
 
-Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RuntimeContext`. Prompt rendering types/functions are re-exported from `prompt-composition.ts` for compatibility.
+Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RuntimeContext`. Import implementation types from their owning modules rather than from the extension entry point.
 
 ### `subagent/markdown-definitions.ts` — Generic markdown-definition loader
 
@@ -135,7 +135,7 @@ The related `npm run tui:dump` script runs `src/tui/dev/render-scenarios.tsx` an
 
 - **`test/agents.test.ts`** — Tests `discoverAgents`, `formatAgentList`, frontmatter parsing, depth handling, project agent discovery with temp directories.
 - **`test/root-agent.test.ts`** — Tests Root agent resolution: configured default fallback, session-local selection precedence, and missing-default errors.
-- **`test/task-utils.test.ts`** — Tests `randomHexId`, `pickHumanName`, `renderPromptTemplate`, `loadMetadata`/`saveMetadata`, `getFinalTextFromMessages`, `checkSpawnAllowed`, `resolveTaskAgent`.
+- **`test/task-utils.test.ts`** — Tests prompt template and prompt-composition behavior.
 - **`test/task-integration.test.ts`** — Tests extension loading, Task tool registration with correct schema, prompt snippet/guidelines presence. No real LLM calls.
 - **`test/subagent-resource-loader.test.ts`** — Tests Task sub-agent resource-loader prompt semantics: native context injection disabled while explicit `{{context_files}}` rendering still works.
 - **`test/task-llm.test.ts`** — End-to-end tests with a real LLM (deepseek-v4-flash). Tests spawning a subagent that reads a file, and resuming a subagent to verify conversation memory. Skipped when no API key is available.

@@ -18,7 +18,6 @@ import {
 	applyOptionColumnItemOrder,
 	getFieldName,
 	getOptionColumnAvailableItems,
-	getOptionColumnCurrentValue,
 	getOptionColumnItems,
 	getOptionColumnSaveValue,
 	getOptionColumnSelectedValues,

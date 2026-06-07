@@ -150,10 +150,6 @@ export function isCheckboxOptionColumnField(
 	);
 }
 
-export function getInlineOptionColumnFieldFromFieldIndex(fieldIndex: number): OptionColumnFieldName {
-	return OPTION_COLUMN_FIELDS[clampIndex(fieldIndex, OPTION_COLUMN_FIELDS.length)];
-}
-
 export function getInlineOptionColumnFieldIndex(fieldName: string): number {
 	return OPTION_COLUMN_FIELDS.indexOf(fieldName as OptionColumnFieldName);
 }
@@ -407,13 +403,6 @@ export function getOptionColumnItemIndex(
 	const fallback = itemValue ?? fallbackValues[0] ?? items[0];
 	const index = items.indexOf(fallback);
 	return index >= 0 ? index : 0;
-}
-
-export function getFocusedOptionColumnField(fieldIndex: number): OptionColumnFieldName {
-	const fieldName = getFieldName(fieldIndex);
-	return isOptionColumnField(fieldName)
-		? fieldName
-		: OPTION_COLUMN_FIELDS[0];
 }
 
 export function getOptionColumnSaveValue(

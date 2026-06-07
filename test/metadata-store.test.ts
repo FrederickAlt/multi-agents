@@ -576,35 +576,4 @@ describe("MetadataStore", () => {
 			expect(existsSync(store.path)).toBe(true);
 		});
 	});
-
-	// ---- Static wrappers (compatibility) ----
-
-	describe("static wrappers", () => {
-		it("MetadataStore.metadataPath calculates the correct path", () => {
-			const ctx = makeCtx(tempDir, "static-path");
-			const p = MetadataStore.metadataPath(ctx);
-			expect(p).toBe(join(tempDir, ".task-subagents-static-path.json"));
-		});
-
-		it("MetadataStore.loadStatic returns a clean file for non-existent data", () => {
-			const ctx = makeCtx(tempDir, "static-load");
-			const meta = MetadataStore.loadStatic(ctx);
-			expect(meta.version).toBe(1);
-			expect(meta.records).toEqual([]);
-		});
-
-		it("MetadataStore.saveStatic writes and loadStatic reads back", () => {
-			const ctx = makeCtx(tempDir, "static-roundtrip");
-			const meta: MetadataFile = {
-				version: 1,
-				mainSessionId: "static-roundtrip",
-				records: [makeRecord("static1234")],
-			};
-			MetadataStore.saveStatic(ctx, meta);
-
-			const loaded = MetadataStore.loadStatic(ctx);
-			expect(loaded.records).toHaveLength(1);
-			expect(loaded.records[0].id).toBe("static1234");
-		});
-	});
 });

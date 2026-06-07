@@ -726,34 +726,3 @@ export function discoverPromptParts(agentDir: string): string[] {
 		.sort();
 }
 
-// ---------------------------------------------------------------------------
-// Discovery Orchestration
-// ---------------------------------------------------------------------------
-
-/**
- * Run all discovery functions and return DiscoveredOptions.
- */
-export async function discoverAllOptions(
-	agentDir: string,
-	agentToolLists: string[][],
-	allAgentNames: string[],
-): Promise<DiscoveredOptions> {
-	const { models, defaultModelDisplayName, status, error } = await discoverModels(agentDir);
-	const piRuntimeResources = await discoverPiRuntimeResources(agentDir, agentToolLists);
-	return {
-		tools: piRuntimeResources?.tools ?? discoverTools(agentDir, agentToolLists),
-		toolExtensionNames: piRuntimeResources?.toolExtensionNames ?? {},
-		extensions: piRuntimeResources?.extensions ?? discoverExtensions(agentDir),
-		models,
-		defaultModel: defaultModelDisplayName,
-		modelDiscovery: {
-			status,
-			error,
-		},
-		reasoningEfforts: ["low", "medium", "high", "maximum"],
-		depths: [0, 1, 2, 3, 4, 5],
-		canSpawn: allAgentNames,
-		skills: piRuntimeResources?.skills ?? discoverSkills(agentDir),
-		promptParts: discoverPromptParts(agentDir),
-	};
-}

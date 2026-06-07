@@ -1,10 +1,8 @@
 /**
  * Unit tests for TaskController.
  *
- * Tests the full execute() orchestration logic using adapter fakes,
- * plus the static utility methods (checkSpawnAllowed, resolveTaskAgent,
- * getFinalTextFromMessages).  All three adapters are injected so
- * the controller never touches concrete classes.
+ * Tests the full execute() orchestration logic using adapter fakes.
+ * All three adapters are injected so the controller never touches concrete classes.
  */
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,11 +26,12 @@ import {
 	DEFAULT_TASK_RUNTIME_TIMEOUT_MS,
 	TASK_RUNTIME_TIMEOUT_ERROR_CODE,
 } from "../subagent/task-controller.js";
-import { __testing, waitForAgent as waitForAgentTool } from "../subagent/index.js";
+import { waitForAgent as waitForAgentTool } from "../subagent/index.js";
+import { AsyncAgentNotifier } from "../subagent/async-agent-notifier.js";
 import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "../subagent/depth-policy.js";
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
 import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
-import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE } from "../subagent/output-extraction.js";
+import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE, getFinalTextFromMessages } from "../subagent/output-extraction.js";
 import type { DebugLogger } from "../subagent/debug-logger.js";
 
 // ---------------------------------------------------------------------------
@@ -93,54 +92,6 @@ function makeSpyDebugLogger(sink: Array<{ level: string; event: string; context?
 // ---------------------------------------------------------------------------
 // Static utility methods
 // ---------------------------------------------------------------------------
-
-describe("TaskController.checkSpawnAllowed", () => {
-	it("rejects spawn when depth limit has been reached", () => {
-		const result = TaskController.checkSpawnAllowed(
-			{ depth: 2, rootMaxDepth: 2, can_spawn: undefined },
-			"Explore",
-		);
-		expect(result.allowed).toBe(false);
-		expect(result.code).toBe("depth_limit");
-		expect(result.error).toContain("root depth limit 2");
-	});
-
-	it("allows spawn when below depth limit", () => {
-		const result = TaskController.checkSpawnAllowed(
-			{ depth: 1, rootMaxDepth: 2, can_spawn: undefined },
-			"Explore",
-		);
-		expect(result.allowed).toBe(true);
-	});
-
-	it("rejects spawn when agent type is not in can_spawn allowlist", () => {
-		const result = TaskController.checkSpawnAllowed(
-			{ depth: 0, rootMaxDepth: 2, can_spawn: ["Planner", "Reviewer"] },
-			"Explore",
-		);
-		expect(result.allowed).toBe(false);
-		expect(result.code).toBe("spawn_not_allowed");
-		expect(result.error).toContain("only allowed to task Planner, Reviewer");
-	});
-
-	it("allows spawn when can_spawn is undefined (no restriction)", () => {
-		const result = TaskController.checkSpawnAllowed(
-			{ depth: 0, rootMaxDepth: 2, can_spawn: undefined },
-			"Explore",
-		);
-		expect(result.allowed).toBe(true);
-	});
-
-	it("rejects spawn when rootMaxDepth is 0 (no spawning allowed at all)", () => {
-		const result = TaskController.checkSpawnAllowed(
-			{ depth: 0, rootMaxDepth: 0, can_spawn: undefined },
-			"Explore",
-		);
-		expect(result.allowed).toBe(false);
-		expect(result.code).toBe("depth_limit");
-		expect(result.error).toContain("root depth limit 0");
-	});
-});
 
 describe("TaskController.resolveTaskAgent", () => {
 	it("returns unknown_resume_id error when resume ID does not exist", () => {
@@ -222,13 +173,13 @@ describe("TaskController.resolveTaskAgent", () => {
 	});
 });
 
-describe("TaskController.getFinalTextFromMessages", () => {
+describe("getFinalTextFromMessages", () => {
 	it("returns the last assistant text content", () => {
 		const messages = [
 			{ role: "user", content: "hello" },
 			{ role: "assistant", content: [{ type: "text", text: "Hello! How can I help?" }] },
 		];
-		expect(TaskController.getFinalTextFromMessages(messages)).toBe("Hello! How can I help?");
+		expect(getFinalTextFromMessages(messages)).toBe("Hello! How can I help?");
 	});
 
 	it("returns last assistant text when multiple assistant messages exist", () => {
@@ -237,19 +188,19 @@ describe("TaskController.getFinalTextFromMessages", () => {
 			{ role: "user", content: "prompt" },
 			{ role: "assistant", content: [{ type: "text", text: "second" }] },
 		];
-		expect(TaskController.getFinalTextFromMessages(messages)).toBe("second");
+		expect(getFinalTextFromMessages(messages)).toBe("second");
 	});
 
 	it("returns empty string if no assistant message", () => {
 		const messages = [{ role: "user", content: "just user" }];
-		expect(TaskController.getFinalTextFromMessages(messages)).toBe("");
+		expect(getFinalTextFromMessages(messages)).toBe("");
 	});
 
 	it("returns empty string if assistant has no text content", () => {
 		const messages = [
 			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {} }] },
 		];
-		expect(TaskController.getFinalTextFromMessages(messages)).toBe("");
+		expect(getFinalTextFromMessages(messages)).toBe("");
 	});
 
 	it("skips non-assistant roles when searching backwards", () => {
@@ -257,7 +208,7 @@ describe("TaskController.getFinalTextFromMessages", () => {
 			{ role: "assistant", content: [{ type: "text", text: "the answer" }] },
 			{ role: "user", content: "final prompt" },
 		];
-		expect(TaskController.getFinalTextFromMessages(messages)).toBe("the answer");
+		expect(getFinalTextFromMessages(messages)).toBe("the answer");
 	});
 });
 
@@ -533,7 +484,6 @@ describe("TaskController.execute", () => {
 		if (tempDir) {
 			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
 		}
-		__testing.resetAsyncAgentNotifier();
 	});
 
 	function makeContext(overrides: Partial<TaskExecuteContext> = {}): TaskExecuteContext {
@@ -2938,9 +2888,10 @@ describe("TaskController.execute", () => {
 	it("waitForAgent consumes completed agents from notifier to avoid stale reminders", async () => {
 		const recordId = "deadbeef";
 		const record = makeRecord(recordId, "explorer");
-		__testing.asyncAgentNotifier.markCompleted(recordId);
+		const asyncAgentNotifier = new AsyncAgentNotifier();
+		asyncAgentNotifier.markCompleted(recordId);
 
-		const result = await waitForAgentTool(
+		const result = await controller.waitForAgent(
 			[recordId],
 			{},
 			makeContext({
@@ -2953,6 +2904,7 @@ describe("TaskController.execute", () => {
 					getAsyncResult: vi.fn().mockReturnValue({ output: "completed output", warnings: [] }),
 					clearAsyncResult: vi.fn(),
 				} as any,
+				consumeWaitForAgentIds: (ids) => asyncAgentNotifier.consume(ids),
 			}),
 		);
 
@@ -2965,8 +2917,8 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("completed output");
 
 		// No stale boundary reminder should remain after consumed terminal status.
-		expect(__testing.asyncAgentNotifier.hasUnconsumed()).toBe(false);
-		expect(__testing.asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
+		expect(asyncAgentNotifier.hasUnconsumed()).toBe(false);
+		expect(asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
 	});
 
 	it("no-output stopped result does not report normal completed success", async () => {
@@ -3066,9 +3018,10 @@ describe("TaskController.execute", () => {
 	it("waitForAgent keeps running agents unconsumed after timeout", async () => {
 		const recordId = "cafebabe";
 		const record = makeRecord(recordId, "explorer");
-		__testing.asyncAgentNotifier.markCompleted(recordId);
+		const asyncAgentNotifier = new AsyncAgentNotifier();
+		asyncAgentNotifier.markCompleted(recordId);
 
-		const result = await waitForAgentTool(
+		const result = await controller.waitForAgent(
 			[recordId],
 			{ timeout: 0 },
 			makeContext({
@@ -3082,6 +3035,7 @@ describe("TaskController.execute", () => {
 					isAsyncRunning: vi.fn().mockReturnValue(true),
 					waitForAsyncResult: vi.fn(() => new Promise(() => {})),
 				} as any,
+				consumeWaitForAgentIds: (ids) => asyncAgentNotifier.consume(ids),
 			}),
 		);
 
@@ -3092,7 +3046,7 @@ describe("TaskController.execute", () => {
 		expect(result.details.terminalOutcome).toBe("timed_out");
 
 		// Timeout path should not clear notifier state.
-		expect(__testing.asyncAgentNotifier.getUnconsumed()).toEqual([recordId]);
+		expect(asyncAgentNotifier.getUnconsumed()).toEqual([recordId]);
 	});
 
 	it("maps in-memory async result with error 'killed' to killed status", async () => {
@@ -3173,19 +3127,20 @@ describe("TaskController.execute", () => {
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		fakeSessionManager.sendKillMessage = vi.fn();
-		__testing.asyncAgentNotifier.markCompleted(agentId);
+		const asyncAgentNotifier = new AsyncAgentNotifier();
+		asyncAgentNotifier.markCompleted(agentId);
 
-		const result = await waitForAgentTool(
+		const result = await controller.waitForAgent(
 			[agentId],
 			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
+			makeContext({ consumeWaitForAgentIds: (ids) => asyncAgentNotifier.consume(ids) }),
 		);
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("killed");
-		expect(__testing.asyncAgentNotifier.hasUnconsumed()).toBe(false);
+		expect(asyncAgentNotifier.hasUnconsumed()).toBe(false);
 		// No stale boundary reminder should remain after consumed terminal status.
-		expect(__testing.asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
+		expect(asyncAgentNotifier.takeNotificationForTurnBoundary()).toBeNull();
 	});
 
 	it("compatibility killed status with partial output shows output in result", async () => {

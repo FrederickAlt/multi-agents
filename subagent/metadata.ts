@@ -66,14 +66,14 @@ export interface MetadataStoreContext {
 }
 
 // ---------------------------------------------------------------------------
-// Pure helpers (exported for backward compatibility)
+// Pure helpers
 // ---------------------------------------------------------------------------
 
 /**
  * Generate an 8-character hex ID not present in `existing`.
  * Throws if 1000 attempts are exhausted (effectively impossible with 4-byte space).
  */
-export function randomHexId(existing: Set<string>): string {
+function randomHexId(existing: Set<string>): string {
 	for (let attempt = 0; attempt < 1000; attempt++) {
 		const id = Array.from(randomBytes(HEX_ID_BYTES))
 			.map((byte) => byte.toString(16).padStart(2, "0"))
@@ -87,7 +87,7 @@ export function randomHexId(existing: Set<string>): string {
  * Pick an unused human name from the built-in pool for a given agent type.
  * Falls back to numbered variants (Tom1, Tom2, …) when the pool is exhausted.
  */
-export function pickHumanName(agentName: string, records: SubagentRecord[]): { humanName: string; displayName: string } {
+function pickHumanName(agentName: string, records: SubagentRecord[]): { humanName: string; displayName: string } {
 	const used = new Set(records.map((r) => r.humanName));
 	for (const name of HUMAN_NAMES) {
 		if (!used.has(name)) return { humanName: name, displayName: `${agentName} ${name}` };
@@ -370,24 +370,5 @@ export class MetadataStore {
 			sessionId: sm.getSessionId(),
 			sessionFile: sm.getSessionFile(),
 		}, logger);
-	}
-
-	// ---- Legacy-compatible static wrappers (for existing tests) ----
-
-	/** @deprecated Use `new MetadataStore(ctx).path` instead. */
-	static metadataPath(ctx: MetadataStoreContext): string {
-		return path.join(ctx.sessionDir, `.task-subagents-${ctx.sessionId}.json`);
-	}
-
-	/** @deprecated Use `new MetadataStore(ctx).load()` instead. */
-	static loadStatic(ctx: MetadataStoreContext): MetadataFile {
-		return new MetadataStore(ctx).load();
-	}
-
-	/** @deprecated Use `new MetadataStore(ctx).save()` instead. */
-	static saveStatic(ctx: MetadataStoreContext, metadata: MetadataFile): void {
-		const store = new MetadataStore(ctx);
-		store._metadata = metadata;
-		store.save();
 	}
 }

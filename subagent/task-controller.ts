@@ -37,7 +37,6 @@ import {
 	FINAL_RESPONSE_REQUIRED_MESSAGE,
 	extractOutput,
 	extractTerminalOutput,
-	getFinalTextFromMessages,
 	getTerminalDiagnosticFromMessages,
 } from "./output-extraction.js";
 import {
@@ -281,27 +280,6 @@ export class TaskController {
 	// ---- Static utility methods ----
 
 	/**
-	 * Check whether tasking `agentName` is allowed given the current
-	 * depth-policy state.
-	 *
-	 * @deprecated Prefer {@link checkTaskAllowed} from depth-policy.js.
-	 */
-	static checkSpawnAllowed(
-		runtime: { depth: number; rootMaxDepth: number; can_spawn: string[] | undefined },
-		agentName: string,
-	): { allowed: boolean; error?: string; code?: string } {
-		return checkTaskAllowed(
-			{
-				treeDepth: runtime.depth,
-				rootDepthLimit: runtime.rootMaxDepth,
-				localDepthLimit: runtime.rootMaxDepth, // old impl ignores local depth
-				can_spawn: runtime.can_spawn,
-			},
-			agentName,
-		);
-	}
-
-	/**
 	 * Resolve the AgentConfig (and optionally a SubagentRecord for
 	 * resume) from the task parameters and metadata store.
 	 */
@@ -352,8 +330,6 @@ export class TaskController {
 		return { ok: true, record, agent };
 	}
 
-	// Re-exported from shared module for backward compatibility.
-	static getFinalTextFromMessages = getFinalTextFromMessages;
 	static extractOutput = extractOutput;
 	static extractTerminalOutput = extractTerminalOutput;
 

@@ -16,7 +16,9 @@ import {
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
-import taskExtension, { __testing, configureTaskToolForRuntime, filterExtensionsForAgent, waitForAgent as waitForAgentTool } from "../subagent/index.js";
+import taskExtension from "../subagent/index.js";
+import { filterExtensionsForAgent } from "../subagent/extension-filter.js";
+import { configureTaskToolForRuntime } from "../subagent/task-tool-registration.js";
 import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
 import type { AgentConfig } from "../subagent/agents.js";
 import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE } from "../subagent/output-extraction.js";
@@ -92,6 +94,27 @@ function latestTaskTool(pi: any) {
 	return [...((pi as any)._registeredTools ?? [])].reverse().find((tool: any) => tool.name === "Task");
 }
 
+function createTaskToolRegistrationDeps(sessionManager: any = {}) {
+	return {
+		getSessionManager: vi.fn(() => sessionManager),
+		consumeWaitForAgentIds: vi.fn(),
+	};
+}
+
+async function loadTaskExtensionWithNotifier() {
+	const actual = await vi.importActual<typeof import("../subagent/async-agent-notifier.js")>("../subagent/async-agent-notifier.js");
+	const asyncAgentNotifier = new actual.AsyncAgentNotifier();
+	vi.resetModules();
+	vi.doMock("../subagent/async-agent-notifier.js", () => ({
+		...actual,
+		AsyncAgentNotifier: vi.fn(function AsyncAgentNotifier() {
+			return asyncAgentNotifier;
+		}),
+	}));
+	const mod = await import("../subagent/index.js");
+	return { taskExtension: mod.default, waitForAgentTool: mod.waitForAgent, asyncAgentNotifier };
+}
+
 // ---------------------------------------------------------------------------
 // Extension loading and tool registration (no LLM required)
 // ---------------------------------------------------------------------------
@@ -126,7 +149,7 @@ describe("extension loading", () => {
 
 		// Redirect in-memory session dirs to tempDir so .task-subagents-*.json
 		// metadata files don't end up in the repo root (SessionManager.inMemory
-		// uses sessionDir = "", which makes metadataPath resolve to process.cwd()).
+		// uses sessionDir = "", which would otherwise resolve metadata next to cwd).
 		const origInMemory = SessionManager.inMemory.bind(SessionManager);
 		vi.spyOn(SessionManager, "inMemory").mockImplementation((cwd?: string) => {
 			const sm = origInMemory(cwd);
@@ -137,7 +160,7 @@ describe("extension loading", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		__testing.resetAsyncAgentNotifier();
+		vi.doUnmock("../subagent/async-agent-notifier.js");
 		delete process.env.PI_CODING_AGENT_DIR;
 		delete (globalThis as any).__multi_agents_selected_main_agent;
 		if (tempDir && existsSync(tempDir)) {
@@ -202,7 +225,7 @@ describe("extension loading", () => {
 		configureTaskToolForRuntime(pi, runtime, async () => ({
 			content: [{ type: "text", text: "unused" }],
 			details: { warnings: [] },
-		}));
+		}), createTaskToolRegistrationDeps());
 
 		const taskTool = latestTaskTool(pi);
 		expect(taskTool).toBeDefined();
@@ -511,7 +534,7 @@ describe("extension loading", () => {
 		configureTaskToolForRuntime(pi, runtime, async () => ({
 			content: [{ type: "text", text: "unused" }],
 			details: { warnings: [] },
-		}));
+		}), createTaskToolRegistrationDeps());
 
 		expect(latestTaskTool(pi)).toBeUndefined();
 		expect((pi as any)._getActiveTools()).not.toContain("Task");
@@ -530,7 +553,7 @@ describe("extension loading", () => {
 		configureTaskToolForRuntime(pi, runtime, async () => ({
 			content: [{ type: "text", text: "unused" }],
 			details: { warnings: [] },
-		}));
+		}), createTaskToolRegistrationDeps());
 
 		const taskTool = latestTaskTool(pi);
 		expect(taskTool).toBeDefined();
@@ -563,9 +586,10 @@ describe("extension loading", () => {
 
 	describe("async notification boundaries", () => {
 		it("batches a pending async completion notification with user input", async () => {
+			const { taskExtension, asyncAgentNotifier } = await loadTaskExtensionWithNotifier();
 			const { pi, handlers } = createFakeExtensionApi();
 			taskExtension(pi);
-			__testing.asyncAgentNotifier.markCompleted("agent-a");
+			asyncAgentNotifier.markCompleted("agent-a");
 
 			const result = await handlers.get("input")(
 				{ type: "input", text: "continue with my request", source: "interactive" },
@@ -580,9 +604,10 @@ describe("extension loading", () => {
 		});
 
 		it("preserves five-turn cadence across input and turn_end opportunities", async () => {
+			const { taskExtension, asyncAgentNotifier } = await loadTaskExtensionWithNotifier();
 			const { pi, handlers } = createFakeExtensionApi();
 			taskExtension(pi);
-			__testing.asyncAgentNotifier.markCompleted("agent-a");
+			asyncAgentNotifier.markCompleted("agent-a");
 
 			const input = handlers.get("input");
 			const turnEnd = handlers.get("turn_end");
@@ -625,10 +650,11 @@ describe("extension loading", () => {
 		it("emits run-boundary notifications and reminders without duplicate spam", async () => {
 			vi.useFakeTimers();
 			try {
+				const { taskExtension, asyncAgentNotifier } = await loadTaskExtensionWithNotifier();
 				const { pi, handlers } = createFakeExtensionApi();
 				taskExtension(pi);
-				__testing.asyncAgentNotifier.markCompleted("agent-a");
-				__testing.asyncAgentNotifier.markCompleted("agent-b");
+				asyncAgentNotifier.markCompleted("agent-a");
+				asyncAgentNotifier.markCompleted("agent-b");
 
 				const agentEnd = handlers.get("agent_end");
 				const completedTurn = { messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }] };
@@ -658,9 +684,10 @@ describe("extension loading", () => {
 		it("does not deliver a stale completion notification after wait_for_agent retrieves the result", async () => {
 			vi.useFakeTimers();
 			try {
+				const { taskExtension, waitForAgentTool, asyncAgentNotifier } = await loadTaskExtensionWithNotifier();
 				const { pi, handlers } = createFakeExtensionApi();
 				taskExtension(pi);
-				__testing.asyncAgentNotifier.markCompleted("agent-a");
+				asyncAgentNotifier.markCompleted("agent-a");
 
 				handlers.get("turn_end")?.();
 
