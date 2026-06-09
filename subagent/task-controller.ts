@@ -29,6 +29,7 @@ import {
 import type { MetadataFile, MetadataStore, SubagentRecord, TerminalOutcome } from "./metadata.js";
 import type {
 	AbortSummaryResult,
+	AsyncRunResult,
 	ModelResolver,
 	SessionSetupContext,
 } from "./session-manager.js";
@@ -43,6 +44,11 @@ import {
 	createRunCorrelationId,
 	makeNoopDebugLogger,
 } from "./debug-logger.js";
+import {
+	formatContextUsageLine,
+	readSubagentContextUsage,
+	type SubagentContextUsage,
+} from "./context-usage.js";
 
 /**
  * Default maximum runtime for a Task sub-agent execution, in minutes.
@@ -100,15 +106,15 @@ export interface SessionAdapter {
 	 */
 	waitForSessionEnd(id: string): Promise<void>;
 	/** Store the output/error result of a completed async session. */
-	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string }): void;
+	storeAsyncResult(id: string, result: AsyncRunResult): void;
 	/** Finalize async completion and apply lifecycle transitions and cleanup. */
 	finalizeAsyncRun(
 		id: string,
-		result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string },
+		result: AsyncRunResult,
 		options?: { allowOverwrite?: boolean },
 	): void;
 	/** Retrieve a previously stored async result. */
-	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string } | undefined;
+	getAsyncResult(id: string): AsyncRunResult | undefined;
 	/** Wait until a completed async session result has been stored. */
 	waitForAsyncResult(id: string, signal?: AbortSignal): Promise<void>;
 	/** Clear a consumed async result from memory. */
@@ -219,6 +225,7 @@ interface AgentRunSnapshot {
 	terminalOutcome?: TerminalOutcome;
 	terminalError?: string;
 	terminalAt?: string;
+	contextUsage?: SubagentContextUsage;
 	warnings?: string[];
 }
 
@@ -234,6 +241,7 @@ export interface AgentWaitResult {
 	terminalOutcome?: TerminalOutcome;
 	terminalError?: string;
 	terminalAt?: string;
+	contextUsage?: SubagentContextUsage;
 	warnings?: string[];
 	sessionFile?: string;
 }
@@ -252,6 +260,7 @@ export interface TaskDetails {
 	terminalOutcome?: TerminalOutcome;
 	terminalError?: string;
 	terminalAt?: string;
+	contextUsage?: SubagentContextUsage;
 	output?: string;
 	/** Per-agent results from wait_for_agent (multi-agent retrieval). */
 	agents?: AgentWaitResult[];
@@ -380,6 +389,7 @@ export class TaskController {
 		terminalOutcome: TerminalOutcome | undefined,
 		terminalError?: string,
 		abortReason?: string,
+		contextUsage?: SubagentContextUsage,
 	): SubagentRecord {
 		const terminalAt =
 			terminalOutcome === undefined
@@ -393,6 +403,7 @@ export class TaskController {
 			terminalError,
 			abortReason,
 			terminalAt,
+			contextUsage,
 		};
 		if (typeof (metadataStore as { upsertRecord?: (record: SubagentRecord) => void }).upsertRecord === "function") {
 			metadataStore.upsertRecord(nextRecord);
@@ -406,6 +417,7 @@ export class TaskController {
 			displayName: record.displayName,
 			agentType: record.agentType,
 			sessionFile: record.sessionFile,
+			contextUsage: record.contextUsage,
 		};
 
 		const asyncResult = sessionManager.getAsyncResult(record.id);
@@ -430,6 +442,7 @@ export class TaskController {
 				terminalOutcome: terminalOutcome,
 				terminalError,
 				terminalAt: asyncResult.terminalAt ?? record.terminalAt,
+				contextUsage: asyncResult.contextUsage ?? record.contextUsage,
 				warnings: asyncResult.warnings,
 			};
 		}
@@ -545,6 +558,7 @@ export class TaskController {
 				terminalOutcome: snapshot.terminalOutcome,
 				terminalError: snapshot.terminalError,
 				terminalAt: snapshot.terminalAt,
+				contextUsage: snapshot.contextUsage,
 				sessionFile: snapshot.sessionFile,
 			};
 		}
@@ -561,6 +575,7 @@ export class TaskController {
 				terminalOutcome: snapshot.terminalOutcome,
 				terminalError: snapshot.terminalError,
 				terminalAt: snapshot.terminalAt,
+				contextUsage: snapshot.contextUsage,
 				warnings: snapshot.warnings,
 				sessionFile: snapshot.sessionFile,
 			};
@@ -578,6 +593,7 @@ export class TaskController {
 				terminalOutcome: snapshot.terminalOutcome,
 				terminalError: snapshot.terminalError,
 				terminalAt: snapshot.terminalAt,
+				contextUsage: snapshot.contextUsage,
 				warnings: snapshot.warnings,
 				sessionFile: snapshot.sessionFile,
 			};
@@ -589,6 +605,7 @@ export class TaskController {
 			terminalOutcome: snapshot.terminalOutcome,
 			terminalError: snapshot.terminalError,
 			terminalAt: snapshot.terminalAt,
+			contextUsage: snapshot.contextUsage,
 		};
 	}
 
@@ -988,8 +1005,12 @@ export class TaskController {
 					recordId: record!.id,
 				});
 
+					let asyncAbortContextUsage: SubagentContextUsage | undefined;
+					let asyncAbortContextUsageCaptured = false;
 					const abort = () => {
 						runLogger.warn("task_async_signal_abort", { recordId: record!.id });
+						asyncAbortContextUsage = readSubagentContextUsage(session);
+						asyncAbortContextUsageCaptured = true;
 						void session?.abort();
 					};
 					if (context.signal?.aborted) abort();
@@ -1006,6 +1027,9 @@ export class TaskController {
 						if (!baseRecord) {
 							return;
 						}
+						const contextUsage = asyncAbortContextUsageCaptured
+							? asyncAbortContextUsage
+							: readSubagentContextUsage(session);
 						if (resolved) {
 							const extracted = terminal ?? TaskController.extractTerminalOutput(session.messages as any[]);
 							const terminalOutcome = extracted.source === 'assistant'
@@ -1019,6 +1043,7 @@ export class TaskController {
 								terminalOutcome,
 								extracted.source === 'diagnostic' ? extracted.text : undefined,
 								undefined,
+								contextUsage,
 							);
 							sessionManager.finalizeAsyncRun(record!.id, {
 								output: extracted.text,
@@ -1026,6 +1051,7 @@ export class TaskController {
 								terminalOutcome,
 								terminalError: extracted.source === 'diagnostic' ? extracted.text : undefined,
 								terminalAt: record?.terminalAt,
+								contextUsage,
 								warnings,
 							});
 							runLogger.info("task_async_completed", {
@@ -1045,6 +1071,7 @@ export class TaskController {
 								terminalOutcome,
 								extracted.source === 'diagnostic' ? extracted.text : errorMessage,
 								undefined,
+								contextUsage,
 							);
 							sessionManager.finalizeAsyncRun(record!.id, {
 								output: extracted.text,
@@ -1052,6 +1079,7 @@ export class TaskController {
 								terminalOutcome,
 								terminalError: extracted.source === 'diagnostic' ? extracted.text : errorMessage,
 								terminalAt: record?.terminalAt,
+								contextUsage,
 								abortReason: terminalOutcome === "aborted" ? "async_result" : undefined,
 								warnings,
 							});
@@ -1119,8 +1147,12 @@ export class TaskController {
 						runtimeTimeoutHandle = undefined;
 					}
 				};
+				let abortContextUsage: SubagentContextUsage | undefined;
+				let abortContextUsageCaptured = false;
 				const abortTask = () => {
 					clearRuntimeTimeout();
+					abortContextUsage = readSubagentContextUsage(session);
+					abortContextUsageCaptured = true;
 					void session?.abort();
 				};
 
@@ -1138,6 +1170,30 @@ export class TaskController {
 						}
 					})
 					: undefined;
+
+				const capturedAbortContextUsage = () => abortContextUsageCaptured
+					? { captured: true, value: abortContextUsage }
+					: undefined;
+				const persistBlockingTerminal = (
+					terminalOutcome: TerminalOutcome | undefined,
+					terminalError?: string,
+					abortReason?: string,
+					capturedContextUsage?: { captured: boolean; value: SubagentContextUsage | undefined },
+				): SubagentContextUsage | undefined => {
+					const contextUsage = capturedContextUsage?.captured
+						? capturedContextUsage.value
+						: readSubagentContextUsage(session);
+					const refreshed = metadataStore.findRecord(record!.id) ?? record!;
+					record = TaskController.persistTerminalOutcome(
+						metadataStore,
+						refreshed,
+						terminalOutcome,
+						terminalError,
+						abortReason,
+						contextUsage,
+					);
+					return contextUsage;
+				};
 
 					try {
 						emit(`${record!.displayName} (${record!.id}) running...`);
@@ -1200,6 +1256,12 @@ export class TaskController {
 								recordId: record!.id,
 								minutes: DEFAULT_TASK_RUNTIME_TIMEOUT_MINUTES,
 							});
+							const contextUsage = persistBlockingTerminal(
+								"timed_out",
+								TASK_RUNTIME_TIMEOUT_ERROR_CODE,
+								"task_runtime_timeout",
+								capturedAbortContextUsage(),
+							);
 							const message =
 								`Task execution exceeded the ${DEFAULT_TASK_RUNTIME_TIMEOUT_MINUTES}-minute runtime limit. Use resume: "${record!.id}" to continue this agent.`;
 							const warningText =
@@ -1207,7 +1269,7 @@ export class TaskController {
 									? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
 								: "";
 							return {
-								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) timed out. ${message}${warningText}` }],
+								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) timed out. ${message}\n${formatContextUsageLine(contextUsage)}${warningText}` }],
 								details: {
 									id: record!.id,
 									displayName: record!.displayName,
@@ -1217,6 +1279,11 @@ export class TaskController {
 									sessionFile: record!.sessionFile,
 									warnings,
 									error: TASK_RUNTIME_TIMEOUT_ERROR_CODE,
+									abortReason: "task_runtime_timeout",
+									terminalOutcome: "timed_out",
+									terminalError: TASK_RUNTIME_TIMEOUT_ERROR_CODE,
+									terminalAt: record?.terminalAt,
+									contextUsage,
 								},
 							};
 						}
@@ -1240,12 +1307,18 @@ export class TaskController {
 							throw new Error(promptOrTimeout.terminal.text || "The sub-agent stopped with a diagnostic.");
 						}
 						if (promptOrTimeout.terminal.source === 'none') {
+							const contextUsage = persistBlockingTerminal(
+								undefined,
+								undefined,
+								undefined,
+								capturedAbortContextUsage(),
+							);
 							const warningText =
 								warnings.length > 0
 									? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
 									: "";
 							return {
-								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is no longer running, but no final assistant output was captured. Use resume: "${record!.id}" to continue this agent.\n\nNo final assistant output was captured.${warningText}` }],
+								content: [{ type: "text", text: `${record!.displayName} (${record!.id}) is no longer running, but no final assistant output was captured. Use resume: "${record!.id}" to continue this agent.\n${formatContextUsageLine(contextUsage)}\n\nNo final assistant output was captured.${warningText}` }],
 								details: {
 									id: record!.id,
 									displayName: record!.displayName,
@@ -1254,11 +1327,18 @@ export class TaskController {
 									resumed: Boolean(params.resume),
 									sessionFile: record!.sessionFile,
 									warnings,
+									contextUsage,
 								},
 							};
 						}
 
 						const output = promptOrTimeout.terminal.text;
+						const contextUsage = persistBlockingTerminal(
+							"completed",
+							undefined,
+							undefined,
+							capturedAbortContextUsage(),
+						);
 						runLogger.info("task_blocking_completed", {
 							recordId: record!.id,
 							outputLength: output.length,
@@ -1273,7 +1353,7 @@ export class TaskController {
 							content: [
 								{
 									type: "text",
-									text: `${header}\n\n${output || "(no output)"}${warningText}`,
+									text: `${header}\n${formatContextUsageLine(contextUsage)}\n\n${output || "(no output)"}${warningText}`,
 								},
 							],
 							details: {
@@ -1284,6 +1364,9 @@ export class TaskController {
 								resumed: Boolean(params.resume),
 								sessionFile: record!.sessionFile,
 								warnings,
+								terminalOutcome: "completed",
+								terminalAt: record?.terminalAt,
+								contextUsage,
 								output,
 							},
 						};
@@ -1296,17 +1379,24 @@ export class TaskController {
 						outputLength: session?.messages?.length,
 					});
 					const extracted = TaskController.extractOutput(session.messages as any[], terminalError);
+					const terminalOutcome = TaskController.inferTerminalOutcomeFromResult(terminalError, session.messages as any[]);
+					const contextUsage = persistBlockingTerminal(
+						terminalOutcome,
+						terminalError,
+						terminalOutcome === "aborted" ? "task_blocking_abort" : undefined,
+						capturedAbortContextUsage(),
+					);
 					const warningText =
 						warnings.length > 0
 							? `\n\nWarnings:\n${warnings.map((w) => `- ${w}`).join("\n")}`
 							: "";
 					let contentText: string;
 					if (extracted.source === 'assistant') {
-						contentText = `${record!.displayName} (${record!.id}) stopped with an error after producing partial output. Use resume: "${record!.id}" to retry or continue.\n\n${extracted.text}${warningText}`;
+						contentText = `${record!.displayName} (${record!.id}) stopped with an error after producing partial output. Use resume: "${record!.id}" to retry or continue.\n${formatContextUsageLine(contextUsage)}\n\n${extracted.text}${warningText}`;
 					} else if (extracted.source === 'diagnostic') {
-						contentText = `${record!.displayName} (${record!.id}) stopped with an error. Use resume: "${record!.id}" to retry or continue this agent.\n\n${extracted.text}${warningText}`;
+						contentText = `${record!.displayName} (${record!.id}) stopped with an error. Use resume: "${record!.id}" to retry or continue this agent.\n${formatContextUsageLine(contextUsage)}\n\n${extracted.text}${warningText}`;
 					} else {
-						contentText = `${record!.displayName} (${record!.id}) stopped with an error. Use resume: "${record!.id}" to retry or continue this agent.\n\nThe sub-agent stopped without producing any output.${warningText}`;
+						contentText = `${record!.displayName} (${record!.id}) stopped with an error. Use resume: "${record!.id}" to retry or continue this agent.\n${formatContextUsageLine(contextUsage)}\n\nThe sub-agent stopped without producing any output.${warningText}`;
 					}
 					return {
 						content: [
@@ -1324,6 +1414,10 @@ export class TaskController {
 							sessionFile: record!.sessionFile,
 							warnings,
 							error: terminalError,
+							terminalOutcome,
+							terminalError,
+							terminalAt: record?.terminalAt,
+							contextUsage,
 							...(extracted.source === 'assistant' ? { output: extracted.text } : {}),
 						},
 					};
@@ -1486,6 +1580,7 @@ export class TaskController {
 				outcome,
 				terminalError,
 				agent.abortReason,
+				agent.contextUsage ?? record.contextUsage,
 			);
 		};
 
@@ -1812,6 +1907,7 @@ export class TaskController {
 			topLevel.terminalOutcome = first.terminalOutcome;
 			topLevel.terminalError = first.terminalError;
 			topLevel.terminalAt = first.terminalAt;
+			topLevel.contextUsage = first.contextUsage;
 		}
 
 		const formatDiagnostic = (a: AgentWaitResult): string | undefined => {
@@ -1836,6 +1932,7 @@ export class TaskController {
 			const noFinalOutputSummary = terminalSummary && !/^(aborted|killed)$/i.test(terminalSummary)
 				? terminalSummary
 				: "No final assistant output was captured.";
+			const contextLine = formatContextUsageLine(a.contextUsage);
 			if (a.status === "completed") {
 				if (outcome === "aborted") {
 					topLevel.error = terminalSummary ?? "sub-agent terminated before producing final output.";
@@ -1844,10 +1941,12 @@ export class TaskController {
 					if (a.output) {
 						topLevel.output = a.output;
 						lines.push(`${displayName} (${a.id}) was aborted before producing a final assistant result. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
+						lines.push(contextLine);
 						lines.push("");
 						lines.push(a.output);
 					} else {
 						lines.push(`${displayName} (${a.id}) was aborted before producing a final assistant result. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
+						lines.push(contextLine);
 						lines.push("");
 						lines.push(noFinalOutputSummary);
 					}
@@ -1856,6 +1955,7 @@ export class TaskController {
 					topLevel.abortReason = a.abortReason;
 					setWarnings(a);
 					lines.push(`${displayName} (${a.id}) could not queue the finish request. The transcript was preserved and can be resumed with resume: "${a.id}".`);
+					lines.push(contextLine);
 					lines.push("");
 					lines.push(a.output || "No final assistant output was captured.");
 					if (terminalSummary && terminalSummary !== a.output) {
@@ -1865,11 +1965,13 @@ export class TaskController {
 				} else if (outcome === "crashed") {
 					if (a.output) {
 						lines.push(`${displayName} (${a.id}) stopped with an error after producing partial output. Use resume: "${a.id}" to retry or continue this agent.`);
+						lines.push(contextLine);
 						lines.push("");
 						lines.push(a.output);
 						topLevel.output = a.output;
 					} else {
 						lines.push(`${displayName} (${a.id}) stopped with an error before producing output. Use resume: "${a.id}" to retry or continue this agent.`);
+						lines.push(contextLine);
 						lines.push("");
 						lines.push(terminalSummary || "No final assistant output was captured.");
 					}
@@ -1881,17 +1983,20 @@ export class TaskController {
 					topLevel.abortReason = a.abortReason;
 					setWarnings(a);
 					lines.push(`${displayName} (${a.id}) timed out. The transcript was preserved and can be resumed with resume: "${a.id}".`);
+					lines.push(contextLine);
 					lines.push("");
 					lines.push(a.output || terminalSummary || "No final assistant output was captured.");
 				} else if (!a.output) {
 					setWarnings(a);
 					lines.push(`${displayName} (${a.id}) is no longer running, but no final assistant output was captured. The transcript was preserved and can be resumed with resume: "${a.id}".`);
+					lines.push(contextLine);
 					lines.push("");
 					lines.push("No final assistant output was captured.");
 				} else {
 					setWarnings(a);
 					topLevel.output = a.output;
 					lines.push(`${displayName} (${a.id}) completed. Use resume: "${a.id}" to continue this agent.`);
+					lines.push(contextLine);
 					lines.push("");
 					lines.push(a.output);
 				}
@@ -1911,10 +2016,12 @@ export class TaskController {
 				const hasOutput = a.output && a.output.length > 0;
 				if (hasOutput) {
 					lines.push(`${displayName} (${a.id}) was aborted while still running. Partial output may be available. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
+					lines.push(contextLine);
 					lines.push("");
 					lines.push(a.output);
 				} else {
 					lines.push(`${displayName} (${a.id}) was aborted while still running. No final assistant output was captured. The transcript was preserved. Use resume: "${a.id}" to continue this agent.`);
+					lines.push(contextLine);
 					const fallback = noFinalOutputSummary;
 					if (fallback) {
 						lines.push("");
@@ -1938,6 +2045,7 @@ export class TaskController {
 						? (a.terminalOutcome && a.terminalOutcome !== "completed" ? a.terminalOutcome : "completed")
 						: (a.terminalOutcome && a.terminalOutcome !== "completed" ? a.terminalOutcome : "no final output");
 					lines.push(`- ${name} (${a.id}) [${state}]`);
+					lines.push(`  ${formatContextUsageLine(a.contextUsage)}`);
 					if (a.error) {
 						lines.push(`  Error: ${a.error}`);
 					} else if (a.output) {
@@ -1972,6 +2080,7 @@ export class TaskController {
 				for (const a of killed) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id}) [transcript saved, resumable]`);
+					lines.push(`  ${formatContextUsageLine(a.contextUsage)}`);
 				}
 			}
 

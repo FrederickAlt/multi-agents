@@ -701,6 +701,42 @@ describe("SubagentSessionManager", () => {
 			expect(sm.getAsyncResult(id)?.output).toBe("final output");
 		});
 
+		it("captures context usage before finalizeAsyncRun disposes the session", () => {
+			const sm = createManager();
+			const id = "finalize-context";
+			const session = makeMockSession();
+			(session as any).getContextUsage = vi.fn(() => ({ tokens: 68234, contextWindow: 100000, percent: 68.234 }));
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.finalizeAsyncRun(id, { output: "done", warnings: [] });
+
+			expect(sm.getAsyncResult(id)?.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+			expect(session.dispose).toHaveBeenCalledOnce();
+		});
+
+		it("forced abort stores context usage captured before abort makes it unavailable", () => {
+			const sm = createManager();
+			const id = "abort-context";
+			const session = makeMockSession();
+			let aborted = false;
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "partial before abort" }] }];
+			session.abort = vi.fn(() => {
+				aborted = true;
+			}) as any;
+			(session as any).getContextUsage = vi.fn(() => {
+				if (aborted) throw new Error("usage unavailable after abort");
+				return { tokens: null, contextWindow: 100000, percent: null };
+			});
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			sm.abortSession(id);
+
+			expect(sm.getAsyncResult(id)?.contextUsage).toEqual({ tokens: null, contextWindow: 100000, percent: null });
+			expect(session.dispose).toHaveBeenCalledOnce();
+		});
+
 		it("does not fire when agent_end occurs before async result storage", async () => {
 			const sm = createManager();
 			const onReady = vi.fn();
@@ -893,11 +929,12 @@ describe("SubagentSessionManager", () => {
 			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
 		});
 
-		it("finish request failure does not prevent storing the original run output", async () => {
+		it("finish request failure stores context usage and does not prevent original output", async () => {
 			const sm = createManager();
 			const id = "finish-failed-original";
 			const session = makeMockSession();
 			(session as any).steer = vi.fn().mockRejectedValue(new Error("still processing"));
+			(session as any).getContextUsage = vi.fn(() => ({ tokens: 68234, contextWindow: 100000, percent: 68.234 }));
 			session.messages = [{ role: "assistant", content: [{ type: "text", text: "original final" }] }];
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
@@ -906,6 +943,7 @@ describe("SubagentSessionManager", () => {
 			await Promise.resolve();
 
 			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("abort_request_failed");
+			expect(sm.getAsyncResult(id)?.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
 			expect(sm.isCompleted(id)).toBe(false);
 
 			sm.finalizeAsyncRun(id, { output: "original final", warnings: [], terminalOutcome: "completed" });
@@ -1041,6 +1079,80 @@ describe("SubagentSessionManager", () => {
 				error: "aborted",
 				abortReason: "final_summary",
 				terminalOutcome: "aborted",
+			});
+		});
+
+		it("final abort summary stores context usage captured before abort makes it unavailable", async () => {
+			const sm = createManager();
+			const id = "abort-summary-context";
+			const calls: string[] = [];
+			let aborted = false;
+			const session = makeMockSession(["bash"]);
+			(session as any).getContextUsage = vi.fn(() => {
+				calls.push("usage");
+				if (aborted) throw new Error("usage unavailable after abort");
+				return { tokens: 68234, contextWindow: 100000, percent: 68.234 };
+			});
+			session.abort = vi.fn(() => {
+				calls.push("abort");
+				aborted = true;
+				setTimeout(() => {
+					for (const cb of session.callbacks) cb({ type: "agent_end" });
+				}, 0);
+				return Promise.resolve();
+			}) as any;
+			(session as any).setActiveToolsByName = vi.fn();
+			session.prompt = vi.fn(() => {
+				session.messages = [{ role: "assistant", content: [{ type: "text", text: "final summary with context" }] }];
+				setTimeout(() => {
+					for (const cb of session.callbacks) cb({ type: "agent_end" });
+				}, 0);
+				return Promise.resolve();
+			}) as any;
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			const result = await sm.requestAbortSummary(id, 1000);
+
+			expect(result).toMatchObject({ status: "summarized", output: "final summary with context" });
+			expect(calls.slice(0, 2)).toEqual(["usage", "abort"]);
+			expect(sm.getAsyncResult(id)?.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+		});
+
+		it("forced abort after failed final summary uses pre-abort context usage", async () => {
+			const sm = createManager();
+			const id = "abort-summary-fallback-context";
+			let aborted = false;
+			const session = makeMockSession(["bash"]);
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "partial before forced abort" }] }];
+			(session as any).getContextUsage = vi.fn(() => {
+				if (aborted) return { tokens: null, contextWindow: 100000, percent: null };
+				return { tokens: 68234, contextWindow: 100000, percent: 68.234 };
+			});
+			session.abort = vi.fn(() => {
+				aborted = true;
+				setTimeout(() => {
+					for (const cb of session.callbacks) cb({ type: "agent_end" });
+				}, 0);
+				return Promise.resolve();
+			}) as any;
+			(session as any).setActiveToolsByName = vi.fn();
+			session.prompt = vi.fn(() => Promise.reject(new Error("summary prompt failed"))) as any;
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+
+			const result = await sm.requestAbortSummary(id, 1000);
+			expect(result).toMatchObject({ status: "failed", error: "summary prompt failed" });
+
+			sm.abortSession(id);
+
+			expect((session as any).getContextUsage).toHaveBeenCalledOnce();
+			expect(sm.getAsyncResult(id)).toMatchObject({
+				output: "partial before forced abort",
+				error: "aborted",
+				abortReason: "forced_abort",
+				terminalOutcome: "aborted",
+				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
 			});
 		});
 

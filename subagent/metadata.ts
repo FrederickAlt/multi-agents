@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
+import type { SubagentContextUsage } from "./context-usage.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -49,6 +50,7 @@ export interface SubagentRecord {
 	terminalError?: string;
 	abortReason?: string;
 	terminalAt?: string;
+	contextUsage?: SubagentContextUsage;
 }
 
 export interface MetadataFile {

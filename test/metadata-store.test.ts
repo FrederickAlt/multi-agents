@@ -207,6 +207,21 @@ describe("MetadataStore", () => {
 			expect(meta2.records[0].id).toBe("11111111");
 			expect(meta2.records[1].id).toBe("22222222");
 		});
+
+		it("round-trips terminal context usage", () => {
+			const store1 = new MetadataStore(makeCtx(tempDir, "context-usage"));
+			store1.upsertRecord({
+				...makeRecord("ctx12345"),
+				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+			});
+
+			const store2 = new MetadataStore(makeCtx(tempDir, "context-usage"));
+			expect(store2.findRecord("ctx12345")?.contextUsage).toEqual({
+				tokens: 68234,
+				contextWindow: 100000,
+				percent: 68.234,
+			});
+		});
 	});
 
 	// ---- Cleanup ----

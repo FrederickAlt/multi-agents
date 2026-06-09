@@ -22,6 +22,7 @@ import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
 import type { AgentConfig } from "./agents.js";
 import type { MetadataStore, SubagentRecord, TerminalOutcome } from "./metadata.js";
 import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
+import { readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
 
 export const ABORT_FINAL_SUMMARY_TIMEOUT_MS = 5 * 60 * 1000;
 export const ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS = 5 * 1000;
@@ -31,6 +32,17 @@ export const ABORT_FINAL_SUMMARY_MESSAGE = `[System] The parent agent is abortin
 export type AbortSummaryResult =
 	| { status: "summarized"; output: string; toolOverrideApplied: boolean }
 	| { status: "unavailable" | "failed" | "timed_out" | "no_output"; error?: string; toolOverrideApplied: boolean };
+
+export interface AsyncRunResult {
+	output: string;
+	error?: string;
+	warnings: string[];
+	abortReason?: string;
+	terminalOutcome?: TerminalOutcome;
+	terminalError?: string;
+	terminalAt?: string;
+	contextUsage?: SubagentContextUsage;
+}
 
 // ---------------------------------------------------------------------------
 // Injectable adapter interfaces
@@ -214,11 +226,12 @@ export class SubagentSessionManager {
 	private openSessions = new Map<string, AgentSession>();
 	private runLocks = new Map<string, Promise<void>>();
 	private completedSessions = new Set<string>();
-	private asyncResults = new Map<string, { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string }>();
+	private asyncResults = new Map<string, AsyncRunResult>();
 	private asyncResultWaiters = new Map<string, Set<() => void>>();
 	private asyncInFlight = new Set<string>();
 	private killInProgress = new Set<string>();
 	private asyncRunLifecycle = new Map<string, "running" | "soft-killing" | "hard-aborting" | "completed">();
+	private abortContextUsageSnapshots = new Map<string, SubagentContextUsage | undefined>();
 	private _onAsyncResultReady: ((id: string) => void) | undefined;
 	private readonly logger: DebugLogger;
 
@@ -404,6 +417,7 @@ export class SubagentSessionManager {
 		this.completedSessions.delete(id);
 		this.asyncInFlight.delete(id);
 		this.asyncRunLifecycle.delete(id);
+		this.abortContextUsageSnapshots.delete(id);
 		logger.debug("session_dispose_complete");
 	}
 
@@ -429,6 +443,7 @@ export class SubagentSessionManager {
 		this.asyncResultWaiters.clear();
 		this.asyncInFlight.clear();
 		this.asyncRunLifecycle.clear();
+		this.abortContextUsageSnapshots.clear();
 		logger.info("session_dispose_all_done", { count: this.openSessions.size });
 	}
 
@@ -464,7 +479,7 @@ export class SubagentSessionManager {
 	}
 
 	/** Store the output/error of a completed async sub-agent session. */
-	storeAsyncResult(id: string, result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string }): void {
+	storeAsyncResult(id: string, result: AsyncRunResult): void {
 		this.logger.debug("session_async_result_stored", {
 			recordId: id,
 			outputLength: result.output.length,
@@ -480,7 +495,7 @@ export class SubagentSessionManager {
 	}
 
 	/** Retrieve the stored output/error from a completed async sub-agent. */
-	getAsyncResult(id: string): { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string } | undefined {
+	getAsyncResult(id: string): AsyncRunResult | undefined {
 		return this.asyncResults.get(id);
 	}
 
@@ -539,7 +554,7 @@ export class SubagentSessionManager {
 	 */
 	finalizeAsyncRun(
 		id: string,
-		result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string },
+		result: AsyncRunResult,
 		options?: { allowOverwrite?: boolean },
 	): void {
 		this._finalizeAsyncRun(id, result, {
@@ -623,7 +638,7 @@ export class SubagentSessionManager {
 
 	private _finalizeAsyncRun(
 		id: string,
-		result: { output: string; error?: string; warnings: string[]; abortReason?: string; terminalOutcome?: TerminalOutcome; terminalError?: string; terminalAt?: string },
+		result: AsyncRunResult,
 		options: { allowOverwrite?: boolean; source?: "task-controller" | "soft-kill" | "hard-abort" } = {},
 	): void {
 		this.asyncInFlight.delete(id);
@@ -648,11 +663,18 @@ export class SubagentSessionManager {
 			hasError: Boolean(result.error),
 			allowOverwrite: options.allowOverwrite,
 		});
-		this.storeAsyncResult(id, result);
+		const session = this.openSessions.get(id);
+		const resultWithContextUsage: AsyncRunResult = result.contextUsage !== undefined
+			? result
+			: {
+				...result,
+				contextUsage: readSubagentContextUsage(session),
+			};
+		this.storeAsyncResult(id, resultWithContextUsage);
 		this.completedSessions.add(id);
 		this.asyncRunLifecycle.set(id, "completed");
 		this.killInProgress.delete(id);
-		const session = this.openSessions.get(id);
+		this.abortContextUsageSnapshots.delete(id);
 		if (session) {
 			try {
 				session.dispose();
@@ -740,6 +762,7 @@ export class SubagentSessionManager {
 					logger.debug("session_send_kill_prompt_failure_ignored_after_abort", { state: this._runLifecycleState(id) });
 					return;
 				}
+				const contextUsage = readSubagentContextUsage(session);
 				const message = error instanceof Error ? error.message : String(error);
 				const diagnostic = message || "failed to queue finish request";
 				const extracted = extractOutput(session.messages as any[]);
@@ -753,6 +776,7 @@ export class SubagentSessionManager {
 					warnings: [],
 					terminalOutcome: "abort_request_failed",
 					terminalError: diagnostic,
+					contextUsage,
 				});
 			},
 		);
@@ -774,6 +798,8 @@ export class SubagentSessionManager {
 		}
 
 		const logger = this.logger.child({ component: "subagent_session_manager", recordId: id });
+		const preAbortContextUsage = readSubagentContextUsage(session);
+		this.abortContextUsageSnapshots.set(id, preAbortContextUsage);
 		this._startHardAbort(id);
 		const setActiveToolsByName = session.setActiveToolsByName;
 		const getActiveToolNames = session.getActiveToolNames;
@@ -894,6 +920,7 @@ export class SubagentSessionManager {
 						abortReason: "final_summary",
 						terminalOutcome: "aborted",
 						terminalError: extracted.source === "diagnostic" ? extracted.text : undefined,
+						contextUsage: preAbortContextUsage,
 					},
 					{ allowOverwrite: true, source: "hard-abort" },
 				);
@@ -937,8 +964,11 @@ export class SubagentSessionManager {
 
 		this.logger.warn("session_hard_abort_started", { recordId: id });
 
-		// Capture partial output before abort using shared extraction.
+		// Capture partial output and use any pre-abort usage snapshot before reading live session state.
 		const extracted = extractOutput(session.messages as any[]);
+		const contextUsage = this.abortContextUsageSnapshots.has(id)
+			? this.abortContextUsageSnapshots.get(id)
+			: readSubagentContextUsage(session);
 
 		try { session.abort(); } catch { /* best-effort */ }
 
@@ -951,6 +981,7 @@ export class SubagentSessionManager {
 				abortReason: "forced_abort",
 				terminalOutcome: "aborted",
 				terminalError: extracted.source === "diagnostic" ? extracted.text : undefined,
+				contextUsage,
 			},
 			{ allowOverwrite: true, source: "hard-abort" },
 		);

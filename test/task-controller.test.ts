@@ -32,6 +32,7 @@ import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "..
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
 import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
 import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE, getFinalTextFromMessages } from "../subagent/output-extraction.js";
+import { formatContextUsageLine, readSubagentContextUsage } from "../subagent/context-usage.js";
 import type { DebugLogger } from "../subagent/debug-logger.js";
 
 // ---------------------------------------------------------------------------
@@ -209,6 +210,36 @@ describe("getFinalTextFromMessages", () => {
 			{ role: "user", content: "final prompt" },
 		];
 		expect(getFinalTextFromMessages(messages)).toBe("the answer");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Context usage formatting
+// ---------------------------------------------------------------------------
+
+describe("context usage helpers", () => {
+	it("formats known context usage with one decimal place", () => {
+		expect(formatContextUsageLine({ tokens: 68234, contextWindow: 100000, percent: 68.234 })).toBe("Context used: 68.2%.");
+	});
+
+	it("formats missing or unknown context usage simply", () => {
+		expect(formatContextUsageLine(undefined)).toBe("Context used: Unknown.");
+		expect(formatContextUsageLine({ tokens: null, contextWindow: 100000, percent: null })).toBe("Context used: Unknown.");
+	});
+
+	it("safely normalizes optional session context usage", () => {
+		expect(readSubagentContextUsage({})).toBeUndefined();
+		expect(readSubagentContextUsage({ getContextUsage: () => ({ tokens: 1234, contextWindow: 100000, percent: 1.234 }) })).toEqual({
+			tokens: 1234,
+			contextWindow: 100000,
+			percent: 1.234,
+		});
+		expect(readSubagentContextUsage({ getContextUsage: () => ({ tokens: null, contextWindow: 100000, percent: null }) })).toEqual({
+			tokens: null,
+			contextWindow: 100000,
+			percent: null,
+		});
+		expect(readSubagentContextUsage({ getContextUsage: () => { throw new Error("boom"); } })).toBeUndefined();
 	});
 });
 
@@ -536,6 +567,32 @@ describe("TaskController.execute", () => {
 		expect(details.output).toBe("Task completed successfully!");
 	});
 
+	it("reports blocking context usage when available", async () => {
+		mockSession.getContextUsage = vi.fn(() => ({ tokens: 68234, contextWindow: 100000, percent: 68.234 }));
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "Task completed successfully!" }] },
+		];
+
+		const result = await controller.execute(makeParams(), makeContext());
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		const details = result.details as TaskDetails;
+
+		expect(text).toContain("Context used: 68.2%.");
+		expect(details.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+		expect(metadataStore.findRecord(details.id!)?.contextUsage).toEqual(details.contextUsage);
+	});
+
+	it("reports unknown blocking context usage when unavailable", async () => {
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "done without usage" }] },
+		];
+
+		const result = await controller.execute(makeParams(), makeContext());
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("Context used: Unknown.");
+	});
+
 	it("emits execute breadcrumbs via runtime logger", async () => {
 		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
 		const runtime: RuntimeContext = {
@@ -792,6 +849,35 @@ describe("TaskController.execute", () => {
 		}
 	});
 
+	it("captures blocking timeout context usage before abort makes it unavailable", async () => {
+		vi.useFakeTimers();
+
+		try {
+			let aborted = false;
+			mockSession.prompt = vi.fn(() => new Promise(() => {}));
+			mockSession.abort = vi.fn(() => {
+				aborted = true;
+			});
+			mockSession.getContextUsage = vi.fn(() => {
+				if (aborted) throw new Error("usage unavailable after abort");
+				return { tokens: 68234, contextWindow: 100000, percent: 68.234 };
+			});
+
+			const resultPromise = controller.execute(makeParams(), makeContext());
+			await vi.advanceTimersByTimeAsync(DEFAULT_TASK_RUNTIME_TIMEOUT_MS);
+
+			const result = await resultPromise;
+			const details = result.details as TaskDetails;
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+			expect(text).toContain("Context used: 68.2%.");
+			expect(details.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+			expect(metadataStore.findRecord(details.id!)?.contextUsage).toEqual(details.contextUsage);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("returns a non-timeout failure when signal aborts after prompt starts", async () => {
 		vi.useFakeTimers();
 		const addEventListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
@@ -800,6 +886,7 @@ describe("TaskController.execute", () => {
 		try {
 			let continuePrompt!: () => void;
 			let promptSettled = false;
+			let aborted = false;
 			const promptStarted = new Promise<void>((resolve) => {
 				continuePrompt = resolve;
 			});
@@ -811,6 +898,13 @@ describe("TaskController.execute", () => {
 					promptSettled = true;
 				});
 			});
+			mockSession.abort = vi.fn(() => {
+				aborted = true;
+			});
+			mockSession.getContextUsage = vi.fn(() => {
+				if (aborted) throw new Error("usage unavailable after abort");
+				return { tokens: 68234, contextWindow: 100000, percent: 68.234 };
+			});
 			const ac = new AbortController();
 
 			const resultPromise = controller.execute(makeParams(), makeContext({ signal: ac.signal }));
@@ -821,6 +915,7 @@ describe("TaskController.execute", () => {
 
 			const result = await resultPromise;
 			expect(result.details.error).toBe("Task execution was aborted.");
+			expect((result.details as TaskDetails).contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
 			expect(mockSession.abort).toHaveBeenCalledTimes(1);
 			expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
 			expect(removeEventListenerSpy).toHaveBeenCalledTimes(1);
@@ -1266,6 +1361,73 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("completed");
 		expect(text).toContain("async result output");
 		expect(text).toContain("Use resume:");
+	});
+
+	it("stores async context usage and reports it from waitForAgent", async () => {
+		mockSession.getContextUsage = vi.fn(() => ({ tokens: 68234, contextWindow: 100000, percent: 68.234 }));
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "async output with usage" }] },
+		];
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		await new Promise((r) => setTimeout(r, 10));
+
+		const storedBeforeWait = sessionManager.getAsyncResult(agentId);
+		expect(storedBeforeWait?.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+		expect(metadataStore.findRecord(agentId)?.contextUsage).toEqual(storedBeforeWait?.contextUsage);
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		const details = result.details as TaskDetails;
+
+		expect(text).toContain("Context used: 68.2%.");
+		expect(details.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+	});
+
+	it("reports unknown async context usage when percent is null", async () => {
+		mockSession.getContextUsage = vi.fn(() => ({ tokens: null, contextWindow: 100000, percent: null }));
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "async output after compaction" }] },
+		];
+
+		const spawnResult = await controller.execute(
+			makeParams({ blocking: false }),
+			makeContext(),
+		);
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		await new Promise((r) => setTimeout(r, 10));
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("Context used: Unknown.");
+		expect((result.details as TaskDetails).contextUsage).toEqual({ tokens: null, contextWindow: 100000, percent: null });
+	});
+
+	it("clears stale context usage when a resumed run finishes without usage", async () => {
+		const existingRecord = makeRecord("facefeed", "explorer");
+		existingRecord.sessionFile = join(tempDir, "existing-context.jsonl");
+		existingRecord.terminalOutcome = "completed";
+		existingRecord.contextUsage = { tokens: 50000, contextWindow: 100000, percent: 50 };
+		metadataStore.upsertRecord(existingRecord);
+		mockSession.messages = [
+			{ role: "assistant", content: [{ type: "text", text: "fresh run output" }] },
+		];
+
+		const result = await controller.execute(
+			makeParams({ resume: existingRecord.id, subagent_type: "explorer" }),
+			makeContext(),
+		);
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("Context used: Unknown.");
+		expect(text).not.toContain("50.0");
+		expect((result.details as TaskDetails).contextUsage).toBeUndefined();
+		expect(metadataStore.findRecord(existingRecord.id)?.contextUsage).toBeUndefined();
 	});
 
 	it("returns error result when async agent failed", async () => {

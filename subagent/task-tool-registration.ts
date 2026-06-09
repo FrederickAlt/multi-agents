@@ -10,6 +10,7 @@ import { AgentRegistry, discoverAgents } from "./agents.js";
 import type { DebugLogger } from "./debug-logger.js";
 import { checkTaskAllowed } from "./depth-policy.js";
 import { MetadataStore } from "./metadata.js";
+import { formatContextUsageLine } from "./context-usage.js";
 import { PiModelResolver, type SubagentSessionManager } from "./session-manager.js";
 import {
 	TaskController,
@@ -70,6 +71,20 @@ function activateTaskTool(targetPi: ExtensionAPI, includeTaskTool: boolean): voi
 		}
 		return result;
 	});
+}
+
+function stripContextUsageLines(text: string): string {
+	const lines = text.split(/\r?\n/);
+	const firstBlankLine = lines.findIndex((line) => line.trim() === "");
+	const headerEnd = firstBlankLine === -1 ? Math.min(lines.length, 3) : firstBlankLine;
+	const contextLineIndex = lines.findIndex((line, index) => (
+		index < headerEnd
+		&& /^\s*Context used: (?:Unknown|\d+(?:\.\d+)?%)\.\s*$/.test(line)
+	));
+	if (contextLineIndex === -1) return text;
+	return lines
+		.filter((_line, index) => index !== contextLineIndex)
+		.join("\n");
 }
 
 export function configureTaskToolForRuntime(
@@ -157,12 +172,19 @@ export function configureTaskToolForRuntime(
 					),
 				);
 				if (details.description) container.addChild(new Text(theme.fg("dim", details.description), 0, 0));
+				const hasTerminalResult = details.contextUsage !== undefined
+					|| details.terminalOutcome !== undefined
+					|| details.output !== undefined;
+				if (hasTerminalResult) {
+					container.addChild(new Text(theme.fg("muted", formatContextUsageLine(details.contextUsage)), 0, 0));
+				}
 				if (details.warnings.length > 0) {
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("warning", details.warnings.join("\n")), 0, 0));
 				}
 				container.addChild(new Spacer(1));
-				container.addChild(new Markdown(details.output || text, 0, 0, getMarkdownTheme()));
+				const bodyText = details.output || stripContextUsageLines(text);
+				container.addChild(new Markdown(bodyText || "(no output)", 0, 0, getMarkdownTheme()));
 				return container;
 			},
 		});

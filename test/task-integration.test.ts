@@ -101,6 +101,15 @@ function createTaskToolRegistrationDeps(sessionManager: any = {}) {
 	};
 }
 
+function renderComponentToText(component: { render(width: number): string[] }): string {
+	return component.render(120).join("\n");
+}
+
+const passthroughTheme = {
+	fg: (_name: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
 async function loadTaskExtensionWithNotifier() {
 	const actual = await vi.importActual<typeof import("../subagent/async-agent-notifier.js")>("../subagent/async-agent-notifier.js");
 	const asyncAgentNotifier = new actual.AsyncAgentNotifier();
@@ -243,6 +252,126 @@ describe("extension loading", () => {
 			expect.stringContaining("wait_all"),
 			expect.stringContaining("timeout"),
 		]));
+	});
+
+	it("expanded Task result renders context usage even when details.output is preferred", () => {
+		const { pi } = createFakeExtensionApi();
+		const runtime = {
+			treeDepth: 0,
+			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
+		};
+
+		configureTaskToolForRuntime(pi, runtime, async () => ({
+			content: [{ type: "text", text: "unused" }],
+			details: { warnings: [] },
+		}), createTaskToolRegistrationDeps());
+
+		const taskTool = latestTaskTool(pi);
+		const rendered = taskTool.renderResult({
+			content: [{ type: "text", text: "Task header that would be hidden by details.output" }],
+			details: {
+				id: "abc12345",
+				displayName: "explorer Tom",
+				description: "Inspect usage",
+				warnings: [],
+				output: "child output only",
+				terminalOutcome: "completed",
+				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+			},
+		}, { expanded: true }, passthroughTheme);
+
+		const text = renderComponentToText(rendered);
+		expect(text).toContain("explorer Tom");
+		expect(text).toContain("Context used: 68.2%.");
+		expect(text).toContain("child output only");
+	});
+
+	it("expanded Task result renders unknown context usage for completed output without usage", () => {
+		const { pi } = createFakeExtensionApi();
+		const runtime = {
+			treeDepth: 0,
+			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
+		};
+
+		configureTaskToolForRuntime(pi, runtime, async () => ({
+			content: [{ type: "text", text: "unused" }],
+			details: { warnings: [] },
+		}), createTaskToolRegistrationDeps());
+
+		const taskTool = latestTaskTool(pi);
+		const rendered = taskTool.renderResult({
+			content: [{ type: "text", text: "completed header" }],
+			details: {
+				id: "abc12345",
+				displayName: "explorer Tom",
+				warnings: [],
+				output: "child output only",
+				terminalOutcome: "completed",
+			},
+		}, { expanded: true }, passthroughTheme);
+
+		const text = renderComponentToText(rendered);
+		expect(text).toContain("Context used: Unknown.");
+	});
+
+	it("expanded Task result does not duplicate context usage from fallback text", () => {
+		const { pi } = createFakeExtensionApi();
+		const runtime = {
+			treeDepth: 0,
+			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
+		};
+
+		configureTaskToolForRuntime(pi, runtime, async () => ({
+			content: [{ type: "text", text: "unused" }],
+			details: { warnings: [] },
+		}), createTaskToolRegistrationDeps());
+
+		const taskTool = latestTaskTool(pi);
+		const rendered = taskTool.renderResult({
+			content: [{ type: "text", text: "explorer Tom completed.\nContext used: 68.2%.\n\nNo final assistant output was captured." }],
+			details: {
+				id: "abc12345",
+				displayName: "explorer Tom",
+				warnings: [],
+				terminalOutcome: "completed",
+				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+			},
+		}, { expanded: true }, passthroughTheme);
+
+		const text = renderComponentToText(rendered);
+		expect(text.match(/Context used:/g)).toHaveLength(1);
+		expect(text).toContain("No final assistant output was captured.");
+	});
+
+	it("expanded Task fallback keeps child-authored context usage lines", () => {
+		const { pi } = createFakeExtensionApi();
+		const runtime = {
+			treeDepth: 0,
+			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
+		};
+
+		configureTaskToolForRuntime(pi, runtime, async () => ({
+			content: [{ type: "text", text: "unused" }],
+			details: { warnings: [] },
+		}), createTaskToolRegistrationDeps());
+
+		const taskTool = latestTaskTool(pi);
+		const rendered = taskTool.renderResult({
+			content: [{ type: "text", text: "explorer Tom completed.\nContext used: 68.2%.\n\nChild-authored note.\nContext used: Unknown." }],
+			details: {
+				id: "abc12345",
+				displayName: "explorer Tom",
+				warnings: [],
+				terminalOutcome: "completed",
+				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+			},
+		}, { expanded: true }, passthroughTheme);
+
+		const text = renderComponentToText(rendered);
+		expect(text.match(/Context used:/g)).toHaveLength(2);
+		expect(text).toContain("Context used: 68.2%.");
+		expect(text).toContain("Child-authored note.");
+		expect(text).toContain("Context used: Unknown.");
 	});
 
 	it("renders the configured default Root agent when the session has no /agent selection", async () => {
