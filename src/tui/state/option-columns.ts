@@ -1,3 +1,5 @@
+import { isProtectedMultiAgentExtensionName } from "../../../subagent/protected-extension.js";
+import { resolveModelDisplayName } from "../discovery/options.js";
 import type {
 	AgentConfigState,
 	DiscoveredOptions,
@@ -6,8 +8,6 @@ import type {
 	OptionColumnItemOrder,
 } from "./types.js";
 import { FIELDS_ORDER, OPTION_COLUMN_FIELDS } from "./types.js";
-import { resolveModelDisplayName } from "../discovery/options.js";
-import { isProtectedMultiAgentExtensionName } from "../../../subagent/protected-extension.js";
 
 export const MODEL_OPTION_LOADING_ITEM = "(loading models...)";
 export const MODEL_OPTION_DEGRADED_STATUS = "(model discovery unavailable)";
@@ -93,7 +93,9 @@ function extensionToolIsEnabled(
 	if (selectedExtensions === undefined) return true;
 	if (selectedExtensions.length === 0) return false;
 	return selectedExtensions.some((selected) =>
-		sourceNames.some((candidate) => candidate === selected || candidate.includes(selected) || selected.includes(candidate)),
+		sourceNames.some(
+			(candidate) => candidate === selected || candidate.includes(selected) || selected.includes(candidate),
+		),
 	);
 }
 
@@ -121,10 +123,7 @@ export function isOptionColumnItemDisabled(
 	return getOptionColumnDisabledItems(agent, options, fieldName).includes(item);
 }
 
-export function getToolsAvailableForAgent(
-	options: DiscoveredOptions,
-	agent: AgentConfigState | undefined,
-): string[] {
+export function getToolsAvailableForAgent(options: DiscoveredOptions, agent: AgentConfigState | undefined): string[] {
 	return options.tools.filter((tool) => extensionToolIsEnabled(options, agent, tool));
 }
 
@@ -132,21 +131,17 @@ export function getFieldName(fieldIndex: number): FieldName {
 	return FIELDS_ORDER[clampIndex(fieldIndex, FIELDS_ORDER.length)];
 }
 
-export function isOptionColumnField(
-	fieldName: string,
-): fieldName is OptionColumnFieldName {
+export function isOptionColumnField(fieldName: string): fieldName is OptionColumnFieldName {
 	return OPTION_COLUMN_FIELDS.includes(fieldName as OptionColumnFieldName);
 }
 
-export function isCheckboxOptionColumnField(
-	fieldName: string,
-): fieldName is OptionColumnFieldName {
+export function isCheckboxOptionColumnField(fieldName: string): fieldName is OptionColumnFieldName {
 	return (
-		fieldName === "tools"
-		|| fieldName === "extensions"
-		|| fieldName === "can_spawn"
-		|| fieldName === "skills"
-		|| fieldName === "prompt_parts"
+		fieldName === "tools" ||
+		fieldName === "extensions" ||
+		fieldName === "can_spawn" ||
+		fieldName === "skills" ||
+		fieldName === "prompt_parts"
 	);
 }
 
@@ -189,10 +184,7 @@ export function getOptionColumnAvailableItems(
 	return [];
 }
 
-export function getOptionColumnDefaultValue(
-	options: DiscoveredOptions,
-	fieldName: OptionColumnFieldName,
-): string {
+export function getOptionColumnDefaultValue(options: DiscoveredOptions, fieldName: OptionColumnFieldName): string {
 	switch (fieldName) {
 		case "reasoning_effort":
 			return "medium";
@@ -269,12 +261,7 @@ export function getOptionColumnSelectedValue(
 	fieldName: OptionColumnFieldName,
 	agentName?: string,
 ): string {
-	const selectedValues = getOptionColumnSelectedValues(
-		agent,
-		options,
-		fieldName,
-		agentName,
-	);
+	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
 	return selectedValues[0] ?? "";
 }
 
@@ -285,18 +272,8 @@ export function getOptionColumnItems(
 	agentName?: string,
 	columnFilter = "",
 ): string[] {
-	const availableItems = getOptionColumnAvailableItems(
-		options,
-		fieldName,
-		agentName,
-		agent,
-	);
-	const selectedValues = getOptionColumnSelectedValues(
-		agent,
-		options,
-		fieldName,
-		agentName,
-	);
+	const availableItems = getOptionColumnAvailableItems(options, fieldName, agentName, agent);
+	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
 	const selectedValue = selectedValues[0];
 
 	const unfilteredItems = (() => {
@@ -322,11 +299,7 @@ export function getOptionColumnItems(
 				if (selectedValue === undefined || availableItems.includes(selectedValue)) {
 					return availableItems;
 				}
-				return [
-					availableItems[0],
-					selectedValue,
-					...availableItems.slice(1),
-				];
+				return [availableItems[0], selectedValue, ...availableItems.slice(1)];
 			}
 		}
 
@@ -354,12 +327,7 @@ export function applyOptionColumnItemOrder(
 	fieldName: OptionColumnFieldName,
 	columnFilter = "",
 ): string[] {
-	if (
-		!order
-		|| order.agentIndex !== agentIndex
-		|| order.fieldName !== fieldName
-		|| order.filter !== columnFilter
-	) {
+	if (!order || order.agentIndex !== agentIndex || order.fieldName !== fieldName || order.filter !== columnFilter) {
 		return items;
 	}
 
@@ -384,31 +352,17 @@ export function getOptionColumnItemIndex(
 	agentName?: string,
 	columnFilter = "",
 ): number {
-	const items = getOptionColumnItems(
-		agent,
-		options,
-		fieldName,
-		agentName,
-		columnFilter,
-	);
+	const items = getOptionColumnItems(agent, options, fieldName, agentName, columnFilter);
 	if (items.length === 0) {
 		return 0;
 	}
-	const fallbackValues = getOptionColumnSelectedValues(
-		agent,
-		options,
-		fieldName,
-		agentName,
-	);
+	const fallbackValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
 	const fallback = itemValue ?? fallbackValues[0] ?? items[0];
 	const index = items.indexOf(fallback);
 	return index >= 0 ? index : 0;
 }
 
-export function getOptionColumnSaveValue(
-	fieldName: OptionColumnFieldName,
-	item: string,
-): string | number {
+export function getOptionColumnSaveValue(fieldName: OptionColumnFieldName, item: string): string | number {
 	if (fieldName === "depth") {
 		const parsed = Number(item);
 		return Number.isNaN(parsed) ? item : parsed;

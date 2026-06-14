@@ -144,6 +144,22 @@ Run tests with `npm test` (vitest).
 
 For TUI diagnostics, run `npm run tui:dump` to print shell-visible `pi-agent-config` board snapshots. Tests can import `renderToText` from `src/tui/dev/render-to-text.ts` for focused layout assertions. When manually testing config writes or the live TUI, use `pi-agent-config --debug` (or `--debug-dir <path>`) so changes are written to a dummy config path instead of real prompt files.
 
+## Build, Test, Lint
+
+```bash
+npm run check       # Biome lint/format + strict TypeScript; writes safe fixes; does not run tests
+npm test            # Vitest tests; real LLM tests skipped by default
+npm run test:watch  # Vitest watch mode
+npm run test:llm    # Opt-in real LLM tests; requires local Pi auth
+npm run tui:dump    # Render deterministic TUI scenarios as terminal text
+```
+
+`npm run check` mirrors pi-mono: it runs `biome check --write --error-on-warnings .` and `tsgo --noEmit`. Because Biome runs with `--write`, it may modify code files.
+
+Tests require a sibling Pi checkout because `vitest.config.ts` aliases Pi packages from `../pi-mono` or `../../pi-mono`. In CI, `earendil-works/pi` is checked out as `pi-mono`.
+
+Prompt markdown files are user-owned. Do not format or lint `subagent/agents/*.md` or `subagent/prompt-parts/*.md`; they are intentionally excluded from Biome.
+
 ## Key design decisions
 
 ### Spawn control via depth and can_spawn

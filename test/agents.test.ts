@@ -6,16 +6,18 @@
  * PI_CODING_AGENT_DIR to point to a temp directory.
  */
 import * as fs from "node:fs";
-const { mkdirSync, readdirSync, rmSync, writeFileSync } = fs;
+
+const { mkdirSync, rmSync, writeFileSync } = fs;
+
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	discoverAgents,
-	formatAgentList,
-	AgentRegistry,
 	type AgentConfig,
 	type AgentDiagnostic,
+	AgentRegistry,
+	discoverAgents,
+	formatAgentList,
 } from "../subagent/agents.js";
 
 // ---------------------------------------------------------------------------
@@ -73,7 +75,11 @@ describe("discoverAgents", () => {
 	afterEach(() => {
 		delete process.env.PI_CODING_AGENT_DIR;
 		if (tempDir) {
-			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 
@@ -81,12 +87,7 @@ describe("discoverAgents", () => {
 	 * Write an agent definition file.
 	 * Values in extra can be strings (inline YAML) or arrays (YAML list blocks).
 	 */
-	const writeAgent = (
-		dir: string,
-		name: string,
-		description: string,
-		extra: Record<string, unknown> = {},
-	) => {
+	const writeAgent = (dir: string, name: string, description: string, extra: Record<string, unknown> = {}) => {
 		const frontmatterLines: string[] = [`description: ${description}`];
 		for (const [key, value] of Object.entries(extra)) {
 			if (Array.isArray(value)) {
@@ -160,22 +161,30 @@ describe("discoverAgents", () => {
 	});
 
 	it("treats blank tools/extensions fields as missing while preserving explicit empty arrays", () => {
-		writeFileSync(join(agentsDir, "blank-runtime.md"), `---
+		writeFileSync(
+			join(agentsDir, "blank-runtime.md"),
+			`---
 description: Agent with blank runtime fields
 tools:
 extensions:
 ---
 
 Blank runtime fields.
-`, "utf-8");
-		writeFileSync(join(agentsDir, "empty-runtime.md"), `---
+`,
+			"utf-8",
+		);
+		writeFileSync(
+			join(agentsDir, "empty-runtime.md"),
+			`---
 description: Agent with explicit empty runtime arrays
 tools: []
 extensions: []
 ---
 
 Empty runtime arrays.
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents();
 		const blankRuntime = result.agents.find((a) => a.name === "blank-runtime")!;
@@ -233,7 +242,6 @@ Empty runtime arrays.
 		expect(limitedSpawns.can_spawn).toEqual(["explorer", "planner"]);
 	});
 
-
 	it("parses can_spawn boolean false as empty array (not as string 'false')", () => {
 		// Write raw YAML with boolean false value - the writeAgent helper always
 		// stringifies values, so writeFileSync directly to get a real YAML boolean.
@@ -245,7 +253,6 @@ Empty runtime arrays.
 		expect(agent).toBeDefined();
 		expect(agent.can_spawn).toEqual([]);
 	});
-
 
 	it("parses prompt_parts field with tri-state semantics", () => {
 		// Missing: undefined (all parts)
@@ -340,7 +347,11 @@ Empty runtime arrays.
 			expect(result.projectAgentsDir).toBeNull();
 		} finally {
 			process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-			try { rmSync(emptyDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(emptyDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 
@@ -355,7 +366,11 @@ Empty runtime arrays.
 			expect(result.agents).toEqual([]);
 		} finally {
 			process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-			try { rmSync(noAgentsDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(noAgentsDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 });
@@ -378,16 +393,15 @@ describe("AgentRegistry", () => {
 	afterEach(() => {
 		delete process.env.PI_CODING_AGENT_DIR;
 		if (tempDir) {
-			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 
-	const writeAgent = (
-		dir: string,
-		name: string,
-		description: string,
-		extra: Record<string, unknown> = {},
-	) => {
+	const writeAgent = (dir: string, name: string, description: string, extra: Record<string, unknown> = {}) => {
 		const frontmatterLines: string[] = [`description: ${description}`];
 		for (const [key, value] of Object.entries(extra)) {
 			if (Array.isArray(value)) {
@@ -449,8 +463,6 @@ describe("AgentRegistry", () => {
 		registry.discover();
 		expect(registry.find("newagent")).toBeDefined();
 	});
-
-
 
 	// -----------------------------------------------------------------------
 	// formatList
@@ -599,7 +611,11 @@ describe("AgentRegistry", () => {
 			expect(diag!.level).toBe("error");
 			expect(diag!.reason).toContain("Cannot read file");
 		} finally {
-			try { fs.chmodSync(agentPath, 0o644); } catch { /* ignore */ }
+			try {
+				fs.chmodSync(agentPath, 0o644);
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 

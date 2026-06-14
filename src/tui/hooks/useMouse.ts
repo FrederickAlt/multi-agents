@@ -1,15 +1,12 @@
-import { useEffect, useRef } from "react";
 import { useStdin } from "ink";
-import type { KeyboardActions, KeyboardState } from "./useKeyboard.js";
+import { useEffect, useRef } from "react";
 import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "../state/types.js";
+import type { KeyboardActions, KeyboardState } from "./useKeyboard.js";
 
 /** SGR mouse sequence regex: \x1b[<Cb;Cx;CyM (press) or m (release) */
 const MOUSE_SGR_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/;
 
-export function useMouse(
-	actions: KeyboardActions,
-	getState: () => KeyboardState,
-): void {
+export function useMouse(actions: KeyboardActions, getState: () => KeyboardState): void {
 	const { stdin, internal_eventEmitter } = useStdin();
 	const enabled = useRef(false);
 
@@ -70,11 +67,7 @@ export function useMouse(
 	}, [internal_eventEmitter]);
 }
 
-function handleBoardClick(
-	row: number,
-	state: KeyboardState,
-	actions: KeyboardActions,
-): void {
+function handleBoardClick(row: number, state: KeyboardState, actions: KeyboardActions): void {
 	// Rows are counted from top of board area.
 	// We don't know the exact scroll position from mouse context alone,
 	// so we focus the row that was clicked (assuming no scrolling,
@@ -103,12 +96,7 @@ function handleBoardClick(
 	}
 }
 
-function handleOverlayClick(
-	col: number,
-	row: number,
-	state: KeyboardState,
-	actions: KeyboardActions,
-): void {
+function handleOverlayClick(col: number, row: number, state: KeyboardState, actions: KeyboardActions): void {
 	const OVERLAY_TOP = 4;
 	const OVERLAY_LEFT = 10;
 

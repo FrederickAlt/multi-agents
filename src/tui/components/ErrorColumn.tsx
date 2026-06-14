@@ -1,4 +1,3 @@
-import React from "react";
 import { Box, Text } from "ink";
 import type { AgentConfigState } from "../state/types.js";
 import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "../state/types.js";
@@ -24,10 +23,14 @@ export function ErrorColumn({ agent, isFocused, isExpanded }: ErrorColumnProps) 
 				flexShrink={0}
 			>
 				<Box flexDirection="row">
-					<Text bold color="red" wrap="truncate">{agent.name}</Text>
+					<Text bold color="red" wrap="truncate">
+						{agent.name}
+					</Text>
 				</Box>
 				<Box flexDirection="row">
-					<Text dimColor wrap="truncate">{error}</Text>
+					<Text dimColor wrap="truncate">
+						{error}
+					</Text>
 				</Box>
 			</Box>
 		);
@@ -47,8 +50,12 @@ export function ErrorColumn({ agent, isFocused, isExpanded }: ErrorColumnProps) 
 			<Text bold color="red" wrap="truncate">
 				{agent.name}
 			</Text>
-			<Text dimColor wrap="truncate">{error}</Text>
-			<Text dimColor wrap="truncate">Edit the file manually to fix.</Text>
+			<Text dimColor wrap="truncate">
+				{error}
+			</Text>
+			<Text dimColor wrap="truncate">
+				Edit the file manually to fix.
+			</Text>
 		</Box>
 	);
 }

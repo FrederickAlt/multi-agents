@@ -66,11 +66,12 @@ function formatContextFiles(parts: PromptParts): string {
 function formatSkills(parts: PromptParts, agentSkills?: string[]): string {
 	const allSkills = parts.skills ?? [];
 	// agentSkills: undefined → all skills; [] → none; ["a","b"] → filter
-	const filtered = agentSkills === undefined
-		? allSkills
-		: agentSkills.length === 0
-			? []
-			: allSkills.filter((s) => agentSkills.includes(s.name));
+	const filtered =
+		agentSkills === undefined
+			? allSkills
+			: agentSkills.length === 0
+				? []
+				: allSkills.filter((s) => agentSkills.includes(s.name));
 	if (filtered.length === 0) return "(none)";
 	return filtered.map((skill) => `- ${skill.name}${skill.description ? `: ${skill.description}` : ""}`).join("\n");
 }
@@ -93,11 +94,7 @@ export function buildTemplateValues(context: RenderContext): Record<string, stri
 }
 
 /** Render one template string by replacing {{variable}} placeholders. */
-export function renderTemplateString(
-	template: string,
-	values: Record<string, string>,
-	label: string,
-): string {
+export function renderTemplateString(template: string, values: Record<string, string>, label: string): string {
 	return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, rawName: string) => {
 		if (!REQUIRED_TEMPLATE_VARS.has(rawName)) {
 			throw new Error(`Unknown prompt variable ${match} in ${label}.`);
@@ -117,10 +114,7 @@ export function renderPromptTemplate(context: RenderContext): string {
 }
 
 /** Render the full prompt from the agent definition plus prompt-part fragments. */
-export function renderSubagentSystemPrompt(
-	context: RenderContext,
-	promptParts: PromptPartConfig[],
-): string {
+export function renderSubagentSystemPrompt(context: RenderContext, promptParts: PromptPartConfig[]): string {
 	const values = buildTemplateValues(context);
 	const main = renderPromptTemplate(context);
 
@@ -129,15 +123,14 @@ export function renderSubagentSystemPrompt(
 	// - [] → no parts included
 	// - ["name1", "name2"] → only matching parts
 	const agentParts = context.agent.prompt_parts;
-	const filteredParts = agentParts === undefined
-		? promptParts
-		: agentParts.length === 0
-			? []
-			: promptParts.filter((part) => agentParts.includes(part.name));
+	const filteredParts =
+		agentParts === undefined
+			? promptParts
+			: agentParts.length === 0
+				? []
+				: promptParts.filter((part) => agentParts.includes(part.name));
 
-	const parts = filteredParts.map((part) =>
-		renderTemplateString(part.systemPrompt, values, part.name),
-	);
+	const parts = filteredParts.map((part) => renderTemplateString(part.systemPrompt, values, part.name));
 	return [main, ...parts].join("\n\n");
 }
 
@@ -167,9 +160,7 @@ export function renderComposedAgentSystemPrompt(
 	options: SystemPromptCompositionOptions = {},
 ): string {
 	const prompt = renderSubagentSystemPrompt(context, promptParts);
-	return options.includeSubagentReportingNotice
-		? [prompt, SUBAGENT_REPORTING_NOTICE].join("\n\n")
-		: prompt;
+	return options.includeSubagentReportingNotice ? [prompt, SUBAGENT_REPORTING_NOTICE].join("\n\n") : prompt;
 }
 
 export function buildPromptPartsFromOptions(options: any): PromptParts {

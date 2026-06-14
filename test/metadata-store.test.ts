@@ -13,13 +13,13 @@
  * - Cleanup of Sub-agent session files
  * - Factory method (fromSessionManager)
  */
-import { existsSync, mkdirSync, rmSync, writeFileSync as wfs, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MetadataStore } from "../subagent/metadata.js";
-import type { MetadataFile, MetadataStoreContext, SubagentRecord } from "../subagent/metadata.js";
 import type { DebugLogger } from "../subagent/debug-logger.js";
+import type { MetadataFile, MetadataStoreContext, SubagentRecord } from "../subagent/metadata.js";
+import { MetadataStore } from "../subagent/metadata.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,7 +50,7 @@ function makeSpyDebugLogger(sink: Array<{ event: string }>): DebugLogger {
 	const create = (context: Record<string, unknown>): DebugLogger => ({
 		isEnabled: true,
 		child: (childContext) => create({ ...context, ...childContext }),
-		log: (level, event) => {
+		log: (_level, event) => {
 			sink.push({ event });
 		},
 		debug: (event) => create(context).log("debug", event),
@@ -76,7 +76,11 @@ describe("MetadataStore", () => {
 
 	afterEach(() => {
 		if (tempDir) {
-			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 
@@ -126,7 +130,11 @@ describe("MetadataStore", () => {
 			meta1.selectedMainAgent = "scout";
 
 			// Modify on disk behind the store's back
-			wfs(store.path, JSON.stringify({ version: 1, mainSessionId: "cached", records: [], selectedMainAgent: "worker" }), "utf-8");
+			wfs(
+				store.path,
+				JSON.stringify({ version: 1, mainSessionId: "cached", records: [], selectedMainAgent: "worker" }),
+				"utf-8",
+			);
 
 			// load() should still return cached copy (without selectedMainAgent)
 			const meta2 = store.load();
@@ -139,7 +147,11 @@ describe("MetadataStore", () => {
 			meta1.selectedMainAgent = "scout";
 
 			// Modify on disk
-			wfs(store.path, JSON.stringify({ version: 1, mainSessionId: "reload-test", records: [], selectedMainAgent: "worker" }), "utf-8");
+			wfs(
+				store.path,
+				JSON.stringify({ version: 1, mainSessionId: "reload-test", records: [], selectedMainAgent: "worker" }),
+				"utf-8",
+			);
 
 			// reload() should re-read from disk
 			const meta2 = store.reload();
@@ -443,7 +455,7 @@ describe("MetadataStore", () => {
 			const records = await Promise.all(allocs);
 
 			const ids = new Set(records.map((r) => r.id));
-			const names = new Set(records.map((r) => r.humanName));
+			const _names = new Set(records.map((r) => r.humanName));
 			expect(ids.size).toBe(31);
 			// Pool has 30 names; after exhausting pool, the 31st gets "Tom1"
 			const tom1 = records.find((r) => r.humanName === "Tom1");

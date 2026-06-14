@@ -1,9 +1,9 @@
 import React from "react";
 import { describe, expect, it } from "vitest";
-import { Board } from "../src/tui/components/Board.js";
 import { AgentRow } from "../src/tui/components/AgentRow.js";
-import { OptionColumn } from "../src/tui/components/OptionColumn.js";
+import { Board } from "../src/tui/components/Board.js";
 import { HelpFooter } from "../src/tui/components/HelpFooter.js";
+import { OptionColumn } from "../src/tui/components/OptionColumn.js";
 import { MODEL_OPTION_DEGRADED_STATUS } from "../src/tui/state/option-columns.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../src/tui/state/types.js";
 
@@ -45,6 +45,7 @@ function state(overrides: Partial<ConfigState> = {}): ConfigState {
 		statuses: new Map(),
 		scrollOffset: 0,
 		optionColumnScrollOffset: 0,
+		optionColumnItemOrder: null,
 		optionColumnFilter: "",
 		globalError: null,
 		...overrides,
@@ -89,9 +90,7 @@ describe("Board", () => {
 		// The scroll indicators appear above/below the agent rows when scrolling.
 		// With 0 scroll offset and all agents visible, no indicators.
 		// AgentRow components have AgentRow as their type (function component).
-		const agentNames = children
-			.map((c: any) => c?.props?.agent?.name)
-			.filter(Boolean);
+		const agentNames = children.map((c: any) => c?.props?.agent?.name).filter(Boolean);
 		expect(agentNames).toEqual(["default", "explorer", "coder"]);
 	});
 
@@ -117,9 +116,7 @@ describe("Board", () => {
 			});
 			const result = Board({ state: s }) as React.ReactElement;
 			const children = renderedChildren(result);
-			const agentNames = children
-				.map((c: any) => c?.props?.agent?.name)
-				.filter(Boolean);
+			const agentNames = children.map((c: any) => c?.props?.agent?.name).filter(Boolean);
 			expect(agentNames).toContain("default");
 		} finally {
 			if (origRows !== undefined) {
@@ -182,9 +179,7 @@ describe("Board", () => {
 			optionColumnScrollOffset: 0,
 			options: {
 				...options,
-				models: [
-					{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "claude" },
-				],
+				models: [{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "claude" }],
 			},
 			status: undefined,
 		}) as React.ReactElement;
@@ -301,9 +296,7 @@ describe("Board", () => {
 		});
 
 		const result = Board({ state: s }) as React.ReactElement;
-		const row = renderedChildren(result).find(
-			(c: any) => c?.props?.agent?.name === "default",
-		) as React.ReactElement;
+		const row = renderedChildren(result).find((c: any) => c?.props?.agent?.name === "default") as React.ReactElement;
 		const text = collectText(row);
 
 		expect(text).toContain("10");
@@ -433,9 +426,7 @@ describe("Board", () => {
 			});
 			const result = Board({ state: s }) as React.ReactElement;
 			const children = renderedChildren(result);
-			const agentNames = children
-				.map((c: any) => c?.props?.agent?.name)
-				.filter(Boolean);
+			const agentNames = children.map((c: any) => c?.props?.agent?.name).filter(Boolean);
 			expect(agentNames).toContain("default");
 		} finally {
 			if (origRows !== undefined) {

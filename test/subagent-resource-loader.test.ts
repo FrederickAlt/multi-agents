@@ -38,7 +38,10 @@ describe("Task sub-agent resource loading", () => {
 		process.env.PI_CODING_AGENT_DIR = agentDiscoveryDir;
 
 		// Seed a default root agent so before_agent_start can resolve the root.
-		writeFile(join(agentDiscoveryDir, "agents", "default.md"), `---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "default.md"),
+			`---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`,
+		);
 		constructedLoaders = [];
 		vi.resetModules();
 	});
@@ -54,7 +57,9 @@ describe("Task sub-agent resource loading", () => {
 	});
 
 	it("does not convert blank tools on a self-spawned agent into an empty tool whitelist", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "default.md"), `---
+		writeFile(
+			join(agentDiscoveryDir, "agents", "default.md"),
+			`---
 description: Default Root Agent
 depth: 1
 tools:
@@ -63,7 +68,8 @@ can_spawn:
 ---
 
 Default Root Agent
-`);
+`,
+		);
 
 		const fakeSession = {
 			messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
@@ -109,10 +115,13 @@ Default Root Agent
 		taskExtension(pi);
 
 		const sm = makeSessionManager(sessionDir, "root-session");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "base prompt",
-			systemPromptOptions: { cwd: projectDir },
-		}, { cwd: projectDir, sessionManager: sm });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "base prompt",
+				systemPromptOptions: { cwd: projectDir },
+			},
+			{ cwd: projectDir, sessionManager: sm },
+		);
 
 		const taskTool = tools.find((tool) => tool.name === "Task");
 		expect(taskTool).toBeDefined();
@@ -140,7 +149,9 @@ Default Root Agent
 
 	it("disables native context-file injection while keeping context available to {{context_files}}", async () => {
 		writeFile(join(projectDir, "AGENTS.md"), "PROJECT CONTEXT MARKER");
-		writeFile(join(agentDiscoveryDir, "agents", "contextreader.md"), `---
+		writeFile(
+			join(agentDiscoveryDir, "agents", "contextreader.md"),
+			`---
 description: Context reader
 depth: 1
 ---
@@ -149,7 +160,8 @@ Sub-agent prompt.
 
 Explicit context:
 {{context_files}}
-`);
+`,
+		);
 
 		const fakeSession = {
 			messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
@@ -193,10 +205,13 @@ Explicit context:
 
 		// Fire before_agent_start to trigger Task registration via the resolved policy
 		const sm = makeSessionManager(sessionDir, "root-session");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "base prompt",
-			systemPromptOptions: { cwd: projectDir },
-		}, { cwd: projectDir, sessionManager: sm });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "base prompt",
+				systemPromptOptions: { cwd: projectDir },
+			},
+			{ cwd: projectDir, sessionManager: sm },
+		);
 
 		const taskTool = tools.find((tool) => tool.name === "Task");
 		expect(taskTool).toBeDefined();

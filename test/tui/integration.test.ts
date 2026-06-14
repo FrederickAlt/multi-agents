@@ -4,15 +4,21 @@
  * Smoke tests for the full flow: scan agents, modify fields, verify write-back.
  */
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-import { scanAgents, readAgent, detectStaleItems } from "../../src/tui/file-io/read-agent.js";
-import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
 import { discoverAllAgentNames, discoverSkills } from "../../src/tui/discovery/options.js";
+import { detectStaleItems, readAgent, scanAgents } from "../../src/tui/file-io/read-agent.js";
+import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
 import { configReducer, createInitialState } from "../../src/tui/state/reducer.js";
-import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
+import type { AgentConfigState, DiscoveredOptions, OverlayState } from "../../src/tui/state/types.js";
+
+type CheckboxOverlayState = Extract<OverlayState, { type: "checkbox" }>;
+
+function checkboxOverlay(overlay: OverlayState | null): CheckboxOverlayState {
+	expect(overlay?.type).toBe("checkbox");
+	return overlay as CheckboxOverlayState;
+}
 
 let tempRoot: string;
 let agentsDir: string;
@@ -167,14 +173,7 @@ describe("Integration: scanAgents with discovery", () => {
 		const allNames = discoverAllAgentNames(tempRoot);
 		const discoveredSkills = discoverSkills(tempRoot);
 
-		detectStaleItems(
-			agents,
-			allNames,
-			[],
-			[],
-			discoveredSkills,
-			[],
-		);
+		detectStaleItems(agents, allNames, [], [], discoveredSkills, []);
 
 		const agentA = agents.find((a) => a.name === "agent-a")!;
 		const agentB = agents.find((a) => a.name === "agent-b")!;
@@ -216,7 +215,7 @@ describe("Integration: reducer + state flow", () => {
 			extensions: [],
 			models: [{ provider: "a", modelId: "c", displayName: "claude", canonicalRef: "c" }],
 			defaultModel: "claude",
-			modelDiscovery: { status: "ready", error: null },
+			modelDiscovery: { status: "ready" as const, error: null },
 			reasoningEfforts: ["low", "medium", "high"],
 			depths: [0, 1, 2],
 			canSpawn: ["a2"],
@@ -238,15 +237,15 @@ describe("Integration: reducer + state flow", () => {
 		// Open overlay on tools field on agent 2
 		state = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 1, fieldName: "tools" });
 		expect(state.overlay).not.toBeNull();
-		expect(state.overlay!.type).toBe("checkbox");
-		expect(state.overlay!.localSelection).toEqual(["read"]);
+		expect(checkboxOverlay(state.overlay).type).toBe("checkbox");
+		expect(checkboxOverlay(state.overlay).localSelection).toEqual(["read"]);
 
 		// Toggle checkbox
 		state = configReducer(state, { type: "TOGGLE_CHECKBOX", item: "read" });
-		expect(state.overlay!.localSelection).toEqual([]);
+		expect(checkboxOverlay(state.overlay).localSelection).toEqual([]);
 
 		state = configReducer(state, { type: "TOGGLE_CHECKBOX", item: "bash" });
-		expect(state.overlay!.localSelection).toEqual(["bash"]);
+		expect(checkboxOverlay(state.overlay).localSelection).toEqual(["bash"]);
 
 		// Close overlay
 		state = configReducer(state, { type: "CLOSE_OVERLAY" });
@@ -269,7 +268,7 @@ describe("Integration: inline write-only and non-inline overlay flows", () => {
 			extensions: [],
 			models: [{ provider: "p", modelId: "claude", displayName: "claude", canonicalRef: "claude" }],
 			defaultModel: "claude",
-			modelDiscovery: { status: "ready", error: null },
+			modelDiscovery: { status: "ready" as const, error: null },
 			reasoningEfforts: ["low", "medium", "high", "maximum"],
 			depths: [0, 1, 2],
 			canSpawn: [],
@@ -304,7 +303,6 @@ describe("Integration: inline write-only and non-inline overlay flows", () => {
 		expect(state.focus.fieldIndex).toBe(2);
 		expect(state.focus.optionItemIndex).toBe(0);
 
-
 		const updated = readAgent(filePath);
 		expect(updated.frontmatter?.reasoning_effort).toBe("high");
 	});
@@ -320,7 +318,7 @@ describe("Integration: inline write-only and non-inline overlay flows", () => {
 			extensions: ["ext"],
 			models: [{ provider: "p", modelId: "claude", displayName: "claude", canonicalRef: "claude" }],
 			defaultModel: "claude",
-			modelDiscovery: { status: "ready", error: null },
+			modelDiscovery: { status: "ready" as const, error: null },
 			reasoningEfforts: ["low", "medium", "high"],
 			depths: [0, 1, 2],
 			canSpawn: [],
@@ -336,7 +334,6 @@ describe("Integration: inline write-only and non-inline overlay flows", () => {
 		state = { ...state, focus: { ...state.focus, fieldIndex: 4 } }; // model
 
 		state = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
-		expect(state.overlay).not.toBeNull();
-		expect(state.overlay!.type).toBe("dropdown");
+		expect(state.overlay?.type).toBe("dropdown");
 	});
 });

@@ -15,14 +15,17 @@
  */
 
 import * as fs from "node:fs";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
-import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
+import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import { createAgentSession, type DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
+
+export type ResolvedModel = Pick<Model<any>, "id" | "provider"> & Partial<Model<any>>;
+
 import type { AgentConfig } from "./agents.js";
-import type { MetadataStore, SubagentRecord, TerminalOutcome } from "./metadata.js";
-import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
 import { readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
+import { type DebugLogger, makeNoopDebugLogger } from "./debug-logger.js";
+import type { SubagentRecord, TerminalOutcome } from "./metadata.js";
+import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
 
 export const ABORT_FINAL_SUMMARY_TIMEOUT_MS = 5 * 60 * 1000;
 export const ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS = 5 * 1000;
@@ -44,6 +47,16 @@ export interface AsyncRunResult {
 	contextUsage?: SubagentContextUsage;
 }
 
+export interface ManagedAgentSession {
+	dispose(): void;
+	getActiveToolNames(): string[];
+	subscribe(listener: (event: unknown) => void): () => void;
+	prompt(message: string, options?: { streamingBehavior?: "steer" }): unknown;
+	steer?: (message: string) => unknown;
+	abort(): unknown;
+	messages: unknown[];
+}
+
 // ---------------------------------------------------------------------------
 // Injectable adapter interfaces
 // ---------------------------------------------------------------------------
@@ -61,13 +74,13 @@ export interface SessionManagerProvider {
 export interface AgentSessionFactory {
 	create(config: {
 		cwd: string;
-		model: Model | undefined;
+		model: ResolvedModel | undefined;
 		tools: string[] | undefined;
 		resourceLoader: DefaultResourceLoader;
 		sessionManager: SessionManager;
 		thinkingLevel: ThinkingLevel | undefined;
 		modelRegistry?: any;
-	}): Promise<AgentSession>;
+	}): Promise<ManagedAgentSession>;
 }
 
 /**
@@ -77,9 +90,9 @@ export interface AgentSessionFactory {
 export interface ModelResolver {
 	resolve(
 		modelName: string | undefined,
-		fallback: Model | undefined,
+		fallback: ResolvedModel | undefined,
 		warnings: string[],
-	): Model | undefined;
+	): ResolvedModel | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +110,7 @@ export class PiSessionManagerProvider implements SessionManagerProvider {
 export class PiAgentSessionFactory implements AgentSessionFactory {
 	async create(config: {
 		cwd: string;
-		model: Model | undefined;
+		model: ResolvedModel | undefined;
 		tools: string[] | undefined;
 		resourceLoader: DefaultResourceLoader;
 		sessionManager: SessionManager;
@@ -106,7 +119,7 @@ export class PiAgentSessionFactory implements AgentSessionFactory {
 	}): Promise<AgentSession> {
 		const { session } = await createAgentSession({
 			cwd: config.cwd,
-			model: config.model,
+			model: config.model as Model<any> | undefined,
 			tools: config.tools,
 			resourceLoader: config.resourceLoader,
 			sessionManager: config.sessionManager,
@@ -129,24 +142,21 @@ export class PiModelResolver implements ModelResolver {
 
 	resolve(
 		modelName: string | undefined,
-		fallback: Model | undefined,
+		fallback: ResolvedModel | undefined,
 		warnings: string[],
-	): Model | undefined {
+	): ResolvedModel | undefined {
 		if (!modelName) return undefined;
 
-		const all: Model[] =
-			typeof this.modelRegistry.getAll === "function"
-				? this.modelRegistry.getAll()
-				: [];
+		const all: ResolvedModel[] = typeof this.modelRegistry.getAll === "function" ? this.modelRegistry.getAll() : [];
 
-		const hasAuth = (m: Model): boolean => {
+		const hasAuth = (m: ResolvedModel): boolean => {
 			if (typeof this.modelRegistry.hasConfiguredAuth !== "function") return true;
 			return this.modelRegistry.hasConfiguredAuth(m);
 		};
 
 		// ---- Step 1: Exact match by model ID ----
 		// Handles both bare IDs and slash-containing model IDs.
-		const exactById = all.filter((c: Model) => c.id === modelName);
+		const exactById = all.filter((c: ResolvedModel) => c.id === modelName);
 
 		if (exactById.length === 1) {
 			const model = exactById[0];
@@ -187,9 +197,7 @@ export class PiModelResolver implements ModelResolver {
 		}
 
 		// ---- Step 3: No match ----
-		warnings.push(
-			`Configured model "${modelName}" was not found; using the current/default model.`,
-		);
+		warnings.push(`Configured model "${modelName}" was not found; using the current/default model.`);
 		return fallback;
 	}
 }
@@ -205,9 +213,9 @@ export class PiModelResolver implements ModelResolver {
  * resource loader (which depends on the current agent and parent runtime).
  */
 export interface SessionSetupContext {
-	metadataStore: MetadataStore;
+	metadataStore: { ctx: { sessionDir: string }; upsertRecord(record: SubagentRecord): void };
 	cwd: string;
-	fallbackModel?: Model;
+	fallbackModel?: ResolvedModel;
 	modelResolver: ModelResolver;
 	/** The parent's ModelRegistry, so the child shares auth state and providers. */
 	modelRegistry?: any;
@@ -223,7 +231,7 @@ export interface SessionSetupContext {
 // ---------------------------------------------------------------------------
 
 export class SubagentSessionManager {
-	private openSessions = new Map<string, AgentSession>();
+	private openSessions = new Map<string, ManagedAgentSession>();
 	private runLocks = new Map<string, Promise<void>>();
 	private completedSessions = new Set<string>();
 	private asyncResults = new Map<string, AsyncRunResult>();
@@ -253,7 +261,7 @@ export class SubagentSessionManager {
 	// ---- Session tracking ----
 
 	/** Retrieve an open session by record ID, or undefined. */
-	getOpenSession(id: string): AgentSession | undefined {
+	getOpenSession(id: string): ManagedAgentSession | undefined {
 		return this.openSessions.get(id);
 	}
 
@@ -266,7 +274,7 @@ export class SubagentSessionManager {
 	 * Register an existing session in the open-sessions map.
 	 * Primarily for tests; production code uses getOrCreateSession().
 	 */
-	trackSession(id: string, session: AgentSession): void {
+	trackSession(id: string, session: ManagedAgentSession): void {
 		this.openSessions.set(id, session);
 	}
 
@@ -293,8 +301,12 @@ export class SubagentSessionManager {
 		agent: AgentConfig,
 		warnings: string[],
 		context: SessionSetupContext,
-	): Promise<AgentSession> {
-		const sessionLogger = this.logger.child({ component: "subagent_session_manager", recordId: record.id, agentType: agent?.name });
+	): Promise<ManagedAgentSession> {
+		const sessionLogger = this.logger.child({
+			component: "subagent_session_manager",
+			recordId: record.id,
+			agentType: agent?.name,
+		});
 		const existing = this.openSessions.get(record.id);
 		if (existing) {
 			sessionLogger.debug("session_reused", { hasOpenSession: true });
@@ -325,11 +337,7 @@ export class SubagentSessionManager {
 		// 2. Open or create Pi session manager
 		const sessionDir = metadataStore.ctx.sessionDir;
 		sessionLogger.debug("session_manager_open", { sessionDir, existingFile: !!record.sessionFile });
-		const piSessionManager = this.sessionManagerProvider.openOrCreate(
-			record.sessionFile,
-			sessionDir,
-			cwd,
-		);
+		const piSessionManager = this.sessionManagerProvider.openOrCreate(record.sessionFile, sessionDir, cwd);
 
 		// 3. Persist session file back to the record
 		record.sessionFile = piSessionManager.getSessionFile() ?? record.sessionFile;
@@ -341,7 +349,7 @@ export class SubagentSessionManager {
 		sessionLogger.debug("session_model_resolved", { modelHint: model?.id || model?.provider || "default" });
 
 		// 5. Create agent session (pass parent's modelRegistry for shared auth)
-		let session: AgentSession;
+		let session: ManagedAgentSession;
 		try {
 			session = await this.agentSessionFactory.create({
 				cwd,
@@ -353,7 +361,9 @@ export class SubagentSessionManager {
 				modelRegistry,
 			});
 		} catch (error) {
-			sessionLogger.error("session_create_failed", { error: error instanceof Error ? error.message : String(error) });
+			sessionLogger.error("session_create_failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw error;
 		}
 		sessionLogger.info("session_created", { sessionFile: record.sessionFile, hasTools: !!agent.tools });
@@ -368,7 +378,11 @@ export class SubagentSessionManager {
 					missing += 1;
 				}
 			}
-			sessionLogger.debug("session_tools_checked", { requestedTools: agent.tools.length, availableTools: active.size, missingTools: missing });
+			sessionLogger.debug("session_tools_checked", {
+				requestedTools: agent.tools.length,
+				availableTools: active.size,
+				missingTools: missing,
+			});
 		}
 
 		// 7. Subscribe to agent_end to update metadata timestamp and mark session completion.
@@ -552,11 +566,7 @@ export class SubagentSessionManager {
 	 * This keeps completion, result storage, state transitions, and
 	 * session disposal in one place instead of callers.
 	 */
-	finalizeAsyncRun(
-		id: string,
-		result: AsyncRunResult,
-		options?: { allowOverwrite?: boolean },
-	): void {
+	finalizeAsyncRun(id: string, result: AsyncRunResult, options?: { allowOverwrite?: boolean }): void {
 		this._finalizeAsyncRun(id, result, {
 			allowOverwrite: options?.allowOverwrite,
 		});
@@ -598,7 +608,10 @@ export class SubagentSessionManager {
 		return this.asyncRunLifecycle.get(id);
 	}
 
-	private _shouldStoreRunResult(id: string, options: { allowOverwrite?: boolean; source?: "task-controller" | "soft-kill" | "hard-abort" } = {}): boolean {
+	private _shouldStoreRunResult(
+		id: string,
+		options: { allowOverwrite?: boolean; source?: "task-controller" | "soft-kill" | "hard-abort" } = {},
+	): boolean {
 		const state = this._runLifecycleState(id);
 		if (state === "completed") return false;
 		if (!options.allowOverwrite && this.killInProgress.has(id)) return false;
@@ -610,7 +623,10 @@ export class SubagentSessionManager {
 		}
 		if (!options.allowOverwrite && this.asyncResults.has(id)) {
 			const existing = this.asyncResults.get(id);
-			if ((options.source === undefined || options.source === "task-controller") && existing?.terminalOutcome === "abort_request_failed") {
+			if (
+				(options.source === undefined || options.source === "task-controller") &&
+				existing?.terminalOutcome === "abort_request_failed"
+			) {
 				return true;
 			}
 			return false;
@@ -664,12 +680,13 @@ export class SubagentSessionManager {
 			allowOverwrite: options.allowOverwrite,
 		});
 		const session = this.openSessions.get(id);
-		const resultWithContextUsage: AsyncRunResult = result.contextUsage !== undefined
-			? result
-			: {
-				...result,
-				contextUsage: readSubagentContextUsage(session),
-			};
+		const resultWithContextUsage: AsyncRunResult =
+			result.contextUsage !== undefined
+				? result
+				: {
+						...result,
+						contextUsage: readSubagentContextUsage(session),
+					};
 		this.storeAsyncResult(id, resultWithContextUsage);
 		this.completedSessions.add(id);
 		this.asyncRunLifecycle.set(id, "completed");
@@ -723,11 +740,11 @@ export class SubagentSessionManager {
 		logger.info("session_send_kill_started", { timeoutMinutes });
 
 		const sendFinishRequest = (): Promise<unknown> => {
-			const steer = (session as any).steer;
+			const steer = session.steer;
 			if (typeof steer === "function") {
 				return Promise.resolve(steer.call(session, killMessage));
 			}
-			return Promise.resolve(session.prompt(killMessage, { streamingBehavior: "steer" } as any));
+			return Promise.resolve(session.prompt(killMessage, { streamingBehavior: "steer" }));
 		};
 
 		sendFinishRequest().then(
@@ -759,7 +776,9 @@ export class SubagentSessionManager {
 			},
 			(error: any) => {
 				if (this.asyncRunLifecycle.get(id) === "completed" || this.asyncRunLifecycle.get(id) === "hard-aborting") {
-					logger.debug("session_send_kill_prompt_failure_ignored_after_abort", { state: this._runLifecycleState(id) });
+					logger.debug("session_send_kill_prompt_failure_ignored_after_abort", {
+						state: this._runLifecycleState(id),
+					});
 					return;
 				}
 				const contextUsage = readSubagentContextUsage(session);
@@ -787,10 +806,7 @@ export class SubagentSessionManager {
 	 * for runtimes that expose setActiveToolsByName(); otherwise the prompt text
 	 * still explicitly forbids tools and the caller keeps the force-abort fallback.
 	 */
-	async requestAbortSummary(
-		id: string,
-		timeoutMs = ABORT_FINAL_SUMMARY_TIMEOUT_MS,
-	): Promise<AbortSummaryResult> {
+	async requestAbortSummary(id: string, timeoutMs = ABORT_FINAL_SUMMARY_TIMEOUT_MS): Promise<AbortSummaryResult> {
 		const session = this.openSessions.get(id) as any;
 		const existingResult = this.asyncResults.get(id);
 		if (!session || (existingResult && existingResult.terminalOutcome !== "abort_request_failed")) {
@@ -811,12 +827,14 @@ export class SubagentSessionManager {
 			cancelGraceMs: ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS,
 		});
 
-		const sleep = (ms: number) => new Promise<void>((resolve) => {
-			setTimeout(resolve, ms);
-		});
-		const isAlreadyProcessing = (error: unknown) => /already processing|still processing|currently processing/i.test(
-			error instanceof Error ? error.message : String(error),
-		);
+		const sleep = (ms: number) =>
+			new Promise<void>((resolve) => {
+				setTimeout(resolve, ms);
+			});
+		const isAlreadyProcessing = (error: unknown) =>
+			/already processing|still processing|currently processing/i.test(
+				error instanceof Error ? error.message : String(error),
+			);
 
 		try {
 			// AgentSession.abort() requests model/agent cancellation and waits for idle;
@@ -834,16 +852,28 @@ export class SubagentSessionManager {
 				}
 				const unsubscribe = session.subscribe((event: any) => {
 					if (event.type === "agent_end") {
-						try { unsubscribe(); } catch { /* best-effort listener cleanup */ }
+						try {
+							unsubscribe();
+						} catch {
+							/* best-effort listener cleanup */
+						}
 						resolve();
 					}
 				});
 				stopObservingCancelEnd = () => {
-					try { unsubscribe(); } catch { /* best-effort listener cleanup */ }
+					try {
+						unsubscribe();
+					} catch {
+						/* best-effort listener cleanup */
+					}
 				};
 			});
 			if (typeof session.abortBash === "function") {
-				try { session.abortBash(); } catch { /* best-effort bash/tool cancellation */ }
+				try {
+					session.abortBash();
+				} catch {
+					/* best-effort bash/tool cancellation */
+				}
 			}
 			if (typeof session.abort === "function") {
 				try {
@@ -858,15 +888,14 @@ export class SubagentSessionManager {
 					});
 				}
 			}
-			await Promise.race([
-				sessionEndPromise,
-				sleep(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS),
-			]);
+			await Promise.race([sessionEndPromise, sleep(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS)]);
 			stopObservingCancelEnd?.();
 			await Promise.resolve();
 
 			if (!toolOverrideApplied && typeof getActiveToolNames === "function") {
-				logger.warn("session_abort_summary_no_tool_override", { activeToolCount: getActiveToolNames.call(session).length });
+				logger.warn("session_abort_summary_no_tool_override", {
+					activeToolCount: getActiveToolNames.call(session).length,
+				});
 			}
 
 			let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -919,7 +948,7 @@ export class SubagentSessionManager {
 						warnings: [],
 						abortReason: "final_summary",
 						terminalOutcome: "aborted",
-						terminalError: extracted.source === "diagnostic" ? extracted.text : undefined,
+						terminalError: undefined,
 						contextUsage: preAbortContextUsage,
 					},
 					{ allowOverwrite: true, source: "hard-abort" },
@@ -970,7 +999,11 @@ export class SubagentSessionManager {
 			? this.abortContextUsageSnapshots.get(id)
 			: readSubagentContextUsage(session);
 
-		try { session.abort(); } catch { /* best-effort */ }
+		try {
+			session.abort();
+		} catch {
+			/* best-effort */
+		}
 
 		this._finalizeAsyncRun(
 			id,

@@ -1,6 +1,6 @@
-import React from "react";
 import { Writable } from "node:stream";
-import { Box, Text, render } from "ink";
+import { Box, render, Text } from "ink";
+import type React from "react";
 import { describe, expect, it } from "vitest";
 import { Board } from "../../src/tui/components/Board.js";
 import { HelpFooter } from "../../src/tui/components/HelpFooter.js";
@@ -11,12 +11,10 @@ import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../../src
 const options: DiscoveredOptions = {
 	tools: ["read", "bash", "write", "edit", "grep", "find", "sed", "awk", "cat", "ls", "pwd"],
 	extensions: [],
-	models: [
-		{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "anthropic/claude" },
-	],
+	models: [{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "anthropic/claude" }],
 	defaultModel: "Claude",
 	modelDiscovery: {
-		status: "ready",
+		status: "ready" as const,
 		error: null,
 	},
 	reasoningEfforts: ["low", "medium", "high", "maximum"],
@@ -160,7 +158,10 @@ function emulateTerminal(raw: string, rows: number, columns: number): string {
 		if (final === "D") column = Math.max(0, column - amount);
 	}
 
-	return screen.map((line) => line.join("").trimEnd()).join("\n").trimEnd();
+	return screen
+		.map((line) => line.join("").trimEnd())
+		.join("\n")
+		.trimEnd();
 }
 
 async function renderSequenceToTerminalText(
@@ -173,7 +174,7 @@ async function renderSequenceToTerminalText(
 	Object.defineProperty(process.stdout, "rows", { value: rows, configurable: true });
 	Object.defineProperty(process.stdout, "columns", { value: columns, configurable: true });
 	const app = render(elements[0], {
-		stdout: stdout as NodeJS.WriteStream,
+		stdout: stdout as unknown as NodeJS.WriteStream,
 		debug: false,
 		exitOnCtrlC: false,
 		patchConsole: false,
@@ -232,7 +233,7 @@ describe("StaleCleanupOverlay", () => {
 	it("covers the board behind the centered confirmation popup", async () => {
 		const text = await renderSequenceToTerminalText(
 			[
-				<Box width={80} height={12}>
+				<Box key="board-with-stale-overlay" width={80} height={12}>
 					<Board
 						state={state({
 							agents: [
@@ -344,9 +345,7 @@ describe("renderToText", () => {
 					focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 0 },
 					expandedAgentIndex: 0,
 					optionColumnScrollOffset: 5,
-					statuses: new Map([
-						["/tmp/coder.md", { type: "saved", message: "Saved coder.md", timestamp: 1 }],
-					]),
+					statuses: new Map([["/tmp/coder.md", { type: "saved", message: "Saved coder.md", timestamp: 1 }]]),
 				})}
 			/>,
 			{ columns: 80, rows: 30 },
@@ -376,23 +375,26 @@ describe("renderToText", () => {
 				<HelpFooter />
 			</Box>
 		);
-		const makeState = (overrides: Partial<ConfigState>) => state({
-			agents,
-			options: scenarioOptions,
-			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
-			expandedAgentIndex: null,
-			optionColumnScrollOffset: 2,
-			...overrides,
-		});
+		const makeState = (overrides: Partial<ConfigState>) =>
+			state({
+				agents,
+				options: scenarioOptions,
+				focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
+				expandedAgentIndex: null,
+				optionColumnScrollOffset: 2,
+				...overrides,
+			});
 
 		const finalScreen = await renderSequenceToTerminalText(
 			[
 				shell(makeState({ expandedAgentIndex: 0 })),
 				shell(makeState({ expandedAgentIndex: null })),
-				shell(makeState({
-					focus: { agentIndex: 1, fieldIndex: 2, optionItemIndex: 1 },
-					expandedAgentIndex: null,
-				})),
+				shell(
+					makeState({
+						focus: { agentIndex: 1, fieldIndex: 2, optionItemIndex: 1 },
+						expandedAgentIndex: null,
+					}),
+				),
 			],
 			{ columns, rows },
 		);

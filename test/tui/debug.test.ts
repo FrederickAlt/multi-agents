@@ -1,12 +1,8 @@
 import fs from "node:fs";
-import path from "node:path";
 import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-	formatAgentConfigUsage,
-	parseAgentConfigArgs,
-	prepareDebugAgentDir,
-} from "../../src/tui/debug.js";
+import { formatAgentConfigUsage, parseAgentConfigArgs, prepareDebugAgentDir } from "../../src/tui/debug.js";
 import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
 
 let tempRoot: string;

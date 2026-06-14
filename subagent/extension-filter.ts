@@ -34,7 +34,9 @@ export function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): 
 				path.basename(extension.path ?? ""),
 				path.basename(extension.resolvedPath ?? ""),
 				path.basename(path.dirname(extension.resolvedPath ?? "")),
-			].filter(Boolean).map(String);
+			]
+				.filter(Boolean)
+				.map(String);
 			// Keep this sub-agent's inline runtime extension. It installs the
 			// before_agent_start hook that renders agent templates and prompt parts;
 			// filtering it out makes children fall back to Pi's default prompt.
@@ -46,7 +48,8 @@ export function filterExtensionsForAgent(agent: AgentConfig, selfPath: string): 
 				sameExtensionPath(extensionPath, canonicalSelfPath) ||
 				sameExtensionPath(resolvedPath, canonicalSelfPath) ||
 				candidates.some(matchesProtectedMultiAgentExtension)
-			) return true;
+			)
+				return true;
 			if (!allowed) return true; // undefined → unrestricted
 			if (allowed.length === 0) return false; // [] → none
 			return allowed.some((name) => candidates.some((candidate) => candidate.includes(name)));

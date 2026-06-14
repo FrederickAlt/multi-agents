@@ -1,7 +1,4 @@
-export const PROTECTED_MULTI_AGENT_EXTENSION_NAMES = [
-	"multi-agents",
-	"persistent-task-subagents",
-] as const;
+export const PROTECTED_MULTI_AGENT_EXTENSION_NAMES = ["multi-agents", "persistent-task-subagents"] as const;
 
 export function isProtectedMultiAgentExtensionName(value: string | undefined): boolean {
 	if (!value) return false;

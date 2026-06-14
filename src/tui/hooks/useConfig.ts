@@ -1,19 +1,6 @@
-import { useReducer, useCallback, useEffect, useRef } from "react";
-import type {
-	AgentConfigState,
-	DiscoveredOptions,
-	OptionColumnFieldName,
-} from "../state/types.js";
-import {
-	configReducer,
-	createInitialState,
-	applyToggle,
-	computeCheckboxSaveValue,
-	resolveCheckboxSelection,
-} from "../state/reducer.js";
-import { useOptionDiscovery } from "./useOptionDiscovery.js";
-import { writeFieldToFile } from "../file-io/write-agent.js";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { modelDisplayNameToCanonicalRef } from "../discovery/options.js";
+import { writeFieldToFile } from "../file-io/write-agent.js";
 import {
 	applyOptionColumnItemOrder,
 	getFieldName,
@@ -23,11 +10,20 @@ import {
 	getOptionColumnSelectedValues,
 	isCheckboxOptionColumnField,
 	isOptionColumnDisabledForAgent,
-	isOptionColumnItemDisabled,
 	isOptionColumnField,
-	MODEL_OPTION_LOADING_ITEM,
+	isOptionColumnItemDisabled,
 	MODEL_OPTION_DEGRADED_STATUS,
+	MODEL_OPTION_LOADING_ITEM,
 } from "../state/option-columns.js";
+import {
+	applyToggle,
+	computeCheckboxSaveValue,
+	configReducer,
+	createInitialState,
+	resolveCheckboxSelection,
+} from "../state/reducer.js";
+import type { AgentConfigState, DiscoveredOptions, OptionColumnFieldName } from "../state/types.js";
+import { useOptionDiscovery } from "./useOptionDiscovery.js";
 
 /**
  * Central state hook for the Agent Configuration TUI.
@@ -52,31 +48,16 @@ export function computeInlineCheckboxSaveValue(
 	item: string,
 ): string[] | undefined {
 	const typedField = fieldName as OptionColumnFieldName;
-	const availableItems = getOptionColumnAvailableItems(
-		options,
-		typedField,
-		agent.name,
-		agent,
-	);
-	const selectedValues = getOptionColumnSelectedValues(
-		agent,
-		options,
-		typedField,
-		agent.name,
-	);
-	if (isOptionColumnDisabledForAgent(agent, typedField) || isOptionColumnItemDisabled(agent, options, typedField, item)) {
+	const availableItems = getOptionColumnAvailableItems(options, typedField, agent.name, agent);
+	const selectedValues = getOptionColumnSelectedValues(agent, options, typedField, agent.name);
+	if (
+		isOptionColumnDisabledForAgent(agent, typedField) ||
+		isOptionColumnItemDisabled(agent, options, typedField, item)
+	) {
 		return computeCheckboxSaveValue(selectedValues, availableItems);
 	}
-	const { localSelection, wasImplicit } = resolveCheckboxSelection(
-		selectedValues,
-		availableItems,
-	);
-	const { localSelection: newSelection } = applyToggle(
-		localSelection,
-		wasImplicit,
-		availableItems,
-		item,
-	);
+	const { localSelection, wasImplicit } = resolveCheckboxSelection(selectedValues, availableItems);
+	const { localSelection: newSelection } = applyToggle(localSelection, wasImplicit, availableItems, item);
 	return computeCheckboxSaveValue(newSelection, availableItems);
 }
 
@@ -200,12 +181,9 @@ export function useConfig() {
 	}, []);
 
 	// Overlay management
-	const openOverlay = useCallback(
-		(agentIndex: number, fieldName: string) => {
-			dispatch({ type: "OPEN_OVERLAY", agentIndex, fieldName });
-		},
-		[],
-	);
+	const openOverlay = useCallback((agentIndex: number, fieldName: string) => {
+		dispatch({ type: "OPEN_OVERLAY", agentIndex, fieldName });
+	}, []);
 
 	const closeOverlay = useCallback(() => {
 		dispatch({ type: "CLOSE_OVERLAY" });
@@ -246,8 +224,7 @@ export function useConfig() {
 			if (!staleValues || staleValues.length === 0) continue;
 
 			const staleSet = new Set(staleValues.map(String));
-			const nextValue = normalizeStringList(frontmatter[field])
-				.filter((value) => !staleSet.has(value));
+			const nextValue = normalizeStringList(frontmatter[field]).filter((value) => !staleSet.has(value));
 			const result = writeFieldToFile(agent.filePath, field, nextValue);
 			if (!result.success) {
 				dispatch({
@@ -284,52 +261,55 @@ export function useConfig() {
 		dispatch({ type: "EXPAND_WITHOUT_STALE_CHECK", agentIndex: overlay.agentIndex });
 	}, [state.overlay, state.agents]);
 
-	const saveFieldValue = useCallback((
-		agent: AgentConfigState,
-		agentIndex: number,
-		fieldName: string,
-		newValue: string[] | string | number | undefined,
-	) => {
-		dispatch({
-			type: "SAVE_COMPLETE",
-			agentIndex,
-			status: { type: "saving", message: "Saving...", timestamp: Date.now() },
-		});
+	const saveFieldValue = useCallback(
+		(
+			agent: AgentConfigState,
+			agentIndex: number,
+			fieldName: string,
+			newValue: string[] | string | number | undefined,
+		) => {
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex,
+				status: { type: "saving", message: "Saving...", timestamp: Date.now() },
+			});
 
-		const result = writeFieldToFile(agent.filePath, fieldName, newValue);
+			const result = writeFieldToFile(agent.filePath, fieldName, newValue);
 
-		if (result.success) {
-			if (result.frontmatter) {
+			if (result.success) {
+				if (result.frontmatter) {
+					dispatch({
+						type: "UPDATE_AGENT_FRONTMATTER",
+						agentIndex,
+						frontmatter: result.frontmatter,
+						staleItems: agent.staleItems,
+					});
+				}
+
 				dispatch({
-					type: "UPDATE_AGENT_FRONTMATTER",
+					type: "SAVE_COMPLETE",
 					agentIndex,
-					frontmatter: result.frontmatter,
-					staleItems: agent.staleItems,
+					status: {
+						type: "saved",
+						message: `Saved ${agent.name}.md`,
+						timestamp: Date.now(),
+					},
 				});
+				return;
 			}
 
 			dispatch({
 				type: "SAVE_COMPLETE",
 				agentIndex,
 				status: {
-					type: "saved",
-					message: `Saved ${agent.name}.md`,
+					type: "error",
+					message: `Save failed: ${result.error}`,
 					timestamp: Date.now(),
 				},
 			});
-			return;
-		}
-
-		dispatch({
-			type: "SAVE_COMPLETE",
-			agentIndex,
-			status: {
-				type: "error",
-				message: `Save failed: ${result.error}`,
-				timestamp: Date.now(),
-			},
-		});
-	}, []);
+		},
+		[],
+	);
 
 	// Immediate save on checkbox toggle: write to file, then update local state.
 	//
@@ -339,75 +319,71 @@ export function useConfig() {
 	// reflected).  In practice synchronous FS writes and React's batching
 	// make this extremely unlikely, but a production fix would use a ref to
 	// track the latest overlay state.
-	const instantSaveCheckbox = useCallback((item: string) => {
-		const overlay = state.overlay;
-		if (!overlay || overlay.type !== "checkbox") return;
+	const instantSaveCheckbox = useCallback(
+		(item: string) => {
+			const overlay = state.overlay;
+			if (!overlay || overlay.type !== "checkbox") return;
 
-		const agent = state.agents[overlay.agentIndex];
-		if (!agent) return;
+			const agent = state.agents[overlay.agentIndex];
+			if (!agent) return;
 
-		// Compute the new selection via the shared pure helper
-		const { localSelection: newSelection } = applyToggle(
-			overlay.localSelection,
-			overlay.wasImplicit,
-			overlay.availableItems,
-			item,
-		);
+			// Compute the new selection via the shared pure helper
+			const { localSelection: newSelection } = applyToggle(
+				overlay.localSelection,
+				overlay.wasImplicit,
+				overlay.availableItems,
+				item,
+			);
 
-		// Determine save value using tri-state logic
-		const newValue = computeCheckboxSaveValue(
-			newSelection,
-			overlay.availableItems,
-		);
+			// Determine save value using tri-state logic
+			const newValue = computeCheckboxSaveValue(newSelection, overlay.availableItems);
 
-		// Save to file immediately
-		dispatch({
-			type: "SAVE_COMPLETE",
-			agentIndex: overlay.agentIndex,
-			status: { type: "saving", message: "Saving...", timestamp: Date.now() },
-		});
+			// Save to file immediately
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: overlay.agentIndex,
+				status: { type: "saving", message: "Saving...", timestamp: Date.now() },
+			});
 
-		const result = writeFieldToFile(
-			agent.filePath,
-			overlay.fieldName,
-			newValue,
-		);
+			const result = writeFieldToFile(agent.filePath, overlay.fieldName, newValue);
 
-		if (result.success) {
-			// Only update UI state after a successful write — no divergence.
-			// Use result.frontmatter to avoid a separate readAgent re-read.
-			if (result.frontmatter) {
+			if (result.success) {
+				// Only update UI state after a successful write — no divergence.
+				// Use result.frontmatter to avoid a separate readAgent re-read.
+				if (result.frontmatter) {
+					dispatch({
+						type: "UPDATE_AGENT_FRONTMATTER",
+						agentIndex: overlay.agentIndex,
+						frontmatter: result.frontmatter,
+						staleItems: agent.staleItems,
+					});
+				}
+
+				toggleCheckbox(item);
+
 				dispatch({
-					type: "UPDATE_AGENT_FRONTMATTER",
+					type: "SAVE_COMPLETE",
 					agentIndex: overlay.agentIndex,
-					frontmatter: result.frontmatter,
-					staleItems: agent.staleItems,
+					status: {
+						type: "saved",
+						message: `Saved ${agent.name}.md`,
+						timestamp: Date.now(),
+					},
+				});
+			} else {
+				dispatch({
+					type: "SAVE_COMPLETE",
+					agentIndex: overlay.agentIndex,
+					status: {
+						type: "error",
+						message: `Save failed: ${result.error}`,
+						timestamp: Date.now(),
+					},
 				});
 			}
-
-			toggleCheckbox(item);
-
-			dispatch({
-				type: "SAVE_COMPLETE",
-				agentIndex: overlay.agentIndex,
-				status: {
-					type: "saved",
-					message: `Saved ${agent.name}.md`,
-					timestamp: Date.now(),
-				},
-			});
-		} else {
-			dispatch({
-				type: "SAVE_COMPLETE",
-				agentIndex: overlay.agentIndex,
-				status: {
-					type: "error",
-					message: `Save failed: ${result.error}`,
-					timestamp: Date.now(),
-				},
-			});
-		}
-	}, [state.overlay, state.agents, toggleCheckbox]);
+		},
+		[state.overlay, state.agents, toggleCheckbox],
+	);
 
 	const selectFocusedOption = useCallback(() => {
 		const agent = state.agents[state.focus.agentIndex];
@@ -417,13 +393,7 @@ export function useConfig() {
 		if (!isOptionColumnField(fieldName)) return;
 
 		const items = applyOptionColumnItemOrder(
-			getOptionColumnItems(
-				agent,
-				state.options,
-				fieldName,
-				agent.name,
-				state.optionColumnFilter,
-			),
+			getOptionColumnItems(agent, state.options, fieldName, agent.name, state.optionColumnFilter),
 			state.optionColumnItemOrder,
 			state.focus.agentIndex,
 			fieldName,
@@ -431,17 +401,15 @@ export function useConfig() {
 		);
 		const item = items[state.focus.optionItemIndex];
 		if (item === undefined) return;
-		if (isOptionColumnDisabledForAgent(agent, fieldName) || isOptionColumnItemDisabled(agent, state.options, fieldName, item)) {
+		if (
+			isOptionColumnDisabledForAgent(agent, fieldName) ||
+			isOptionColumnItemDisabled(agent, state.options, fieldName, item)
+		) {
 			return;
 		}
 
 		if (isCheckboxOptionColumnField(fieldName)) {
-			const nextValue = computeInlineCheckboxSaveValue(
-				state.options,
-				agent,
-				fieldName,
-				item,
-			);
+			const nextValue = computeInlineCheckboxSaveValue(state.options, agent, fieldName, item);
 			saveFieldValue(agent, state.focus.agentIndex, fieldName, nextValue);
 			return;
 		}
@@ -544,10 +512,7 @@ export function useConfig() {
 		}
 		if (overlay.fieldName === "model") {
 			// Map display name to canonical runtime reference
-			const ref = modelDisplayNameToCanonicalRef(
-				overlay.localSelected,
-				state.options.models,
-			);
+			const ref = modelDisplayNameToCanonicalRef(overlay.localSelected, state.options.models);
 			if (ref) {
 				newValue = ref;
 			} else {
@@ -573,11 +538,7 @@ export function useConfig() {
 		});
 
 		// Write to file
-		const result = writeFieldToFile(
-			agent.filePath,
-			overlay.fieldName,
-			newValue,
-		);
+		const result = writeFieldToFile(agent.filePath, overlay.fieldName, newValue);
 
 		if (result.success) {
 			// Use result.frontmatter to avoid a separate readAgent re-read

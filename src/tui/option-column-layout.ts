@@ -1,8 +1,5 @@
+import { MODEL_OPTION_DEGRADED_STATUS, MODEL_OPTION_LOADING_ITEM } from "./state/option-columns.js";
 import { OPTION_COLUMN_WIDTH } from "./state/types.js";
-import {
-	MODEL_OPTION_DEGRADED_STATUS,
-	MODEL_OPTION_LOADING_ITEM,
-} from "./state/option-columns.js";
 
 export const OPTION_COLUMN_HORIZONTAL_CHROME = 4; // border left/right + paddingX left/right
 
@@ -40,19 +37,8 @@ function displayWidth(text: string): number {
 	return Array.from(text).length;
 }
 
-function formatItemText(
-	item: string,
-	isCheckbox: boolean,
-	selectedSet: Set<string>,
-	staleSet: Set<string>,
-): string {
-	const mark = isCheckbox
-		? selectedSet.has(item)
-			? "☑"
-			: "☐"
-		: selectedSet.has(item)
-			? "●"
-			: "○";
+function formatItemText(item: string, isCheckbox: boolean, selectedSet: Set<string>, staleSet: Set<string>): string {
+	const mark = isCheckbox ? (selectedSet.has(item) ? "☑" : "☐") : selectedSet.has(item) ? "●" : "○";
 	return `> ${mark} ${item}${staleSet.has(item) ? " (missing)" : ""}`;
 }
 
@@ -71,8 +57,7 @@ export function getOptionColumnWidth({
 	staleItems = [],
 	filterText,
 }: OptionColumnWidthArgs): number {
-	const effectiveSelectedValues = selectedValues ??
-		(selectedValueProp !== undefined ? [selectedValueProp] : []);
+	const effectiveSelectedValues = selectedValues ?? (selectedValueProp !== undefined ? [selectedValueProp] : []);
 	const selectedSet = new Set(effectiveSelectedValues);
 	const staleSet = new Set(staleItems);
 	const lines = [getOptionColumnLabel(fieldName)];

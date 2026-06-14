@@ -35,7 +35,9 @@ function createFakePi() {
 		},
 		getFlag: (name: string) => flags.get(name),
 		getActiveTools: () => [...activeTools],
-		setActiveTools: (names: string[]) => { activeTools = [...names]; },
+		setActiveTools: (names: string[]) => {
+			activeTools = [...names];
+		},
 		getAllTools: () => [...allTools],
 	} as any;
 	return { pi, handlers, commands };
@@ -52,13 +54,17 @@ describe("integrated dump-prompt command", () => {
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 
 		// Write the explorer agent matching expected test assertions
-		writeFileSync(join(agentDir, "agents", "explorer.md"), `---
+		writeFileSync(
+			join(agentDir, "agents", "explorer.md"),
+			`---
 description: Fast codebase recon
 depth: 1
 ---
 
 You are a scout.
-`, "utf-8");
+`,
+			"utf-8",
+		);
 	});
 
 	afterEach(() => {
@@ -74,7 +80,11 @@ You are a scout.
 		const ctx = {
 			cwd: tempDir,
 			sessionManager: makeSessionManager(tempDir, "selected-dump-session"),
-			ui: { notify: (message: string) => { notification = message; } },
+			ui: {
+				notify: (message: string) => {
+					notification = message;
+				},
+			},
 			newSession: async () => ({ cancelled: true }),
 		};
 
@@ -94,7 +104,11 @@ You are a scout.
 			cwd: tempDir,
 			sessionManager: makeSessionManager(tempDir, "clear-provider-dump-session"),
 			getSystemPrompt: () => "Stale Default Provider Prompt",
-			ui: { notify: (message: string) => { notification = message; } },
+			ui: {
+				notify: (message: string) => {
+					notification = message;
+				},
+			},
 			newSession: async () => ({ cancelled: true }),
 		};
 

@@ -80,10 +80,7 @@ function collapseRepeatedFrame(value: string): string {
  * terminal frame as plain text. Useful for inspecting layout regressions from
  * tests, scripts, or an automated coding agent's shell output.
  */
-export async function renderToText(
-	element: React.ReactNode,
-	options: RenderToTextOptions = {},
-): Promise<string> {
+export async function renderToText(element: React.ReactNode, options: RenderToTextOptions = {}): Promise<string> {
 	const columns = options.columns ?? 120;
 	const rows = options.rows ?? 30;
 	const waitMs = options.waitMs ?? 30;
@@ -92,7 +89,7 @@ export async function renderToText(
 	const restoreRows = patchStdoutDimension("rows", rows);
 
 	const app = render(element, {
-		stdout: stdout as NodeJS.WriteStream,
+		stdout: stdout as unknown as NodeJS.WriteStream,
 		debug: true,
 		exitOnCtrlC: false,
 		patchConsole: false,

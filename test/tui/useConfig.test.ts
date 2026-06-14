@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 import { computeInlineCheckboxSaveValue } from "../../src/tui/hooks/useConfig.js";
+import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
 function makeAgent(overrides: Partial<AgentConfigState> = {}): AgentConfigState {
 	return {
@@ -15,14 +15,13 @@ function makeAgent(overrides: Partial<AgentConfigState> = {}): AgentConfigState 
 	};
 }
 
-function makeOptions(
-	overrides: Partial<DiscoveredOptions> = {},
-): DiscoveredOptions {
+function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOptions {
 	return {
 		tools: ["read", "bash", "write"],
 		extensions: [],
 		models: [],
 		defaultModel: "",
+		modelDiscovery: { status: "ready" as const, error: null },
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: ["agent-a", "agent-b", "agent-c"],
@@ -40,12 +39,7 @@ describe("computeInlineCheckboxSaveValue", () => {
 			frontmatter: { description: "A test agent", depth: 1 },
 		});
 
-		const result = computeInlineCheckboxSaveValue(
-			options,
-			agent,
-			"can_spawn",
-			"agent-b",
-		);
+		const result = computeInlineCheckboxSaveValue(options, agent, "can_spawn", "agent-b");
 
 		// Missing can_spawn is implicit (all available, including self), then toggling
 		// removes agent-b and keeps an explicit save value.
@@ -63,12 +57,7 @@ describe("computeInlineCheckboxSaveValue", () => {
 			},
 		});
 
-		const result = computeInlineCheckboxSaveValue(
-			options,
-			agent,
-			"can_spawn",
-			"agent-c",
-		);
+		const result = computeInlineCheckboxSaveValue(options, agent, "can_spawn", "agent-c");
 
 		expect(result).toEqual(["agent-b", "legacy-agent", "agent-c"]);
 	});
@@ -84,12 +73,7 @@ describe("computeInlineCheckboxSaveValue", () => {
 			},
 		});
 
-		const result = computeInlineCheckboxSaveValue(
-			options,
-			agent,
-			"can_spawn",
-			"agent-b",
-		);
+		const result = computeInlineCheckboxSaveValue(options, agent, "can_spawn", "agent-b");
 
 		expect(result).toEqual(["agent-a"]);
 	});

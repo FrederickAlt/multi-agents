@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
 import {
 	AuthStorage,
 	createAgentSession,
@@ -15,13 +15,16 @@ import {
 	ModelRegistry,
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
-import taskExtension from "../subagent/index.js";
-import { filterExtensionsForAgent } from "../subagent/extension-filter.js";
-import { configureTaskToolForRuntime } from "../subagent/task-tool-registration.js";
-import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig } from "../subagent/agents.js";
-import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE } from "../subagent/output-extraction.js";
+import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
+import { filterExtensionsForAgent } from "../subagent/extension-filter.js";
+import taskExtension from "../subagent/index.js";
+import {
+	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
+	FINAL_RESPONSE_REQUIRED_MESSAGE,
+} from "../subagent/output-extraction.js";
+import { configureTaskToolForRuntime } from "../subagent/task-tool-registration.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -47,7 +50,9 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 	let activeTools = [...(options.activeTools ?? ["read", "bash", "edit", "write"])];
 	const pi = {
 		on: (event: string, handler: any) => handlers.set(event, handler),
-		registerTool: (tool: any) => { registeredTools.push(tool); },
+		registerTool: (tool: any) => {
+			registeredTools.push(tool);
+		},
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		sendMessage: (message: any, options?: any) => {
 			sentMessages.push({ message, options });
@@ -57,7 +62,9 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 		registerFlag: (name: string, options: { default?: string | boolean }) => flags.set(name, options.default),
 		getFlag: (name: string) => flags.get(name),
 		getActiveTools: () => [...activeTools],
-		setActiveTools: (names: string[]) => { activeTools = [...names]; },
+		setActiveTools: (names: string[]) => {
+			activeTools = [...names];
+		},
 		_registeredTools: registeredTools,
 		_sentMessages: sentMessages,
 		_nextTurnMessages: nextTurnMessages,
@@ -79,7 +86,10 @@ function makeSessionManager(dir: string, sessionId: string) {
 	};
 }
 
-function makeAgent(name: string, overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn" | "extensions">>): AgentConfig {
+function makeAgent(
+	name: string,
+	overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn" | "extensions">>,
+): AgentConfig {
 	return {
 		name,
 		description: `${name} description`,
@@ -111,7 +121,9 @@ const passthroughTheme = {
 };
 
 async function loadTaskExtensionWithNotifier() {
-	const actual = await vi.importActual<typeof import("../subagent/async-agent-notifier.js")>("../subagent/async-agent-notifier.js");
+	const actual = await vi.importActual<typeof import("../subagent/async-agent-notifier.js")>(
+		"../subagent/async-agent-notifier.js",
+	);
 	const asyncAgentNotifier = new actual.AsyncAgentNotifier();
 	vi.resetModules();
 	vi.doMock("../subagent/async-agent-notifier.js", () => ({
@@ -149,12 +161,30 @@ describe("extension loading", () => {
 
 		// Seed common agents and prompt parts needed by most tests.
 		// Individual tests may overwrite these with their own variants.
-		writeFile(join(agentsDir, "default.md"), `---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`);
-		writeFile(join(agentsDir, "explorer.md"), `---\ndescription: Fast codebase recon\ndepth: 1\n---\n\nExplorer agent\n`);
-		writeFile(join(agentsDir, "reviewer.md"), `---\ndescription: Code review specialist\ndepth: 1\n---\n\nReviewer agent\n`);
-		writeFile(join(agentsDir, "planner.md"), `---\ndescription: software architect and planning specialist\ndepth: 1\n---\n\nYou are a software architect and planning specialist.\n`);
-		writeFile(join(agentDiscoveryDir, "prompt-parts", "010-tools.md"), `---\ndescription: Available tool list\n---\n\n## Available Tools\n\n{{tools}}\n`);
-		writeFile(join(agentDiscoveryDir, "prompt-parts", "020-guidelines.md"), `---\ndescription: Prompt guidelines\n---\n\n## Guidelines\n\n{{guidelines}}\n`);
+		writeFile(
+			join(agentsDir, "default.md"),
+			`---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`,
+		);
+		writeFile(
+			join(agentsDir, "explorer.md"),
+			`---\ndescription: Fast codebase recon\ndepth: 1\n---\n\nExplorer agent\n`,
+		);
+		writeFile(
+			join(agentsDir, "reviewer.md"),
+			`---\ndescription: Code review specialist\ndepth: 1\n---\n\nReviewer agent\n`,
+		);
+		writeFile(
+			join(agentsDir, "planner.md"),
+			`---\ndescription: software architect and planning specialist\ndepth: 1\n---\n\nYou are a software architect and planning specialist.\n`,
+		);
+		writeFile(
+			join(agentDiscoveryDir, "prompt-parts", "010-tools.md"),
+			`---\ndescription: Available tool list\n---\n\n## Available Tools\n\n{{tools}}\n`,
+		);
+		writeFile(
+			join(agentDiscoveryDir, "prompt-parts", "020-guidelines.md"),
+			`---\ndescription: Prompt guidelines\n---\n\n## Guidelines\n\n{{guidelines}}\n`,
+		);
 
 		// Redirect in-memory session dirs to tempDir so .task-subagents-*.json
 		// metadata files don't end up in the repo root (SessionManager.inMemory
@@ -173,7 +203,11 @@ describe("extension loading", () => {
 		delete process.env.PI_CODING_AGENT_DIR;
 		delete (globalThis as any).__multi_agents_selected_main_agent;
 		if (tempDir && existsSync(tempDir)) {
-			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 
@@ -231,27 +265,33 @@ describe("extension loading", () => {
 			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
 		};
 
-		configureTaskToolForRuntime(pi, runtime, async () => ({
-			content: [{ type: "text", text: "unused" }],
-			details: { warnings: [] },
-		}), createTaskToolRegistrationDeps());
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
 
 		const taskTool = latestTaskTool(pi);
 		expect(taskTool).toBeDefined();
 		expect(taskTool?.promptSnippet).toContain("sub-agent");
-		expect(taskTool?.promptGuidelines).toEqual(expect.arrayContaining([
-			expect.stringContaining("delegate"),
-			expect.stringContaining("blocking:false"),
-		]));
+		expect(taskTool?.promptGuidelines).toEqual(
+			expect.arrayContaining([expect.stringContaining("delegate"), expect.stringContaining("blocking:false")]),
+		);
 
 		const waitForAgentTool = (pi as any)._registeredTools.find((t: any) => t.name === "wait_for_agent");
 		expect(waitForAgentTool).toBeDefined();
 		expect(waitForAgentTool?.promptSnippet).toContain("async sub-agent");
-		expect(waitForAgentTool?.promptGuidelines).toEqual(expect.arrayContaining([
-			expect.stringContaining("wait_for_agent"),
-			expect.stringContaining("wait_all"),
-			expect.stringContaining("timeout"),
-		]));
+		expect(waitForAgentTool?.promptGuidelines).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining("wait_for_agent"),
+				expect.stringContaining("wait_all"),
+				expect.stringContaining("timeout"),
+			]),
+		);
 	});
 
 	it("expanded Task result renders context usage even when details.output is preferred", () => {
@@ -261,24 +301,33 @@ describe("extension loading", () => {
 			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
 		};
 
-		configureTaskToolForRuntime(pi, runtime, async () => ({
-			content: [{ type: "text", text: "unused" }],
-			details: { warnings: [] },
-		}), createTaskToolRegistrationDeps());
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
 
 		const taskTool = latestTaskTool(pi);
-		const rendered = taskTool.renderResult({
-			content: [{ type: "text", text: "Task header that would be hidden by details.output" }],
-			details: {
-				id: "abc12345",
-				displayName: "explorer Tom",
-				description: "Inspect usage",
-				warnings: [],
-				output: "child output only",
-				terminalOutcome: "completed",
-				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+		const rendered = taskTool.renderResult(
+			{
+				content: [{ type: "text", text: "Task header that would be hidden by details.output" }],
+				details: {
+					id: "abc12345",
+					displayName: "explorer Tom",
+					description: "Inspect usage",
+					warnings: [],
+					output: "child output only",
+					terminalOutcome: "completed",
+					contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+				},
 			},
-		}, { expanded: true }, passthroughTheme);
+			{ expanded: true },
+			passthroughTheme,
+		);
 
 		const text = renderComponentToText(rendered);
 		expect(text).toContain("explorer Tom");
@@ -293,22 +342,31 @@ describe("extension loading", () => {
 			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
 		};
 
-		configureTaskToolForRuntime(pi, runtime, async () => ({
-			content: [{ type: "text", text: "unused" }],
-			details: { warnings: [] },
-		}), createTaskToolRegistrationDeps());
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
 
 		const taskTool = latestTaskTool(pi);
-		const rendered = taskTool.renderResult({
-			content: [{ type: "text", text: "completed header" }],
-			details: {
-				id: "abc12345",
-				displayName: "explorer Tom",
-				warnings: [],
-				output: "child output only",
-				terminalOutcome: "completed",
+		const rendered = taskTool.renderResult(
+			{
+				content: [{ type: "text", text: "completed header" }],
+				details: {
+					id: "abc12345",
+					displayName: "explorer Tom",
+					warnings: [],
+					output: "child output only",
+					terminalOutcome: "completed",
+				},
 			},
-		}, { expanded: true }, passthroughTheme);
+			{ expanded: true },
+			passthroughTheme,
+		);
 
 		const text = renderComponentToText(rendered);
 		expect(text).toContain("Context used: Unknown.");
@@ -321,22 +379,36 @@ describe("extension loading", () => {
 			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
 		};
 
-		configureTaskToolForRuntime(pi, runtime, async () => ({
-			content: [{ type: "text", text: "unused" }],
-			details: { warnings: [] },
-		}), createTaskToolRegistrationDeps());
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
 
 		const taskTool = latestTaskTool(pi);
-		const rendered = taskTool.renderResult({
-			content: [{ type: "text", text: "explorer Tom completed.\nContext used: 68.2%.\n\nNo final assistant output was captured." }],
-			details: {
-				id: "abc12345",
-				displayName: "explorer Tom",
-				warnings: [],
-				terminalOutcome: "completed",
-				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+		const rendered = taskTool.renderResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "explorer Tom completed.\nContext used: 68.2%.\n\nNo final assistant output was captured.",
+					},
+				],
+				details: {
+					id: "abc12345",
+					displayName: "explorer Tom",
+					warnings: [],
+					terminalOutcome: "completed",
+					contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+				},
 			},
-		}, { expanded: true }, passthroughTheme);
+			{ expanded: true },
+			passthroughTheme,
+		);
 
 		const text = renderComponentToText(rendered);
 		expect(text.match(/Context used:/g)).toHaveLength(1);
@@ -350,22 +422,36 @@ describe("extension loading", () => {
 			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
 		};
 
-		configureTaskToolForRuntime(pi, runtime, async () => ({
-			content: [{ type: "text", text: "unused" }],
-			details: { warnings: [] },
-		}), createTaskToolRegistrationDeps());
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
 
 		const taskTool = latestTaskTool(pi);
-		const rendered = taskTool.renderResult({
-			content: [{ type: "text", text: "explorer Tom completed.\nContext used: 68.2%.\n\nChild-authored note.\nContext used: Unknown." }],
-			details: {
-				id: "abc12345",
-				displayName: "explorer Tom",
-				warnings: [],
-				terminalOutcome: "completed",
-				contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+		const rendered = taskTool.renderResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "explorer Tom completed.\nContext used: 68.2%.\n\nChild-authored note.\nContext used: Unknown.",
+					},
+				],
+				details: {
+					id: "abc12345",
+					displayName: "explorer Tom",
+					warnings: [],
+					terminalOutcome: "completed",
+					contextUsage: { tokens: 68234, contextWindow: 100000, percent: 68.234 },
+				},
 			},
-		}, { expanded: true }, passthroughTheme);
+			{ expanded: true },
+			passthroughTheme,
+		);
 
 		const text = renderComponentToText(rendered);
 		expect(text.match(/Context used:/g)).toHaveLength(2);
@@ -375,23 +461,29 @@ describe("extension loading", () => {
 	});
 
 	it("renders the configured default Root agent when the session has no /agent selection", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nProject Default Root Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "default.md"),
+			`---\ndescription: Project Default Root\ndepth: 1\n---\n\nProject Default Root Marker\n`,
+		);
 		const { pi, handlers } = createFakeExtensionApi();
 		taskExtension(pi);
 
 		const sessionManager = makeSessionManager(tempDir, "root-session");
-		const result = await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt that should be replaced for Agent definitions",
-			systemPromptOptions: {
-				selectedTools: ["read"],
-				toolSnippets: { read: "Read file contents" },
-				promptGuidelines: ["Use read for file inspection"],
-				contextFiles: [],
-				skills: [],
-				cwd: tempDir,
-				appendSystemPrompt: "",
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt that should be replaced for Agent definitions",
+				systemPromptOptions: {
+					selectedTools: ["read"],
+					toolSnippets: { read: "Read file contents" },
+					promptGuidelines: ["Use read for file inspection"],
+					contextFiles: [],
+					skills: [],
+					cwd: tempDir,
+					appendSystemPrompt: "",
+				},
 			},
-		}, { cwd: tempDir, sessionManager });
+			{ cwd: tempDir, sessionManager },
+		);
 
 		expect(result?.systemPrompt).toContain("Project Default Root Marker");
 		expect(result?.systemPrompt).toContain("## Available Tools");
@@ -399,23 +491,29 @@ describe("extension loading", () => {
 	});
 
 	it("does not preserve hidden Pi prompt material for Root Agent definitions", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "default.md"), `---\ndescription: Project Default Root\ndepth: 1\n---\n\nRoot Agent Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "default.md"),
+			`---\ndescription: Project Default Root\ndepth: 1\n---\n\nRoot Agent Marker\n`,
+		);
 		const { pi, handlers } = createFakeExtensionApi();
 		taskExtension(pi);
 
 		const sessionManager = makeSessionManager(tempDir, "root-no-hidden-session");
-		const result = await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt\n\n# Project Context\n\nimplicit AGENTS content",
-			systemPromptOptions: {
-				selectedTools: ["read"],
-				toolSnippets: { read: "Read file contents" },
-				promptGuidelines: [],
-				contextFiles: [{ path: "AGENTS.md", content: "implicit AGENTS content" }],
-				skills: [],
-				cwd: tempDir,
-				appendSystemPrompt: "APPEND_SYSTEM content",
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt\n\n# Project Context\n\nimplicit AGENTS content",
+				systemPromptOptions: {
+					selectedTools: ["read"],
+					toolSnippets: { read: "Read file contents" },
+					promptGuidelines: [],
+					contextFiles: [{ path: "AGENTS.md", content: "implicit AGENTS content" }],
+					skills: [],
+					cwd: tempDir,
+					appendSystemPrompt: "APPEND_SYSTEM content",
+				},
 			},
-		}, { cwd: tempDir, sessionManager });
+			{ cwd: tempDir, sessionManager },
+		);
 
 		expect(result?.systemPrompt).toContain("Root Agent Marker");
 		expect(result?.systemPrompt).not.toContain("Pi base prompt");
@@ -424,16 +522,22 @@ describe("extension loading", () => {
 	});
 
 	it("renders a configured non-default Root agent when the session has no /agent selection", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "customroot.md"), `---\ndescription: Custom Root agent\ndepth: 1\n---\n\nCustom Root Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "customroot.md"),
+			`---\ndescription: Custom Root agent\ndepth: 1\n---\n\nCustom Root Marker\n`,
+		);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "customroot");
 
 		const sessionManager = makeSessionManager(tempDir, "custom-root-session");
-		const result = await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 
 		expect(result?.systemPrompt).toContain("Custom Root Marker");
 		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
@@ -446,10 +550,15 @@ describe("extension loading", () => {
 
 		const sessionManager = makeSessionManager(tempDir, "missing-default-session");
 
-		await expect(handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager })).rejects.toThrow('Default Root agent "missing-root" was not found');
+		await expect(
+			handlers.get("before_agent_start")(
+				{
+					systemPrompt: "Pi base prompt",
+					systemPromptOptions: { cwd: tempDir },
+				},
+				{ cwd: tempDir, sessionManager },
+			),
+		).rejects.toThrow('Default Root agent "missing-root" was not found');
 	});
 
 	it("blocks a real AgentSession turn when the configured default Root agent is missing", async () => {
@@ -502,10 +611,12 @@ describe("extension loading", () => {
 			});
 			await session.prompt("hello");
 
-			expect(notifications).toContainEqual(expect.objectContaining({
-				message: expect.stringContaining('Default Root agent "missing-root" was not found'),
-				type: "error",
-			}));
+			expect(notifications).toContainEqual(
+				expect.objectContaining({
+					message: expect.stringContaining('Default Root agent "missing-root" was not found'),
+					type: "error",
+				}),
+			);
 			expect(faux.state.callCount).toBe(0);
 			expect(faux.getPendingResponseCount()).toBe(1);
 			expect(session.messages.some((message) => message.role === "assistant")).toBe(false);
@@ -528,10 +639,13 @@ describe("extension loading", () => {
 		};
 
 		await commands.get("agent").handler("planner", ctx);
-		const result = await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, ctx);
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			ctx,
+		);
 
 		expect(flags.get("defaultRootAgent")).toBe("default");
 		expect(result?.systemPrompt).toContain("software architect and planning specialist");
@@ -543,17 +657,23 @@ describe("extension loading", () => {
 	// ------------------------------------------------------------------
 
 	it("hides Task when the resolved Root agent has depth 0", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "leaf-root.md"), `---\ndescription: Leaf Root agent with depth 0\ndepth: 0\n---\n\nLeaf Root Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "leaf-root.md"),
+			`---\ndescription: Leaf Root agent with depth 0\ndepth: 0\n---\n\nLeaf Root Marker\n`,
+		);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "leaf-root");
 
 		const sessionManager = makeSessionManager(tempDir, "leaf-root-session");
 		// Fire before_agent_start so the Root agent is resolved and Task registration runs
-		await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 
 		// Verify Task was not registered for spawning, but wait_for_agent remains available.
 		const registeredTools = (pi as any)._registeredTools ?? [];
@@ -567,16 +687,22 @@ describe("extension loading", () => {
 
 	it("hides Task when the resolved Root agent has empty can_spawn", async () => {
 		// Bare `can_spawn:` (null in YAML) or `can_spawn: ""` both produce an empty array → no spawnable agents
-		writeFile(join(agentDiscoveryDir, "agents", "restrictive-root.md"), `---\ndescription: Restrictive Root agent\ndepth: 1\ncan_spawn:\n---\n\nRestrictive Root Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "restrictive-root.md"),
+			`---\ndescription: Restrictive Root agent\ndepth: 1\ncan_spawn:\n---\n\nRestrictive Root Marker\n`,
+		);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "restrictive-root");
 
 		const sessionManager = makeSessionManager(tempDir, "restrictive-root-session");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 
 		const registeredTools = (pi as any)._registeredTools ?? [];
 		const taskTool = registeredTools.find((t: any) => t.name === "Task");
@@ -588,16 +714,22 @@ describe("extension loading", () => {
 	});
 
 	it("registers Task when the resolved Root agent has spawnable targets", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\n---\n\nSpawning Root Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "spawning-root.md"),
+			`---\ndescription: Spawning Root agent\ndepth: 1\n---\n\nSpawning Root Marker\n`,
+		);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "spawning-root");
 
 		const sessionManager = makeSessionManager(tempDir, "spawning-root-session");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 
 		const registeredTools = (pi as any)._registeredTools ?? [];
 		const taskTool = registeredTools.find((t: any) => t.name === "Task");
@@ -605,16 +737,22 @@ describe("extension loading", () => {
 	});
 
 	it("Task subagent_type schema only offers spawnable agent types", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "filtered-root.md"), `---\ndescription: Filtered Root agent\ndepth: 1\ncan_spawn:\n  - explorer\n---\n\nFiltered Root Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "filtered-root.md"),
+			`---\ndescription: Filtered Root agent\ndepth: 1\ncan_spawn:\n  - explorer\n---\n\nFiltered Root Marker\n`,
+		);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 		flags.set("defaultRootAgent", "filtered-root");
 
 		const sessionManager = makeSessionManager(tempDir, "filtered-root-session");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 
 		const taskTool = latestTaskTool(pi);
 		expect(taskTool).toBeDefined();
@@ -627,24 +765,36 @@ describe("extension loading", () => {
 	});
 
 	it("deactivates a stale Task tool when a later Root policy has no spawnable targets", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "spawning-root.md"), `---\ndescription: Spawning Root agent\ndepth: 1\ncan_spawn:\n  - explorer\n---\n\nSpawning Root Marker\n`);
-		writeFile(join(agentDiscoveryDir, "agents", "leaf-root.md"), `---\ndescription: Leaf Root agent\ndepth: 0\n---\n\nLeaf Root Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "spawning-root.md"),
+			`---\ndescription: Spawning Root agent\ndepth: 1\ncan_spawn:\n  - explorer\n---\n\nSpawning Root Marker\n`,
+		);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "leaf-root.md"),
+			`---\ndescription: Leaf Root agent\ndepth: 0\n---\n\nLeaf Root Marker\n`,
+		);
 		const { pi, handlers, flags } = createFakeExtensionApi();
 		taskExtension(pi);
 
 		const sessionManager = makeSessionManager(tempDir, "stale-root-session");
 		flags.set("defaultRootAgent", "spawning-root");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 		expect((pi as any)._getActiveTools()).toContain("Task");
 
 		flags.set("defaultRootAgent", "leaf-root");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 
 		expect(latestTaskTool(pi)).toBeDefined();
 		expect((pi as any)._getActiveTools()).not.toContain("Task");
@@ -660,10 +810,15 @@ describe("extension loading", () => {
 		};
 		const { pi } = createFakeExtensionApi({ activeTools: ["read", "Task"] });
 
-		configureTaskToolForRuntime(pi, runtime, async () => ({
-			content: [{ type: "text", text: "unused" }],
-			details: { warnings: [] },
-		}), createTaskToolRegistrationDeps());
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
 
 		expect(latestTaskTool(pi)).toBeUndefined();
 		expect((pi as any)._getActiveTools()).not.toContain("Task");
@@ -679,10 +834,15 @@ describe("extension loading", () => {
 		};
 		const { pi } = createFakeExtensionApi();
 
-		configureTaskToolForRuntime(pi, runtime, async () => ({
-			content: [{ type: "text", text: "unused" }],
-			details: { warnings: [] },
-		}), createTaskToolRegistrationDeps());
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
 
 		const taskTool = latestTaskTool(pi);
 		expect(taskTool).toBeDefined();
@@ -691,8 +851,14 @@ describe("extension loading", () => {
 	});
 
 	it("registers Task from the project cwd even when the session dir is elsewhere", async () => {
-		writeFile(join(agentDiscoveryDir, "agents", "project-root.md"), `---\ndescription: Project Root agent\ndepth: 1\ncan_spawn:\n  - project-child\n---\n\nProject Root Marker\n`);
-		writeFile(join(agentDiscoveryDir, "agents", "project-child.md"), `---\ndescription: Project-only child agent\ndepth: 0\n---\n\nProject Child Marker\n`);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "project-root.md"),
+			`---\ndescription: Project Root agent\ndepth: 1\ncan_spawn:\n  - project-child\n---\n\nProject Root Marker\n`,
+		);
+		writeFile(
+			join(agentDiscoveryDir, "agents", "project-child.md"),
+			`---\ndescription: Project-only child agent\ndepth: 0\n---\n\nProject Child Marker\n`,
+		);
 		const sessionDir = join(tempDir, "sessions-outside-cwd");
 		makeDir(sessionDir);
 
@@ -701,10 +867,13 @@ describe("extension loading", () => {
 		flags.set("defaultRootAgent", "project-root");
 
 		const sessionManager = makeSessionManager(sessionDir, "cwd-registration-session");
-		await handlers.get("before_agent_start")({
-			systemPrompt: "Pi base prompt",
-			systemPromptOptions: { cwd: tempDir },
-		}, { cwd: tempDir, sessionManager });
+		await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
 
 		const registeredTools = (pi as any)._registeredTools ?? [];
 		const taskTool = registeredTools.find((t: any) => t.name === "Task");
@@ -748,10 +917,7 @@ describe("extension loading", () => {
 				ui: { notify: () => {} },
 			});
 
-			const initial = await input(
-				{ type: "input", text: "start", source: "interactive" },
-				makeContext(),
-			);
+			const initial = await input({ type: "input", text: "start", source: "interactive" }, makeContext());
 			expect(initial).toEqual(expect.objectContaining({ action: "transform" }));
 			expect((initial as any).text).toContain("agent-a");
 			turnEnd();
@@ -765,10 +931,7 @@ describe("extension loading", () => {
 				turnEnd();
 			}
 
-			const result = await input(
-				{ type: "input", text: "next user request", source: "interactive" },
-				makeContext(),
-			);
+			const result = await input({ type: "input", text: "next user request", source: "interactive" }, makeContext());
 			expect(result).toEqual(expect.objectContaining({ action: "transform" }));
 			expect(result.text).toContain("Reminder");
 			expect(result.text).toContain("agent-a");
@@ -820,40 +983,42 @@ describe("extension loading", () => {
 
 				handlers.get("turn_end")?.();
 
-				const asyncResults = new Map([
-					["agent-a", { output: "retrieved output", warnings: [] }],
-				]);
-				const waitResult = await waitForAgentTool(
-					["agent-a"],
-					{},
-					{
-						metadataStore: {
-							findRecord: () => ({
-								id: "agent-a",
-								humanName: "Ava",
-								displayName: "explorer Ava",
-								agentType: "explorer",
-								sessionFile: "",
-								depth: 1,
-								createdAt: "2024-01-01T00:00:00.000Z",
-								updatedAt: "2024-01-01T00:00:00.000Z",
-							}),
+				const asyncResults = new Map([["agent-a", { output: "retrieved output", warnings: [] }]]);
+				const waitResult = await waitForAgentTool(["agent-a"], {}, {
+					metadataStore: {
+						findRecord: () => ({
+							id: "agent-a",
+							humanName: "Ava",
+							displayName: "explorer Ava",
+							agentType: "explorer",
+							sessionFile: "",
+							depth: 1,
+							createdAt: "2024-01-01T00:00:00.000Z",
+							updatedAt: "2024-01-01T00:00:00.000Z",
+						}),
+					},
+					sessionManager: {
+						getAsyncResult: (id: string) => asyncResults.get(id),
+						clearAsyncResult: (id: string) => {
+							asyncResults.delete(id);
 						},
-						sessionManager: {
-							getAsyncResult: (id: string) => asyncResults.get(id),
-							clearAsyncResult: (id: string) => { asyncResults.delete(id); },
-						},
-					} as any,
-				);
+					},
+				} as any);
 				const waitText = waitResult.content[0]?.type === "text" ? waitResult.content[0].text : "";
 				expect(waitText).toContain("retrieved output");
 
-				handlers.get("agent_end")?.({ messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }] });
+				handlers.get("agent_end")?.({
+					messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+				});
 				await vi.runOnlyPendingTimersAsync();
 
 				const inputResult = await handlers.get("input")(
 					{ type: "input", text: "next user request", source: "interactive" },
-					{ cwd: tempDir, sessionManager: makeSessionManager(tempDir, "stale-notification-session"), ui: { notify: () => {} } },
+					{
+						cwd: tempDir,
+						sessionManager: makeSessionManager(tempDir, "stale-notification-session"),
+						ui: { notify: () => {} },
+					},
 				);
 				const submittedText = inputResult?.action === "transform" ? inputResult.text : "next user request";
 				const promptText = (pi as any)._promptTextForNextUserInput(submittedText);
@@ -894,7 +1059,11 @@ describe("extension loading", () => {
 				toolResults: [],
 			});
 			handlers.get("turn_end")?.({
-				message: { role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {}, id: "call-1" }], stopReason: "toolUse" },
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", name: "read", arguments: {}, id: "call-1" }],
+					stopReason: "toolUse",
+				},
 				toolResults: [],
 			});
 
@@ -910,8 +1079,18 @@ describe("extension loading", () => {
 				handlers.get("agent_start")?.();
 				handlers.get("agent_end")?.({
 					messages: [
-						{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {}, id: "call-1" }], stopReason: "toolUse" },
-						{ role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false },
+						{
+							role: "assistant",
+							content: [{ type: "toolCall", name: "read", arguments: {}, id: "call-1" }],
+							stopReason: "toolUse",
+						},
+						{
+							role: "toolResult",
+							toolCallId: "call-1",
+							toolName: "read",
+							content: [{ type: "text", text: "ok" }],
+							isError: false,
+						},
 					],
 				});
 
@@ -932,7 +1111,11 @@ describe("extension loading", () => {
 			for (let i = 0; i < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS + 2; i++) {
 				handlers.get("agent_start")?.();
 				handlers.get("turn_end")?.({
-					message: { role: "assistant", content: [{ type: "thinking", thinking: "still stuck" }], stopReason: "stop" },
+					message: {
+						role: "assistant",
+						content: [{ type: "thinking", thinking: "still stuck" }],
+						stopReason: "stop",
+					},
 					toolResults: [],
 				});
 			}
@@ -941,7 +1124,11 @@ describe("extension loading", () => {
 
 			handlers.get("input")?.(
 				{ type: "input", text: "new request", source: "interactive" },
-				{ cwd: tempDir, sessionManager: makeSessionManager(tempDir, "guard-reset-session"), ui: { notify: () => {} } },
+				{
+					cwd: tempDir,
+					sessionManager: makeSessionManager(tempDir, "guard-reset-session"),
+					ui: { notify: () => {} },
+				},
 			);
 			handlers.get("agent_start")?.();
 			handlers.get("turn_end")?.({
@@ -965,7 +1152,10 @@ describe("extension loading", () => {
 		const otherExtensionPath = join(tempDir, "other-extension.ts");
 		writeFile(otherExtensionPath, "export default function () {}\n");
 
-		const result = filterExtensionsForAgent(makeAgent("explorer", { depth: 0, extensions: [] }), realSelfPath)({
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: [] }),
+			realSelfPath,
+		)({
 			extensions: [
 				{ path: linkedSelfPath, resolvedPath: linkedSelfPath },
 				{ path: "<inline:1>", resolvedPath: "<inline:1>" },

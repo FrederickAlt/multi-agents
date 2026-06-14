@@ -1,15 +1,15 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	discoverTools,
-	discoverExtensions,
-	discoverCanSpawn,
 	discoverAllAgentNames,
-	discoverSkills,
-	discoverPromptParts,
+	discoverCanSpawn,
+	discoverExtensions,
 	discoverModelsFromPiCli,
+	discoverPromptParts,
+	discoverSkills,
+	discoverTools,
 	parsePiListModelsOutput,
 } from "../../src/tui/discovery/options.js";
 
@@ -188,7 +188,8 @@ describe("discoverSkills", () => {
 
 describe("models discovery", () => {
 	it("parses the provider/model table from pi --list-models", () => {
-		const models = parsePiListModelsOutput(`provider            model                 context  max-out  thinking  images
+		const models =
+			parsePiListModelsOutput(`provider            model                 context  max-out  thinking  images
 local-llama-server  llama-3.1-8b          8.2K     4.1K     no        no
 openrouter          openai/gpt-5.2        400K     128K     yes       yes
 `);
@@ -214,14 +215,8 @@ printf 'local-b             llama-3.1-8b          8.2K     4.1K     no        no
 
 		const result = discoverModelsFromPiCli(tempDir, fakePi);
 
-		expect(result.models.map((m) => m.displayName)).toEqual([
-			"llama-3.1-8b (local-a)",
-			"llama-3.1-8b (local-b)",
-		]);
-		expect(result.models.map((m) => m.canonicalRef)).toEqual([
-			"local-a/llama-3.1-8b",
-			"local-b/llama-3.1-8b",
-		]);
+		expect(result.models.map((m) => m.displayName)).toEqual(["llama-3.1-8b (local-a)", "llama-3.1-8b (local-b)"]);
+		expect(result.models.map((m) => m.canonicalRef)).toEqual(["local-a/llama-3.1-8b", "local-b/llama-3.1-8b"]);
 	});
 
 	it("uses pi --list-models as a real fallback source", () => {

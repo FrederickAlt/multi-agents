@@ -1,7 +1,6 @@
-import React from "react";
 import { Box, Text } from "ink";
+import { clampVerticalScrollOffset, getAgentRowHeight } from "../layout.js";
 import type { ConfigState } from "../state/types.js";
-import { getAgentRowHeight, clampVerticalScrollOffset } from "../layout.js";
 import { AgentRow } from "./AgentRow.js";
 
 interface BoardProps {
@@ -22,7 +21,7 @@ export function Board({ state, height }: BoardProps) {
 	// Build visible agent slice and compute total consumed height.
 	// Reserve 1 line for each scroll indicator that may be shown.
 	let consumed = 0;
-	const visibleAgents: { agent: typeof state.agents[0]; globalIdx: number }[] = [];
+	const visibleAgents: { agent: (typeof state.agents)[0]; globalIdx: number }[] = [];
 	const termHeight = Math.max(1, Math.floor(height ?? process.stdout.rows ?? 24));
 	for (let i = scrollOffset; i < state.agents.length; i++) {
 		const h = getAgentRowHeight(i, state.expandedAgentIndex);

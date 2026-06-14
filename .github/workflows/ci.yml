@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout multi-agents
+        uses: actions/checkout@v4
+        with:
+          path: multi-agents
+
+      - name: Checkout pi
+        uses: actions/checkout@v4
+        with:
+          repository: earendil-works/pi
+          path: pi-mono
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: multi-agents/package-lock.json
+
+      - name: Install dependencies
+        working-directory: multi-agents
+        run: npm ci
+
+      - name: Check
+        working-directory: multi-agents
+        run: npm run check
+
+      - name: Test
+        working-directory: multi-agents
+        run: npm test

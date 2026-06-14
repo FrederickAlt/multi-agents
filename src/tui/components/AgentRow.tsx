@@ -1,23 +1,22 @@
-import React from "react";
 import { Box, Text } from "ink";
-import type { AgentConfigState, DiscoveredOptions, OptionColumnItemOrder, StatusInfo } from "../state/types.js";
-import { EXPANDED_ROW_HEIGHT, OPTION_COLUMN_FIELDS } from "../state/types.js";
 import { getMaxVisibleOptionColumns } from "../layout.js";
 import { getOptionColumnWidth } from "../option-column-layout.js";
 import {
 	applyOptionColumnItemOrder,
 	getFieldName,
-	isCheckboxOptionColumnField,
-	isOptionColumnField,
-	getOptionColumnItems,
-	getOptionColumnItemIndex,
-	getOptionColumnSelectedValues,
 	getOptionColumnDisabledItems,
+	getOptionColumnItemIndex,
+	getOptionColumnItems,
+	getOptionColumnSelectedValues,
+	isCheckboxOptionColumnField,
 	isOptionColumnDisabledForAgent,
+	isOptionColumnField,
 } from "../state/option-columns.js";
+import type { AgentConfigState, DiscoveredOptions, OptionColumnItemOrder, StatusInfo } from "../state/types.js";
+import { EXPANDED_ROW_HEIGHT, OPTION_COLUMN_FIELDS } from "../state/types.js";
+import { ErrorColumn } from "./ErrorColumn.js";
 import { OptionColumn } from "./OptionColumn.js";
 import { StatusLine } from "./StatusLine.js";
-import { ErrorColumn } from "./ErrorColumn.js";
 
 interface AgentRowProps {
 	agent: AgentConfigState;
@@ -95,41 +94,30 @@ export function AgentRow({
 	const descText = missingDescription
 		? "(no description)"
 		: agent.description.length > 60
-			? agent.description.slice(0, 60) + "..."
+			? `${agent.description.slice(0, 60)}...`
 			: agent.description;
 
 	if (isExpanded) {
 		const focusedFieldName = getFieldName(focusedField);
 		const isFocusedFieldInline = isOptionColumnField(focusedFieldName);
 		const focusedFieldHint = isFocusedFieldInline ? (
-			<Text dimColor wrap="truncate">←/→ columns · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse</Text>
+			<Text dimColor wrap="truncate">
+				←/→ columns · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse
+			</Text>
 		) : (
 			<Text dimColor wrap="truncate">
-				Focus: {INLINE_FIELD_LABELS[focusedFieldName] ?? focusedFieldName} = {
-					getFocusedNonInlineSummary(agent, focusedFieldName)
-				}
-				 · Press Enter/Space to edit
+				Focus: {INLINE_FIELD_LABELS[focusedFieldName] ?? focusedFieldName} ={" "}
+				{getFocusedNonInlineSummary(agent, focusedFieldName)}· Press Enter/Space to edit
 			</Text>
 		);
 		const columnData = OPTION_COLUMN_FIELDS.map((fieldName) => {
 			const isDisabled = isOptionColumnDisabledForAgent(agent, fieldName);
 			const isFocusedField = !isDisabled && isFocused && getFieldName(focusedField) === fieldName;
 			const isInlineCheckbox = isCheckboxOptionColumnField(fieldName);
-			const selectedValues = getOptionColumnSelectedValues(
-				agent,
-				options,
-				fieldName,
-				agent.name,
-			);
+			const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agent.name);
 			const columnFilter = isFocusedField ? optionColumnFilter : "";
 			const items = applyOptionColumnItemOrder(
-				getOptionColumnItems(
-					agent,
-					options,
-					fieldName,
-					agent.name,
-					columnFilter,
-				),
+				getOptionColumnItems(agent, options, fieldName, agent.name, columnFilter),
 				optionColumnItemOrder,
 				agentIndex,
 				fieldName,
@@ -167,10 +155,7 @@ export function AgentRow({
 			columnWidths,
 			optionColumnScrollOffset,
 		);
-		const visibleColumns = columnData.slice(
-			optionColumnScrollOffset,
-			optionColumnScrollOffset + visibleCount,
-		);
+		const visibleColumns = columnData.slice(optionColumnScrollOffset, optionColumnScrollOffset + visibleCount);
 		const hasMoreLeft = optionColumnScrollOffset > 0;
 		const hasMoreRight = optionColumnScrollOffset + visibleColumns.length < OPTION_COLUMN_FIELDS.length;
 
@@ -188,9 +173,7 @@ export function AgentRow({
 				<Box flexDirection="row">
 					<Text bold>{agent.name}</Text>
 					<Text dimColor> — {descText}</Text>
-					{missingDescription && (
-						<Text color="yellow"> ⚠ no description</Text>
-					)}
+					{missingDescription && <Text color="yellow"> ⚠ no description</Text>}
 				</Box>
 				<Box flexDirection="row" height={1} overflow="hidden">
 					{status && (
@@ -246,9 +229,7 @@ export function AgentRow({
 				<Text bold color={isFocused ? "cyan" : undefined}>
 					{agent.name}
 				</Text>
-				{missingDescription && (
-					<Text color="yellow"> ⚠ no description</Text>
-				)}
+				{missingDescription && <Text color="yellow"> ⚠ no description</Text>}
 			</Box>
 
 			{/* Description / status line */}

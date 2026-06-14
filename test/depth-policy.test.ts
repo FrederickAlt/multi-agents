@@ -2,23 +2,20 @@
  * Unit tests for DepthPolicy — pure spawn-decision logic.
  */
 import { describe, expect, it } from "vitest";
+import type { AgentConfig } from "../subagent/agents.js";
 import {
-	type DepthPolicyState,
 	checkTaskAllowed,
+	childPolicy,
+	type DepthPolicyState,
 	defaultRootPolicy,
 	selectedRootPolicy,
-	childPolicy,
 } from "../subagent/depth-policy.js";
-import type { AgentConfig } from "../subagent/agents.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeAgent(
-	name: string,
-	overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn">> = {},
-): AgentConfig {
+function makeAgent(name: string, overrides: Partial<Pick<AgentConfig, "depth" | "can_spawn">> = {}): AgentConfig {
 	return {
 		name,
 		description: `${name} description`,

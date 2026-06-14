@@ -1,21 +1,16 @@
-import {
-	DefaultResourceLoader,
-	type ExtensionAPI,
-	getAgentDir,
-	getMarkdownTheme,
-} from "@mariozechner/pi-coding-agent";
+import { DefaultResourceLoader, type ExtensionAPI, getAgentDir, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { AgentRegistry, discoverAgents } from "./agents.js";
+import { formatContextUsageLine } from "./context-usage.js";
 import type { DebugLogger } from "./debug-logger.js";
 import { checkTaskAllowed } from "./depth-policy.js";
 import { MetadataStore } from "./metadata.js";
-import { formatContextUsageLine } from "./context-usage.js";
 import { PiModelResolver, type SubagentSessionManager } from "./session-manager.js";
 import {
-	TaskController,
 	type AgentDiscoveryAdapter,
 	type RuntimeContext,
+	TaskController,
 	type TaskDetails,
 	type TaskExecuteContext,
 	type TaskExecuteParams,
@@ -35,18 +30,15 @@ export interface TaskToolRegistrationDependencies {
 	consumeWaitForAgentIds(ids: string[]): void;
 }
 
-function updateActiveTools(
-	targetPi: ExtensionAPI,
-	update: (activeTools: string[]) => string[],
-): void {
+function updateActiveTools(targetPi: ExtensionAPI, update: (activeTools: string[]) => string[]): void {
 	const api = targetPi as Partial<Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">>;
 	if (typeof api.getActiveTools !== "function" || typeof api.setActiveTools !== "function") return;
 
 	try {
 		const activeTools = api.getActiveTools();
 		const nextTools = update(activeTools);
-		const unchanged = nextTools.length === activeTools.length
-			&& nextTools.every((name, index) => name === activeTools[index]);
+		const unchanged =
+			nextTools.length === activeTools.length && nextTools.every((name, index) => name === activeTools[index]);
 		if (!unchanged) api.setActiveTools(nextTools);
 	} catch {
 		// getActiveTools/setActiveTools are unavailable while an inline extension
@@ -77,14 +69,11 @@ function stripContextUsageLines(text: string): string {
 	const lines = text.split(/\r?\n/);
 	const firstBlankLine = lines.findIndex((line) => line.trim() === "");
 	const headerEnd = firstBlankLine === -1 ? Math.min(lines.length, 3) : firstBlankLine;
-	const contextLineIndex = lines.findIndex((line, index) => (
-		index < headerEnd
-		&& /^\s*Context used: (?:Unknown|\d+(?:\.\d+)?%)\.\s*$/.test(line)
-	));
+	const contextLineIndex = lines.findIndex(
+		(line, index) => index < headerEnd && /^\s*Context used: (?:Unknown|\d+(?:\.\d+)?%)\.\s*$/.test(line),
+	);
 	if (contextLineIndex === -1) return text;
-	return lines
-		.filter((_line, index) => index !== contextLineIndex)
-		.join("\n");
+	return lines.filter((_line, index) => index !== contextLineIndex).join("\n");
 }
 
 export function configureTaskToolForRuntime(
@@ -98,7 +87,7 @@ export function configureTaskToolForRuntime(
 	// Filter to only what THIS agent is allowed to spawn.
 	// DepthPolicy is the single source of truth.
 	const policy = runtime.depthPolicy;
-	const allowed = discovery.agents.filter(a => checkTaskAllowed(policy, a.name).allowed);
+	const allowed = discovery.agents.filter((a) => checkTaskAllowed(policy, a.name).allowed);
 	const canSpawn = allowed.length > 0;
 
 	if (!canSpawn) {
@@ -110,10 +99,8 @@ export function configureTaskToolForRuntime(
 	}
 
 	if (canSpawn) {
-		const agentNames = allowed.map(a => a.name);
-		const descriptionText = allowed
-			.map(a => `${a.name}: ${a.description}`)
-			.join(". ");
+		const agentNames = allowed.map((a) => a.name);
+		const descriptionText = allowed.map((a) => `${a.name}: ${a.description}`).join(". ");
 
 		const params = Type.Object({
 			description: Type.String({ description: "Short 3-5 word description of the task." }),
@@ -123,16 +110,22 @@ export function configureTaskToolForRuntime(
 			subagent_type: Type.Enum(agentNames, {
 				description: `Which sub-agent to delegate to. ${descriptionText}`,
 			}),
-			resume: Type.Optional(Type.String({
-				description: "Short hex ID of a previous sub-agent to continue.",
-			})),
-			cwd: Type.Optional(Type.String({
-				description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
-			})),
-			blocking: Type.Optional(Type.Boolean({
-				default: true,
-				description: "When false, spawns the sub-agent asynchronously and returns immediately. Default true.",
-			})),
+			resume: Type.Optional(
+				Type.String({
+					description: "Short hex ID of a previous sub-agent to continue.",
+				}),
+			),
+			cwd: Type.Optional(
+				Type.String({
+					description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
+				}),
+			),
+			blocking: Type.Optional(
+				Type.Boolean({
+					default: true,
+					description: "When false, spawns the sub-agent asynchronously and returns immediately. Default true.",
+				}),
+			),
 		});
 
 		targetPi.registerTool({
@@ -172,9 +165,10 @@ export function configureTaskToolForRuntime(
 					),
 				);
 				if (details.description) container.addChild(new Text(theme.fg("dim", details.description), 0, 0));
-				const hasTerminalResult = details.contextUsage !== undefined
-					|| details.terminalOutcome !== undefined
-					|| details.output !== undefined;
+				const hasTerminalResult =
+					details.contextUsage !== undefined ||
+					details.terminalOutcome !== undefined ||
+					details.output !== undefined;
 				if (hasTerminalResult) {
 					container.addChild(new Text(theme.fg("muted", formatContextUsageLine(details.contextUsage)), 0, 0));
 				}
@@ -194,20 +188,29 @@ export function configureTaskToolForRuntime(
 	// Register wait_for_agent alongside Task for async retrieval.
 	const waitForAgentParams = Type.Object({
 		agent_ids: Type.Array(Type.String(), {
-			description: "List of short hex IDs of previously spawned sub-agents to wait for. By default the call returns as soon as any listed running agent finishes.",
+			description:
+				"List of short hex IDs of previously spawned sub-agents to wait for. By default the call returns as soon as any listed running agent finishes.",
 		}),
-		timeout: Type.Optional(Type.Number({
-			default: 5,
-			description: "Minutes to wait before returning a status update. Default 5 minutes.",
-		})),
-		wait_all: Type.Optional(Type.Boolean({
-			default: false,
-			description: "When true, wait until all listed running agents finish or timeout expires. Default false returns as soon as any listed agent finishes.",
-		})),
-		kill_on_timeout: Type.Optional(Type.Boolean({
-			default: false,
-			description: "When true, if the wait times out, asks each still-running agent for a final answer within the same timeout. If still running, cancels in-flight work, waits up to 5s for session/tool completion, disables tools for a bounded final-summary prompt, then forcibly aborts as a fallback. Transcripts persist for resume.",
-		})),
+		timeout: Type.Optional(
+			Type.Number({
+				default: 5,
+				description: "Minutes to wait before returning a status update. Default 5 minutes.",
+			}),
+		),
+		wait_all: Type.Optional(
+			Type.Boolean({
+				default: false,
+				description:
+					"When true, wait until all listed running agents finish or timeout expires. Default false returns as soon as any listed agent finishes.",
+			}),
+		),
+		kill_on_timeout: Type.Optional(
+			Type.Boolean({
+				default: false,
+				description:
+					"When true, if the wait times out, asks each still-running agent for a final answer within the same timeout. If still running, cancels in-flight work, waits up to 5s for session/tool completion, disables tools for a bounded final-summary prompt, then forcibly aborts as a fallback. Transcripts persist for resume.",
+			}),
+		),
 	});
 
 	targetPi.registerTool({
@@ -272,11 +275,7 @@ export function configureTaskToolForRuntime(
 
 		renderCall(args, theme) {
 			const ids = Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : String(args.agent_ids ?? "");
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("wait_for_agent "))}${theme.fg("muted", ids)}`,
-				0,
-				0,
-			);
+			return new Text(`${theme.fg("toolTitle", theme.bold("wait_for_agent "))}${theme.fg("muted", ids)}`, 0, 0);
 		},
 		renderResult(result, _opts, theme) {
 			const details = result.details as TaskDetails | undefined;

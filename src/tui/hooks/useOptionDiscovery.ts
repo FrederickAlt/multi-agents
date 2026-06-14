@@ -1,16 +1,16 @@
-import { useState, useEffect, useRef } from "react";
-import type { DiscoveredOptions, AgentConfigState } from "../state/types.js";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-	discoverTools,
+	discoverAllAgentNames,
 	discoverExtensions,
 	discoverModels,
 	discoverPiRuntimeResources,
-	discoverSkills,
 	discoverPromptParts,
-	discoverAllAgentNames,
+	discoverSkills,
+	discoverTools,
 } from "../discovery/options.js";
-import { scanAgents, detectStaleItems } from "../file-io/read-agent.js";
+import { detectStaleItems, scanAgents } from "../file-io/read-agent.js";
 import { getAgentDir } from "../pi-compat.js";
+import type { AgentConfigState, DiscoveredOptions } from "../state/types.js";
 
 const RUNTIME_RESOURCE_STALE_FIELDS = ["tools", "extensions"] as const;
 
@@ -56,10 +56,9 @@ export function useOptionDiscovery(): {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 
-	const scan = async () => {
+	const scan = useCallback(async () => {
 		const requestId = ++latestRequestId.current;
-		const isCurrentRequest = () =>
-			isMounted.current && requestId === latestRequestId.current;
+		const isCurrentRequest = () => isMounted.current && requestId === latestRequestId.current;
 
 		setLoading(true);
 		setError(null);
@@ -113,9 +112,47 @@ export function useOptionDiscovery(): {
 			setOptions(discovered);
 			setLoading(false);
 
-			void piRuntimeResourcesPromise.then((piRuntimeResources) => {
-				if (!isCurrentRequest()) return;
-				if (!piRuntimeResources) {
+			void piRuntimeResourcesPromise
+				.then((piRuntimeResources) => {
+					if (!isCurrentRequest()) return;
+					if (!piRuntimeResources) {
+						detectStaleItems(
+							scanned,
+							allNames,
+							discovered.tools,
+							discovered.extensions,
+							discovered.skills,
+							discovered.promptParts,
+						);
+						setAgents([...scanned]);
+						return;
+					}
+					const runtimeDiscovered = {
+						...discovered,
+						tools: piRuntimeResources.tools,
+						toolExtensionNames: piRuntimeResources.toolExtensionNames,
+						extensions: piRuntimeResources.extensions,
+						skills: piRuntimeResources.skills,
+					};
+					detectStaleItems(
+						scanned,
+						allNames,
+						runtimeDiscovered.tools,
+						runtimeDiscovered.extensions,
+						runtimeDiscovered.skills,
+						runtimeDiscovered.promptParts,
+					);
+					setAgents([...scanned]);
+					setOptions((prev) => ({
+						...prev,
+						tools: runtimeDiscovered.tools,
+						toolExtensionNames: runtimeDiscovered.toolExtensionNames,
+						extensions: runtimeDiscovered.extensions,
+						skills: runtimeDiscovered.skills,
+					}));
+				})
+				.catch(() => {
+					if (!isCurrentRequest()) return;
 					detectStaleItems(
 						scanned,
 						allNames,
@@ -125,43 +162,7 @@ export function useOptionDiscovery(): {
 						discovered.promptParts,
 					);
 					setAgents([...scanned]);
-					return;
-				}
-				const runtimeDiscovered = {
-					...discovered,
-					tools: piRuntimeResources.tools,
-					toolExtensionNames: piRuntimeResources.toolExtensionNames,
-					extensions: piRuntimeResources.extensions,
-					skills: piRuntimeResources.skills,
-				};
-				detectStaleItems(
-					scanned,
-					allNames,
-					runtimeDiscovered.tools,
-					runtimeDiscovered.extensions,
-					runtimeDiscovered.skills,
-					runtimeDiscovered.promptParts,
-				);
-				setAgents([...scanned]);
-				setOptions((prev) => ({
-					...prev,
-					tools: runtimeDiscovered.tools,
-					toolExtensionNames: runtimeDiscovered.toolExtensionNames,
-					extensions: runtimeDiscovered.extensions,
-					skills: runtimeDiscovered.skills,
-				}));
-			}).catch(() => {
-				if (!isCurrentRequest()) return;
-				detectStaleItems(
-					scanned,
-					allNames,
-					discovered.tools,
-					discovered.extensions,
-					discovered.skills,
-					discovered.promptParts,
-				);
-				setAgents([...scanned]);
-			});
+				});
 
 			// Continue model discovery asynchronously.
 			try {
@@ -202,7 +203,7 @@ export function useOptionDiscovery(): {
 			setError((err as Error).message);
 			setLoading(false);
 		}
-	};
+	}, []);
 
 	useEffect(() => {
 		isMounted.current = true;
@@ -211,6 +212,6 @@ export function useOptionDiscovery(): {
 		return () => {
 			isMounted.current = false;
 		};
-	}, []);
+	}, [scan]);
 	return { options, agents, loading, error, rescan: scan };
 }

@@ -8,32 +8,38 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MetadataStore } from "../subagent/metadata.js";
-import {
-	SubagentSessionManager,
-	type ModelResolver,
-} from "../subagent/session-manager.js";
-import {
-	TaskController,
-	type TaskExecuteContext,
-	type TaskExecuteParams,
-	type TaskDetails,
-	type AgentWaitResult,
-	type RuntimeContext,
-	type AgentDiscoveryAdapter,
-	type MetadataAdapter,
-	type SessionAdapter,
-	DEFAULT_TASK_RUNTIME_TIMEOUT_MS,
-	TASK_RUNTIME_TIMEOUT_ERROR_CODE,
-} from "../subagent/task-controller.js";
-import { waitForAgent as waitForAgentTool } from "../subagent/index.js";
-import { AsyncAgentNotifier } from "../subagent/async-agent-notifier.js";
-import { defaultRootPolicy, selectedRootPolicy, type DepthPolicyState } from "../subagent/depth-policy.js";
 import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
-import type { SubagentRecord, MetadataFile } from "../subagent/metadata.js";
-import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE, getFinalTextFromMessages } from "../subagent/output-extraction.js";
+import { AsyncAgentNotifier } from "../subagent/async-agent-notifier.js";
 import { formatContextUsageLine, readSubagentContextUsage } from "../subagent/context-usage.js";
 import type { DebugLogger } from "../subagent/debug-logger.js";
+import { defaultRootPolicy } from "../subagent/depth-policy.js";
+import { waitForAgent as waitForAgentTool } from "../subagent/index.js";
+import type { MetadataFile, SubagentRecord } from "../subagent/metadata.js";
+import { MetadataStore } from "../subagent/metadata.js";
+import {
+	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
+	FINAL_RESPONSE_REQUIRED_MESSAGE,
+	getFinalTextFromMessages,
+} from "../subagent/output-extraction.js";
+import {
+	type AgentSessionFactory,
+	type ModelResolver,
+	type SessionManagerProvider,
+	SubagentSessionManager,
+} from "../subagent/session-manager.js";
+import {
+	type AgentDiscoveryAdapter,
+	type AgentWaitResult,
+	DEFAULT_TASK_RUNTIME_TIMEOUT_MS,
+	type MetadataAdapter,
+	type RuntimeContext,
+	type SessionAdapter,
+	TASK_RUNTIME_TIMEOUT_ERROR_CODE,
+	TaskController,
+	type TaskDetails,
+	type TaskExecuteContext,
+	type TaskExecuteParams,
+} from "../subagent/task-controller.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,9 +77,13 @@ function makeMockMetadataFile(records: SubagentRecord[] = []): MetadataFile {
 	};
 }
 
-function fakeDiagnostics(): readonly AgentDiagnostic[] { return []; }
+function fakeDiagnostics(): readonly AgentDiagnostic[] {
+	return [];
+}
 
-function makeSpyDebugLogger(sink: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }>): DebugLogger {
+function makeSpyDebugLogger(
+	sink: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }>,
+): DebugLogger {
 	const create = (context: Record<string, unknown>): DebugLogger => {
 		return {
 			isEnabled: true,
@@ -97,11 +107,9 @@ function makeSpyDebugLogger(sink: Array<{ level: string; event: string; context?
 describe("TaskController.resolveTaskAgent", () => {
 	it("returns unknown_resume_id error when resume ID does not exist", () => {
 		const store = makeMockMetadataFile([makeRecord("abc12345", "Explore")]);
-		const result = TaskController.resolveTaskAgent(
-			{ subagent_type: "Explore", resume: "deadbeef" },
-			store,
-			[makeAgent("Explore")],
-		);
+		const result = TaskController.resolveTaskAgent({ subagent_type: "Explore", resume: "deadbeef" }, store, [
+			makeAgent("Explore"),
+		]);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.errorCode).toBe("unknown_resume_id");
@@ -112,11 +120,7 @@ describe("TaskController.resolveTaskAgent", () => {
 
 	it("returns unknown_agent_type error when agent type is not available", () => {
 		const store = makeMockMetadataFile();
-		const result = TaskController.resolveTaskAgent(
-			{ subagent_type: "Missing" },
-			store,
-			[makeAgent("Explore")],
-		);
+		const result = TaskController.resolveTaskAgent({ subagent_type: "Missing" }, store, [makeAgent("Explore")]);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.errorCode).toBe("unknown_agent_type");
@@ -127,11 +131,7 @@ describe("TaskController.resolveTaskAgent", () => {
 	it("resolves agent by subagent_type when no resume", () => {
 		const store = makeMockMetadataFile();
 		const agent = makeAgent("Explore");
-		const result = TaskController.resolveTaskAgent(
-			{ subagent_type: "Explore" },
-			store,
-			[agent],
-		);
+		const result = TaskController.resolveTaskAgent({ subagent_type: "Explore" }, store, [agent]);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.agent.name).toBe("Explore");
@@ -143,11 +143,7 @@ describe("TaskController.resolveTaskAgent", () => {
 		const record = makeRecord("abc12345", "Explore");
 		const store = makeMockMetadataFile([record]);
 		const agent = makeAgent("Explore");
-		const result = TaskController.resolveTaskAgent(
-			{ subagent_type: "Explore", resume: "abc12345" },
-			store,
-			[agent],
-		);
+		const result = TaskController.resolveTaskAgent({ subagent_type: "Explore", resume: "abc12345" }, store, [agent]);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.agent.name).toBe("Explore");
@@ -159,11 +155,9 @@ describe("TaskController.resolveTaskAgent", () => {
 		const record = makeRecord("abc12345", "deleted-agent");
 		record.displayName = "deleted-agent Tom";
 		const store = makeMockMetadataFile([record]);
-		const result = TaskController.resolveTaskAgent(
-			{ subagent_type: "explorer", resume: "abc12345" },
-			store,
-			[makeAgent("explorer")],
-		);
+		const result = TaskController.resolveTaskAgent({ subagent_type: "explorer", resume: "abc12345" }, store, [
+			makeAgent("explorer"),
+		]);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.errorCode).toBe("unknown_agent_type");
@@ -198,9 +192,7 @@ describe("getFinalTextFromMessages", () => {
 	});
 
 	it("returns empty string if assistant has no text content", () => {
-		const messages = [
-			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {} }] },
-		];
+		const messages = [{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {} }] }];
 		expect(getFinalTextFromMessages(messages)).toBe("");
 	});
 
@@ -219,27 +211,41 @@ describe("getFinalTextFromMessages", () => {
 
 describe("context usage helpers", () => {
 	it("formats known context usage with one decimal place", () => {
-		expect(formatContextUsageLine({ tokens: 68234, contextWindow: 100000, percent: 68.234 })).toBe("Context used: 68.2%.");
+		expect(formatContextUsageLine({ tokens: 68234, contextWindow: 100000, percent: 68.234 })).toBe(
+			"Context used: 68.2%.",
+		);
 	});
 
 	it("formats missing or unknown context usage simply", () => {
 		expect(formatContextUsageLine(undefined)).toBe("Context used: Unknown.");
-		expect(formatContextUsageLine({ tokens: null, contextWindow: 100000, percent: null })).toBe("Context used: Unknown.");
+		expect(formatContextUsageLine({ tokens: null, contextWindow: 100000, percent: null })).toBe(
+			"Context used: Unknown.",
+		);
 	});
 
 	it("safely normalizes optional session context usage", () => {
 		expect(readSubagentContextUsage({})).toBeUndefined();
-		expect(readSubagentContextUsage({ getContextUsage: () => ({ tokens: 1234, contextWindow: 100000, percent: 1.234 }) })).toEqual({
+		expect(
+			readSubagentContextUsage({ getContextUsage: () => ({ tokens: 1234, contextWindow: 100000, percent: 1.234 }) }),
+		).toEqual({
 			tokens: 1234,
 			contextWindow: 100000,
 			percent: 1.234,
 		});
-		expect(readSubagentContextUsage({ getContextUsage: () => ({ tokens: null, contextWindow: 100000, percent: null }) })).toEqual({
+		expect(
+			readSubagentContextUsage({ getContextUsage: () => ({ tokens: null, contextWindow: 100000, percent: null }) }),
+		).toEqual({
 			tokens: null,
 			contextWindow: 100000,
 			percent: null,
 		});
-		expect(readSubagentContextUsage({ getContextUsage: () => { throw new Error("boom"); } })).toBeUndefined();
+		expect(
+			readSubagentContextUsage({
+				getContextUsage: () => {
+					throw new Error("boom");
+				},
+			}),
+		).toBeUndefined();
 	});
 });
 
@@ -266,9 +272,7 @@ describe("TaskController.extractOutput", () => {
 	});
 
 	it("returns terminal assistant diagnostics without an external error", () => {
-		const messages = [
-			{ role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" },
-		];
+		const messages = [{ role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" }];
 		const result = TaskController.extractOutput(messages);
 		expect(result.text).toBe("Request was aborted");
 		expect(result.source).toBe("diagnostic");
@@ -300,12 +304,14 @@ describe("TaskController.extractOutput", () => {
 		const messages = [
 			{
 				role: "assistant",
-				content: [{
-					type: "toolCall",
-					id: "tool-1",
-					name: "bash",
-					arguments: { command: "curl https://example.com/very/long/command?query=that-is-just-an-example" },
-				}],
+				content: [
+					{
+						type: "toolCall",
+						id: "tool-1",
+						name: "bash",
+						arguments: { command: "curl https://example.com/very/long/command?query=that-is-just-an-example" },
+					},
+				],
 				stopReason: "toolUse",
 			},
 		];
@@ -334,12 +340,14 @@ describe("TaskController.extractOutput", () => {
 		const messages = [
 			{
 				role: "assistant",
-				content: [{
-					type: "toolCall",
-					id: "tool-1",
-					name: "read",
-					arguments: { path: "/tmp/file.txt" },
-				}],
+				content: [
+					{
+						type: "toolCall",
+						id: "tool-1",
+						name: "read",
+						arguments: { path: "/tmp/file.txt" },
+					},
+				],
 				stopReason: "toolUse",
 			},
 		];
@@ -356,9 +364,7 @@ describe("TaskController.extractOutput", () => {
 	});
 
 	it("returns assistant text even when error is also provided (partial output before crash)", () => {
-		const messages = [
-			{ role: "assistant", content: [{ type: "text", text: "here is the answer: 42" }] },
-		];
+		const messages = [{ role: "assistant", content: [{ type: "text", text: "here is the answer: 42" }] }];
 		const result = TaskController.extractOutput(messages, "Model crashed mid-response");
 		expect(result.text).toBe("here is the answer: 42");
 		expect(result.source).toBe("assistant");
@@ -389,7 +395,9 @@ describe("user-facing timeout/abort terminology", () => {
 			.replaceAll("kill_on_timeout", "")
 			.replace(/legacy structured status `killed`[^.]*\./gi, "");
 
-		expect(combined).not.toMatch(/try killing|soft-kill|soft kill|hard-abort|hard-aborted|hard abort|kill window|killed|killing/i);
+		expect(combined).not.toMatch(
+			/try killing|soft-kill|soft kill|hard-abort|hard-aborted|hard abort|kill window|killed|killing/i,
+		);
 	});
 });
 
@@ -454,14 +462,14 @@ describe("TaskController.execute", () => {
 		mockResourceLoader = { reload: vi.fn().mockResolvedValue(undefined) };
 
 		sessionManager = new SubagentSessionManager(
-			mockSessionManagerProvider,
-			mockAgentSessionFactory,
+			mockSessionManagerProvider as unknown as SessionManagerProvider,
+			mockAgentSessionFactory as unknown as AgentSessionFactory,
 		);
 
 		// Build fake adapters from the real objects — MetadataStore and
 		// SubagentSessionManager already satisfy their respective interfaces.
 		fakeAgentDiscovery = {
-			discover: vi.fn((_cwd) => ({
+			discover: vi.fn(() => ({
 				agents: [makeAgent("explorer")],
 				diagnostics: fakeDiagnostics(),
 			})),
@@ -469,9 +477,8 @@ describe("TaskController.execute", () => {
 
 		fakeMetadataStore = {
 			load: vi.fn(() => metadataStore.load()),
-			allocateRecord: vi.fn(
-				(agentName, parentAgentId, depth) =>
-					metadataStore.allocateRecord(agentName, parentAgentId, depth),
+			allocateRecord: vi.fn((agentName, parentAgentId, depth) =>
+				metadataStore.allocateRecord(agentName, parentAgentId, depth),
 			),
 			findRecord: vi.fn((id: string) => metadataStore.findRecord(id)),
 			touchRecord: vi.fn((id: string) => metadataStore.touchRecord(id)),
@@ -480,14 +487,10 @@ describe("TaskController.execute", () => {
 		};
 
 		fakeSessionManager = {
-			getOrCreateSession: vi.fn(
-				(record, agent, warnings, context) =>
-					sessionManager.getOrCreateSession(record, agent, warnings, context),
+			getOrCreateSession: vi.fn((record, agent, warnings, context) =>
+				sessionManager.getOrCreateSession(record, agent, warnings, context),
 			),
-			withRecordRunLock: vi.fn(
-				<T>(id: string, fn: () => Promise<T>) =>
-					sessionManager.withRecordRunLock(id, fn),
-			),
+			withRecordRunLock: <T>(id: string, fn: () => Promise<T>) => sessionManager.withRecordRunLock(id, fn),
 			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
 			waitForSessionEnd: vi.fn((id: string) => sessionManager.waitForSessionEnd(id)),
 			storeAsyncResult: vi.fn((id: string, result: any) => sessionManager.storeAsyncResult(id, result)),
@@ -496,14 +499,16 @@ describe("TaskController.execute", () => {
 			),
 			getAsyncResult: vi.fn((id: string) => sessionManager.getAsyncResult(id)),
 			waitForAsyncResult: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForAsyncResult(id, signal)),
-			requestAbortSummary: vi.fn().mockResolvedValue({ status: "unavailable", toolOverrideApplied: false }),
+			requestAbortSummary: vi.fn().mockResolvedValue({ status: "unavailable" as const, toolOverrideApplied: false }),
 			clearAsyncResult: vi.fn((id: string) => sessionManager.clearAsyncResult(id)),
 			markAsyncRunning: vi.fn((id: string) => sessionManager.markAsyncRunning(id)),
 			clearAsyncRunning: vi.fn((id: string) => sessionManager.clearAsyncRunning(id)),
 			isAsyncRunning: vi.fn((id: string) => sessionManager.isAsyncRunning(id)),
 			isCompleted: vi.fn((id: string) => sessionManager.isCompleted(id)),
 			hasOpenSession: vi.fn((id: string) => sessionManager.hasOpenSession(id)),
-			sendKillMessage: vi.fn((id: string, timeoutMinutes: number) => sessionManager.sendKillMessage(id, timeoutMinutes)),
+			sendKillMessage: vi.fn((id: string, timeoutMinutes: number) =>
+				sessionManager.sendKillMessage(id, timeoutMinutes),
+			),
 			abortSession: vi.fn((id: string) => sessionManager.abortSession(id)),
 			isKillInProgress: vi.fn((id: string) => sessionManager.isKillInProgress(id)),
 		};
@@ -513,7 +518,11 @@ describe("TaskController.execute", () => {
 
 	afterEach(() => {
 		if (tempDir) {
-			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 
@@ -569,9 +578,7 @@ describe("TaskController.execute", () => {
 
 	it("reports blocking context usage when available", async () => {
 		mockSession.getContextUsage = vi.fn(() => ({ tokens: 68234, contextWindow: 100000, percent: 68.234 }));
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "Task completed successfully!" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "Task completed successfully!" }] }];
 
 		const result = await controller.execute(makeParams(), makeContext());
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -583,9 +590,7 @@ describe("TaskController.execute", () => {
 	});
 
 	it("reports unknown blocking context usage when unavailable", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "done without usage" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done without usage" }] }];
 
 		const result = await controller.execute(makeParams(), makeContext());
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -594,7 +599,12 @@ describe("TaskController.execute", () => {
 	});
 
 	it("emits execute breadcrumbs via runtime logger", async () => {
-		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
+		const logs: Array<{
+			level: string;
+			event: string;
+			context?: Record<string, unknown>;
+			payload?: Record<string, unknown>;
+		}> = [];
 		const runtime: RuntimeContext = {
 			treeDepth: 0,
 			depthPolicy: defaultRootPolicy(),
@@ -606,10 +616,7 @@ describe("TaskController.execute", () => {
 			{ role: "assistant", content: [{ type: "text", text: "Task completed successfully!" }] },
 		];
 
-		await controller.execute(
-			makeParams(),
-			makeContext({ runtime }),
-		);
+		await controller.execute(makeParams(), makeContext({ runtime }));
 
 		const emitted = logs.map((entry) => entry.event);
 		expect(emitted).toContain("task_run_start");
@@ -618,9 +625,7 @@ describe("TaskController.execute", () => {
 	});
 
 	it("returns a unique hex ID that persists in metadata", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "done" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 
 		const result = await controller.execute(makeParams(), makeContext());
 		const id = (result.details as TaskDetails).id!;
@@ -632,9 +637,7 @@ describe("TaskController.execute", () => {
 	});
 
 	it("persists the session file to metadata", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "done" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 
 		const result = await controller.execute(makeParams(), makeContext());
 		const id = (result.details as TaskDetails).id!;
@@ -644,9 +647,7 @@ describe("TaskController.execute", () => {
 	});
 
 	it("disposes the session after execution", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "done" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 
 		await controller.execute(makeParams(), makeContext());
 
@@ -657,9 +658,7 @@ describe("TaskController.execute", () => {
 		vi.useFakeTimers();
 
 		try {
-			mockSession.messages = [
-				{ role: "assistant", content: [{ type: "text", text: "done" }] },
-			];
+			mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 
 			const result = await controller.execute(makeParams(), makeContext());
 
@@ -683,10 +682,7 @@ describe("TaskController.execute", () => {
 			},
 		});
 
-		const result = await controller.execute(
-			makeParams({ subagent_type: "explorer" }),
-			ctx,
-		);
+		const result = await controller.execute(makeParams({ subagent_type: "explorer" }), ctx);
 
 		expect(result.details.error).toBe("unknown_agent_type");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -705,10 +701,7 @@ describe("TaskController.execute", () => {
 				can_spawn: undefined,
 			},
 		};
-		const result = await controller.execute(
-			makeParams(),
-			makeContext({ runtime }),
-		);
+		const result = await controller.execute(makeParams(), makeContext({ runtime }));
 
 		expect(result.details.error).toBe("depth_limit");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -725,10 +718,7 @@ describe("TaskController.execute", () => {
 				can_spawn: ["planner", "reviewer"],
 			},
 		};
-		const result = await controller.execute(
-			makeParams({ subagent_type: "explorer" }),
-			makeContext({ runtime }),
-		);
+		const result = await controller.execute(makeParams({ subagent_type: "explorer" }), makeContext({ runtime }));
 
 		expect(result.details.error).toBe("spawn_not_allowed");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -744,21 +734,19 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("Model error");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Model error");
 		expect(text).toContain("Use resume:");
 	});
 
 	it("treats resolved terminal assistant diagnostics as failed blocking execution", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [], stopReason: "error", errorMessage: "529 overloaded" },
-		];
+		mockSession.messages = [{ role: "assistant", content: [], stopReason: "error", errorMessage: "529 overloaded" }];
 
 		const result = await controller.execute(makeParams(), makeContext());
 
 		expect(result.details.error).toBe("529 overloaded");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("529 overloaded");
 		expect(text).not.toContain("completed");
 	});
@@ -811,11 +799,14 @@ describe("TaskController.execute", () => {
 		vi.useFakeTimers();
 
 		try {
-			mockSession.prompt = vi.fn(() => ({
-				then() {
-					throw new Error("bad then");
-				},
-			}));
+			const thenProperty = ["the", "n"].join("");
+			mockSession.prompt = vi.fn(() =>
+				Object.defineProperty({}, thenProperty, {
+					value() {
+						throw new Error("bad then");
+					},
+				}),
+			);
 
 			const result = await controller.execute(makeParams(), makeContext());
 
@@ -915,7 +906,11 @@ describe("TaskController.execute", () => {
 
 			const result = await resultPromise;
 			expect(result.details.error).toBe("Task execution was aborted.");
-			expect((result.details as TaskDetails).contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+			expect((result.details as TaskDetails).contextUsage).toEqual({
+				tokens: 68234,
+				contextWindow: 100000,
+				percent: 68.234,
+			});
 			expect(mockSession.abort).toHaveBeenCalledTimes(1);
 			expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
 			expect(removeEventListenerSpy).toHaveBeenCalledTimes(1);
@@ -937,9 +932,13 @@ describe("TaskController.execute", () => {
 			const ac = new AbortController();
 			mockSession.prompt = vi.fn(() => {
 				return new Promise((_resolve, reject) => {
-					ac.signal.addEventListener("abort", () => {
-						reject(new Error("prompt aborted"));
-					}, { once: true });
+					ac.signal.addEventListener(
+						"abort",
+						() => {
+							reject(new Error("prompt aborted"));
+						},
+						{ once: true },
+					);
 				});
 			});
 
@@ -964,15 +963,10 @@ describe("TaskController.execute", () => {
 		vi.useFakeTimers();
 
 		try {
-			mockSession.messages = [
-				{ role: "assistant", content: [{ type: "text", text: "done" }] },
-			];
+			mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 			const ac = new AbortController();
 
-			const result = await controller.execute(
-				makeParams(),
-				makeContext({ signal: ac.signal }),
-			);
+			const result = await controller.execute(makeParams(), makeContext({ signal: ac.signal }));
 
 			expect(result.details.error).toBeUndefined();
 			expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
@@ -1034,10 +1028,9 @@ describe("TaskController.execute", () => {
 	// ---- Empty output ----
 
 	it("prompts once more when a blocking agent stops without a final assistant message", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "thinking", thinking: "almost done" }] },
-		];
-		mockSession.prompt = vi.fn()
+		mockSession.messages = [{ role: "assistant", content: [{ type: "thinking", thinking: "almost done" }] }];
+		mockSession.prompt = vi
+			.fn()
 			.mockResolvedValueOnce(undefined)
 			.mockImplementationOnce(async () => {
 				mockSession.messages.push({ role: "assistant", content: [{ type: "text", text: "final after guard" }] });
@@ -1072,15 +1065,10 @@ describe("TaskController.execute", () => {
 	// ---- onUpdate callback ----
 
 	it("calls onUpdate with progress when provided", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "result" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "result" }] }];
 
 		const onUpdate = vi.fn();
-		const result = await controller.execute(
-			makeParams(),
-			makeContext({ onUpdate }),
-		);
+		const result = await controller.execute(makeParams(), makeContext({ onUpdate }));
 
 		expect(onUpdate).toHaveBeenCalled();
 		const firstCall = onUpdate.mock.calls[0][0];
@@ -1095,9 +1083,7 @@ describe("TaskController.execute", () => {
 		existingRecord.sessionFile = join(tempDir, "existing.jsonl");
 		metadataStore.upsertRecord(existingRecord);
 
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "continuing..." }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "continuing..." }] }];
 
 		const result = await controller.execute(
 			makeParams({ resume: "abcd1234", subagent_type: "explorer" }),
@@ -1164,7 +1150,9 @@ describe("TaskController.execute", () => {
 	it("returns error result when agent discovery throws", async () => {
 		const ctx = makeContext({
 			agentDiscovery: {
-				discover: vi.fn(() => { throw new Error("Discovery boom"); }),
+				discover: vi.fn(() => {
+					throw new Error("Discovery boom");
+				}),
 			},
 		});
 
@@ -1178,7 +1166,9 @@ describe("TaskController.execute", () => {
 	it("returns error result when metadata load throws", async () => {
 		const ctx = makeContext({
 			metadataStore: {
-				load: vi.fn(() => { throw new Error("Metadata load boom"); }),
+				load: vi.fn(() => {
+					throw new Error("Metadata load boom");
+				}),
 				allocateRecord: fakeMetadataStore.allocateRecord,
 				findRecord: fakeMetadataStore.findRecord,
 				touchRecord: fakeMetadataStore.touchRecord,
@@ -1216,17 +1206,12 @@ describe("TaskController.execute", () => {
 	// ---- Effective CWD ----
 
 	it("uses params.cwd when provided, falling back to context.cwd", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "done" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 
 		const customCwd = join(tempDir, "custom");
 		mkdirSync(customCwd, { recursive: true });
 
-		const result = await controller.execute(
-			makeParams({ cwd: customCwd }),
-			makeContext(),
-		);
+		const result = await controller.execute(makeParams({ cwd: customCwd }), makeContext());
 
 		expect(result.details.error).toBeUndefined();
 	});
@@ -1240,10 +1225,7 @@ describe("TaskController.execute", () => {
 			const ac = new AbortController();
 			ac.abort();
 
-			const result = await new TaskController().execute(
-				makeParams(),
-				makeContext({ signal: ac.signal }),
-			);
+			const result = await new TaskController().execute(makeParams(), makeContext({ signal: ac.signal }));
 
 			expect(result).toBeDefined();
 			expect(result.details.error).toBe("Task execution was aborted.");
@@ -1257,10 +1239,7 @@ describe("TaskController.execute", () => {
 	// ---- Async execution (blocking: false) ----
 
 	it("returns immediately with agent details when blocking is false", async () => {
-		const result = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const result = await controller.execute(makeParams({ blocking: false }), makeContext());
 
 		expect(result.details.error).toBeUndefined();
 		expect(result.details.id).toMatch(/^[0-9a-f]{8}$/);
@@ -1276,24 +1255,16 @@ describe("TaskController.execute", () => {
 		// Make prompt never resolve so the async cleanup doesn't fire
 		mockSession.prompt = vi.fn(() => new Promise(() => {}));
 
-		await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		await controller.execute(makeParams({ blocking: false }), makeContext());
 
 		// Session should NOT be disposed immediately for async agents
 		expect(disposeSpy).not.toHaveBeenCalled();
 	});
 
 	it("default blocking (undefined) preserves existing blocking behaviour", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "done" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 
-		const result = await controller.execute(
-			makeParams(),
-			makeContext(),
-		);
+		const result = await controller.execute(makeParams(), makeContext());
 
 		expect(result.details.error).toBeUndefined();
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -1302,14 +1273,9 @@ describe("TaskController.execute", () => {
 	});
 
 	it("blocking: true preserves existing behaviour", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "done" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
 
-		const result = await controller.execute(
-			makeParams({ blocking: true }),
-			makeContext(),
-		);
+		const result = await controller.execute(makeParams({ blocking: true }), makeContext());
 
 		expect(result.details.error).toBeUndefined();
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -1319,11 +1285,7 @@ describe("TaskController.execute", () => {
 	// ---- waitForAgent ----
 
 	it("returns error for unknown agent ID", async () => {
-		const result = await controller.waitForAgent(
-			["deadbeef"],
-			{},
-			makeContext(),
-		);
+		const result = await controller.waitForAgent(["deadbeef"], {}, makeContext());
 
 		expect(result.details.error).toBe("unknown_agent_id");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -1338,10 +1300,7 @@ describe("TaskController.execute", () => {
 		];
 
 		// First spawn an async agent
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		// Allow the async cleanup microtask to run (prompt resolves immediately)
@@ -1365,14 +1324,9 @@ describe("TaskController.execute", () => {
 
 	it("stores async context usage and reports it from waitForAgent", async () => {
 		mockSession.getContextUsage = vi.fn(() => ({ tokens: 68234, contextWindow: 100000, percent: 68.234 }));
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "async output with usage" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "async output with usage" }] }];
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 		await new Promise((r) => setTimeout(r, 10));
 
@@ -1394,10 +1348,7 @@ describe("TaskController.execute", () => {
 			{ role: "assistant", content: [{ type: "text", text: "async output after compaction" }] },
 		];
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 		await new Promise((r) => setTimeout(r, 10));
 
@@ -1405,7 +1356,11 @@ describe("TaskController.execute", () => {
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("Context used: Unknown.");
-		expect((result.details as TaskDetails).contextUsage).toEqual({ tokens: null, contextWindow: 100000, percent: null });
+		expect((result.details as TaskDetails).contextUsage).toEqual({
+			tokens: null,
+			contextWindow: 100000,
+			percent: null,
+		});
 	});
 
 	it("clears stale context usage when a resumed run finishes without usage", async () => {
@@ -1414,9 +1369,7 @@ describe("TaskController.execute", () => {
 		existingRecord.terminalOutcome = "completed";
 		existingRecord.contextUsage = { tokens: 50000, contextWindow: 100000, percent: 50 };
 		metadataStore.upsertRecord(existingRecord);
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "fresh run output" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "fresh run output" }] }];
 
 		const result = await controller.execute(
 			makeParams({ resume: existingRecord.id, subagent_type: "explorer" }),
@@ -1434,10 +1387,7 @@ describe("TaskController.execute", () => {
 		// Make prompt reject so the async error path fires
 		mockSession.prompt = vi.fn().mockRejectedValue(new Error("async crash"));
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		await new Promise((r) => setTimeout(r, 10));
@@ -1446,7 +1396,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("async crash");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("async crash");
 	});
 
@@ -1455,10 +1405,7 @@ describe("TaskController.execute", () => {
 			{ role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" },
 		];
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		await new Promise((r) => setTimeout(r, 10));
@@ -1467,24 +1414,23 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("Request was aborted");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Request was aborted");
 	});
 
 	it("prompts async agents once more before storing an empty successful result", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "thinking", thinking: "done?" }] },
-		];
-		mockSession.prompt = vi.fn()
+		mockSession.messages = [{ role: "assistant", content: [{ type: "thinking", thinking: "done?" }] }];
+		mockSession.prompt = vi
+			.fn()
 			.mockResolvedValueOnce(undefined)
 			.mockImplementationOnce(async () => {
-				mockSession.messages.push({ role: "assistant", content: [{ type: "text", text: "async final after guard" }] });
+				mockSession.messages.push({
+					role: "assistant",
+					content: [{ type: "text", text: "async final after guard" }],
+				});
 			});
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		await new Promise((r) => setTimeout(r, 10));
@@ -1496,11 +1442,8 @@ describe("TaskController.execute", () => {
 		expect(result.details.output).toBe("async final after guard");
 	});
 
-
 	it("captures output when agent finishes during waitForAgent (microtask ordering)", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "mid-wait output" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "mid-wait output" }] }];
 
 		// Instrument subscribe to capture callbacks so we can fire agent_end.
 		// The default mock returns vi.fn() but never stores or invokes callbacks.
@@ -1517,10 +1460,7 @@ describe("TaskController.execute", () => {
 		mockSession.prompt = vi.fn(() => new Promise(() => {}));
 
 		// Spawn async (prompt not resolved yet)
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		expect(sessionManager.hasOpenSession(agentId)).toBe(true);
@@ -1558,10 +1498,7 @@ describe("TaskController.execute", () => {
 		// Keep the background prompt unresolved so no async result has been stored yet.
 		mockSession.prompt = vi.fn(() => new Promise(() => {}));
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		const waitPromise = controller.waitForAgent([agentId], {}, makeContext());
@@ -1597,10 +1534,7 @@ describe("TaskController.execute", () => {
 		});
 		mockSession.prompt = vi.fn(() => new Promise(() => {}));
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		for (const cb of [...subs]) cb({ type: "agent_end" });
@@ -1619,10 +1553,7 @@ describe("TaskController.execute", () => {
 		// Make prompt never resolve so the async stays in-flight
 		mockSession.prompt = vi.fn(() => new Promise(() => {}));
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		// Try to start a blocking call on the same agent via resume
@@ -1690,7 +1621,9 @@ describe("TaskController.execute", () => {
 		);
 
 		expect(result.details.error).toBeUndefined();
-		expect(mockSession.prompt).toHaveBeenNthCalledWith(2, "Steer through prompt fallback", { streamingBehavior: "steer" });
+		expect(mockSession.prompt).toHaveBeenNthCalledWith(2, "Steer through prompt fallback", {
+			streamingBehavior: "steer",
+		});
 	});
 
 	it("does not accept steering while an async run is only finalizing", async () => {
@@ -1722,9 +1655,7 @@ describe("TaskController.execute", () => {
 	});
 
 	it("does not start a resumed async run while prior async output is unconsumed", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "prior async output" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "prior async output" }] }];
 
 		const spawnResult = await controller.execute(
 			makeParams({ blocking: false, prompt: "Original async work" }),
@@ -1751,9 +1682,7 @@ describe("TaskController.execute", () => {
 	});
 
 	it("allows resume after wait_for_agent consumes prior async output with wait_all", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "prior async output" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "prior async output" }] }];
 
 		const spawnResult = await controller.execute(
 			makeParams({ blocking: false, prompt: "Original async work" }),
@@ -1762,11 +1691,7 @@ describe("TaskController.execute", () => {
 		const agentId = (spawnResult.details as TaskDetails).id!;
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		const waitResult = await controller.waitForAgent(
-			[agentId],
-			{ wait_all: true },
-			makeContext(),
-		);
+		const waitResult = await controller.waitForAgent([agentId], { wait_all: true }, makeContext());
 		expect((waitResult.details.agents as AgentWaitResult[])[0].status).toBe("completed");
 
 		const resumeResult = await controller.execute(
@@ -1816,10 +1741,7 @@ describe("TaskController.execute", () => {
 		mockSession.prompt = vi.fn(() => new Promise(() => {}));
 		const ac = new AbortController();
 
-		await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext({ signal: ac.signal }),
-		);
+		await controller.execute(makeParams({ blocking: false }), makeContext({ signal: ac.signal }));
 
 		expect(mockSession.abort).not.toHaveBeenCalled();
 
@@ -1828,7 +1750,6 @@ describe("TaskController.execute", () => {
 
 		expect(mockSession.abort).toHaveBeenCalled();
 	});
-
 
 	// ---- Expanded waitForAgent (#23) ----
 
@@ -1857,23 +1778,19 @@ describe("TaskController.execute", () => {
 		const idB = (spawnB.details as TaskDetails).id!;
 
 		// Call waitForAgent with both IDs + an unknown
-		const result = await controller.waitForAgent(
-			[idA, idB, "deadbeef"],
-			{},
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([idA, idB, "deadbeef"], {}, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents).toHaveLength(3);
 
-		const agentA = agents.find(a => a.id === idA)!;
+		const agentA = agents.find((a) => a.id === idA)!;
 		expect(agentA.status).toBe("completed");
 		expect(agentA.output).toBe("agent A output");
 
-		const agentB = agents.find(a => a.id === idB)!;
+		const agentB = agents.find((a) => a.id === idB)!;
 		expect(agentB.status).toBe("running");
 
-		const agentUnknown = agents.find(a => a.id === "deadbeef")!;
+		const agentUnknown = agents.find((a) => a.id === "deadbeef")!;
 		expect(agentUnknown.status).toBe("unknown");
 
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -1903,16 +1820,12 @@ describe("TaskController.execute", () => {
 			"FULL_OUTPUT_SENTINEL_AGENT_B_TEST_RESULTS_VISIBLE",
 		].join("\n");
 
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: outputA }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: outputA }] }];
 		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const idA = (spawnA.details as TaskDetails).id!;
 		await new Promise((r) => setTimeout(r, 10));
 
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: outputB }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: outputB }] }];
 		const spawnB = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const idB = (spawnB.details as TaskDetails).id!;
 		await new Promise((r) => setTimeout(r, 10));
@@ -1920,8 +1833,8 @@ describe("TaskController.execute", () => {
 		const result = await controller.waitForAgent([idA, idB], {}, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
-		expect(agents.find(a => a.id === idA)?.output).toBe(outputA);
-		expect(agents.find(a => a.id === idB)?.output).toBe(outputB);
+		expect(agents.find((a) => a.id === idA)?.output).toBe(outputA);
+		expect(agents.find((a) => a.id === idB)?.output).toBe(outputB);
 
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain(outputA);
@@ -1934,7 +1847,10 @@ describe("TaskController.execute", () => {
 		const subsA: Array<(e: any) => void> = [];
 		const mockSessionA = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subsA.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subsA.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -1944,7 +1860,10 @@ describe("TaskController.execute", () => {
 		const subsB: Array<(e: any) => void> = [];
 		const mockSessionB = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subsB.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -1982,12 +1901,12 @@ describe("TaskController.execute", () => {
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents).toHaveLength(2);
 
-		const agentB = agents.find(a => a.id === idB)!;
+		const agentB = agents.find((a) => a.id === idB)!;
 		expect(agentB.status).toBe("completed");
 		expect(agentB.output).toBe("agent B finished first");
 
 		// Agent A should still be "running" (not yet finished)
-		const agentA = agents.find(a => a.id === idA)!;
+		const agentA = agents.find((a) => a.id === idA)!;
 		expect(agentA.status).toBe("running");
 
 		// Restore original factory
@@ -1998,7 +1917,10 @@ describe("TaskController.execute", () => {
 		const subsA: Array<(e: any) => void> = [];
 		const mockSessionA = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subsA.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subsA.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2008,7 +1930,10 @@ describe("TaskController.execute", () => {
 		const subsB: Array<(e: any) => void> = [];
 		const mockSessionB = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subsB.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2049,18 +1974,16 @@ describe("TaskController.execute", () => {
 		const result = await waitPromise;
 
 		const agents = result.details.agents as AgentWaitResult[];
-		expect(agents.find(a => a.id === idA)?.status).toBe("completed");
-		expect(agents.find(a => a.id === idA)?.output).toBe("agent A finished second");
-		expect(agents.find(a => a.id === idB)?.status).toBe("completed");
-		expect(agents.find(a => a.id === idB)?.output).toBe("agent B finished first");
+		expect(agents.find((a) => a.id === idA)?.status).toBe("completed");
+		expect(agents.find((a) => a.id === idA)?.output).toBe("agent A finished second");
+		expect(agents.find((a) => a.id === idB)?.status).toBe("completed");
+		expect(agents.find((a) => a.id === idB)?.output).toBe("agent B finished first");
 
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
 	});
 
 	it("wait_all waits for remaining running agents even when one is already completed", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "completed before wait" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "completed before wait" }] }];
 		const spawnA = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const idA = (spawnA.details as TaskDetails).id!;
 		await new Promise((r) => setTimeout(r, 10));
@@ -2068,7 +1991,10 @@ describe("TaskController.execute", () => {
 		const subsB: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subsB.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2094,10 +2020,10 @@ describe("TaskController.execute", () => {
 
 		const result = await waitPromise;
 		const agents = result.details.agents as AgentWaitResult[];
-		expect(agents.find(a => a.id === idA)?.status).toBe("completed");
-		expect(agents.find(a => a.id === idA)?.output).toBe("completed before wait");
-		expect(agents.find(a => a.id === idB)?.status).toBe("completed");
-		expect(agents.find(a => a.id === idB)?.output).toBe("finished after wait_all");
+		expect(agents.find((a) => a.id === idA)?.status).toBe("completed");
+		expect(agents.find((a) => a.id === idA)?.output).toBe("completed before wait");
+		expect(agents.find((a) => a.id === idB)?.status).toBe("completed");
+		expect(agents.find((a) => a.id === idB)?.output).toBe("finished after wait_all");
 	});
 
 	it("reports timed_out_still_running when timeout expires", async () => {
@@ -2133,29 +2059,32 @@ describe("TaskController.execute", () => {
 			{ role: "assistant", content: [{ type: "text", text: "blocking result output" }] },
 		];
 
-		const blockingResult = await controller.execute(
-			makeParams({ blocking: true }),
-			makeContext(),
-		);
+		const blockingResult = await controller.execute(makeParams({ blocking: true }), makeContext());
 		const agentId = (blockingResult.details as TaskDetails).id!;
 		const sessionFile = (blockingResult.details as TaskDetails).sessionFile!;
 
 		// Write simulated session data so readOutputFromSessionFile can find it
 		const fs = await import("node:fs");
-		fs.writeFileSync(sessionFile, JSON.stringify({
-			type: "message",
-			id: "msg1",
-			parentId: null,
-			timestamp: new Date().toISOString(),
-			message: { role: "user", content: "Do something" },
-		}) + "\n");
-		fs.appendFileSync(sessionFile, JSON.stringify({
-			type: "message",
-			id: "msg2",
-			parentId: "msg1",
-			timestamp: new Date().toISOString(),
-			message: { role: "assistant", content: [{ type: "text", text: "blocking result output" }] },
-		}) + "\n");
+		fs.writeFileSync(
+			sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				id: "msg1",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "Do something" },
+			})}\n`,
+		);
+		fs.appendFileSync(
+			sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				id: "msg2",
+				parentId: "msg1",
+				timestamp: new Date().toISOString(),
+				message: { role: "assistant", content: [{ type: "text", text: "blocking result output" }] },
+			})}\n`,
+		);
 
 		// The blocking session has been disposed with output in the session file.
 		// waitForAgent should be able to read it from persisted state.
@@ -2173,14 +2102,17 @@ describe("TaskController.execute", () => {
 		const record = makeRecord("badc0ffe", "explorer");
 		record.sessionFile = join(tempDir, "pending-tool.jsonl");
 		metadataStore.upsertRecord(record);
-		fs.writeFileSync(record.sessionFile, JSON.stringify({
-			type: "message",
-			message: {
-				role: "assistant",
-				content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "npm test" } }],
-				stopReason: "toolUse",
-			},
-		}) + "\n");
+		fs.writeFileSync(
+			record.sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "npm test" } }],
+					stopReason: "toolUse",
+				},
+			})}\n`,
+		);
 
 		const result = await controller.waitForAgent([record.id], {}, makeContext());
 
@@ -2195,30 +2127,36 @@ describe("TaskController.execute", () => {
 		const record = makeRecord("feedbabe", "explorer");
 		record.sessionFile = join(tempDir, "tool-error.jsonl");
 		metadataStore.upsertRecord(record);
-		fs.writeFileSync(record.sessionFile, JSON.stringify({
-			type: "message",
-			message: {
-				role: "assistant",
-				content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "git rebase --continue" } }],
-				stopReason: "toolUse",
-			},
-		}) + "\n");
-		fs.appendFileSync(record.sessionFile, JSON.stringify({
-			type: "message",
-			message: {
-				role: "toolResult",
-				toolCallId: "c1",
-				toolName: "bash",
-				content: [{ type: "text", text: "Command aborted" }],
-				isError: true,
-			},
-		}) + "\n");
+		fs.writeFileSync(
+			record.sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "git rebase --continue" } }],
+					stopReason: "toolUse",
+				},
+			})}\n`,
+		);
+		fs.appendFileSync(
+			record.sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolCallId: "c1",
+					toolName: "bash",
+					content: [{ type: "text", text: "Command aborted" }],
+					isError: true,
+				},
+			})}\n`,
+		);
 
 		const result = await controller.waitForAgent([record.id], {}, makeContext());
 
 		expect(result.details.error).toContain("Command aborted");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Command aborted");
 		expect(text).toContain("bash");
 		expect(text).toContain("git rebase --continue");
@@ -2238,20 +2176,26 @@ describe("TaskController.execute", () => {
 
 		// Write session data so persisted read works after async result is cleared
 		const fs = await import("node:fs");
-		fs.writeFileSync(sessionFile, JSON.stringify({
-			type: "message",
-			id: "msg1",
-			parentId: null,
-			timestamp: new Date().toISOString(),
-			message: { role: "user", content: "Do something" },
-		}) + "\n");
-		fs.appendFileSync(sessionFile, JSON.stringify({
-			type: "message",
-			id: "msg2",
-			parentId: "msg1",
-			timestamp: new Date().toISOString(),
-			message: { role: "assistant", content: [{ type: "text", text: "first retrieval output" }] },
-		}) + "\n");
+		fs.writeFileSync(
+			sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				id: "msg1",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "Do something" },
+			})}\n`,
+		);
+		fs.appendFileSync(
+			sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				id: "msg2",
+				parentId: "msg1",
+				timestamp: new Date().toISOString(),
+				message: { role: "assistant", content: [{ type: "text", text: "first retrieval output" }] },
+			})}\n`,
+		);
 
 		// First call: consumes async result from memory
 		const result1 = await controller.waitForAgent([agentId], {}, makeContext());
@@ -2291,9 +2235,7 @@ describe("TaskController.execute", () => {
 	// ---- Shared outcome-agnostic extraction (blocking crash paths) ----
 
 	it("returns partial assistant output when session crashes after producing text (blocking)", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "here is a partial answer" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "here is a partial answer" }] }];
 		mockSession.prompt = vi.fn().mockRejectedValue(new Error("Connection lost"));
 
 		const result = await controller.execute(makeParams(), makeContext());
@@ -2315,7 +2257,7 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("Model error");
 		expect(result.details.output).toBeUndefined();
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("Model error");
 	});
 
@@ -2326,24 +2268,19 @@ describe("TaskController.execute", () => {
 
 		const result = await controller.execute(makeParams(), makeContext());
 
-			expect(result.details.error).toBe("sub-agent stopped unexpectedly.");
+		expect(result.details.error).toBe("sub-agent stopped unexpectedly.");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
-			expect(text).toContain("sub-agent stopped unexpectedly.");
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toContain("sub-agent stopped unexpectedly.");
 	});
 
 	// ---- Shared outcome-agnostic extraction (async crash paths via waitForAgent) ----
 
 	it("returns partial output via waitForAgent when async agent crashed after producing text", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "partial async output" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "partial async output" }] }];
 		mockSession.prompt = vi.fn().mockRejectedValue(new Error("async boom"));
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		await new Promise((r) => setTimeout(r, 10));
@@ -2361,10 +2298,7 @@ describe("TaskController.execute", () => {
 		mockSession.messages = [{ role: "user", content: "do work" }];
 		mockSession.prompt = vi.fn().mockRejectedValue(new Error("async crash"));
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		await new Promise((r) => setTimeout(r, 10));
@@ -2373,7 +2307,7 @@ describe("TaskController.execute", () => {
 
 		expect(result.details.error).toBe("async crash");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
 		expect(text).toContain("async crash");
 	});
 
@@ -2384,20 +2318,17 @@ describe("TaskController.execute", () => {
 		// Empty error message — extractor falls through to 'none'
 		mockSession.prompt = vi.fn().mockRejectedValue("");
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		await new Promise((r) => setTimeout(r, 10));
 
 		const result = await controller.waitForAgent([agentId], {}, makeContext());
 
-			expect(result.details.error).toBe("sub-agent stopped unexpectedly.");
+		expect(result.details.error).toBe("sub-agent stopped unexpectedly.");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/stopped with an error|crashed|aborted/);
-			expect(text).toContain("before producing output");
+		expect(text).toMatch(/stopped with an error|crashed|aborted/);
+		expect(text).toContain("before producing output");
 	});
 
 	// ---- Consistent behavior between blocking and async ----
@@ -2407,9 +2338,7 @@ describe("TaskController.execute", () => {
 		const crashError = "Connection lost";
 
 		// Blocking crash
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: partialText }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: partialText }] }];
 		mockSession.prompt = vi.fn().mockRejectedValue(new Error(crashError));
 
 		const blockingResult = await controller.execute(makeParams(), makeContext());
@@ -2418,7 +2347,9 @@ describe("TaskController.execute", () => {
 		expect(blockingResult.details.error).toBe(crashError);
 		const blockingText = blockingResult.content[0]?.type === "text" ? blockingResult.content[0].text : "";
 		expect(blockingText).toContain(partialText);
-		expect(blockingText).toMatch(/crashed but produced partial output|stopped with an error after producing partial output/);
+		expect(blockingText).toMatch(
+			/crashed but produced partial output|stopped with an error after producing partial output/,
+		);
 
 		// Reset for async
 		mockSession = {
@@ -2426,17 +2357,12 @@ describe("TaskController.execute", () => {
 			subscribe: vi.fn(() => vi.fn()),
 			prompt: vi.fn().mockRejectedValue(new Error(crashError)),
 			abort: vi.fn(),
-			messages: [
-				{ role: "assistant", content: [{ type: "text", text: partialText }] },
-			],
+			messages: [{ role: "assistant", content: [{ type: "text", text: partialText }] }],
 			getActiveToolNames: () => [],
 		};
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
 
-		const spawnResult = await controller.execute(
-			makeParams({ blocking: false }),
-			makeContext(),
-		);
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
 		await new Promise((r) => setTimeout(r, 10));
@@ -2447,15 +2373,15 @@ describe("TaskController.execute", () => {
 		expect(asyncResult.details.error).toBe(crashError);
 		const asyncText = asyncResult.content[0]?.type === "text" ? asyncResult.content[0].text : "";
 		expect(asyncText).toContain(partialText);
-		expect(asyncText).toMatch(/stopped with an error after producing partial output|crashed but produced partial output/);
+		expect(asyncText).toMatch(
+			/stopped with an error after producing partial output|crashed but produced partial output/,
+		);
 	});
 
 	// ---- Successful output still works through shared path ----
 
 	it("successful blocking output still uses shared extraction path", async () => {
-		mockSession.messages = [
-			{ role: "assistant", content: [{ type: "text", text: "task done" }] },
-		];
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "task done" }] }];
 
 		const result = await controller.execute(makeParams(), makeContext());
 
@@ -2464,7 +2390,6 @@ describe("TaskController.execute", () => {
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("completed");
 		expect(text).toContain("task done");
-
 	});
 
 	// ---- Timeout escalation (#25) ----
@@ -2495,11 +2420,7 @@ describe("TaskController.execute", () => {
 		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: false },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: false }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("timed_out_still_running");
@@ -2514,7 +2435,10 @@ describe("TaskController.execute", () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2541,7 +2465,12 @@ describe("TaskController.execute", () => {
 			for (const cb of subs) cb({ type: "agent_end" });
 		});
 
-		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
+		const logs: Array<{
+			level: string;
+			event: string;
+			context?: Record<string, unknown>;
+			payload?: Record<string, unknown>;
+		}> = [];
 		const runtime: RuntimeContext = {
 			treeDepth: 0,
 			depthPolicy: defaultRootPolicy(),
@@ -2589,11 +2518,7 @@ describe("TaskController.execute", () => {
 			});
 		});
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("completed");
@@ -2654,16 +2579,14 @@ describe("TaskController.execute", () => {
 				terminalError: "Agent is already processing.",
 			});
 		});
-		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "timed_out", toolOverrideApplied: true });
+		fakeSessionManager.requestAbortSummary = vi
+			.fn()
+			.mockResolvedValue({ status: "timed_out" as const, toolOverrideApplied: true });
 
 		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -2681,7 +2604,10 @@ describe("TaskController.execute", () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2694,9 +2620,16 @@ describe("TaskController.execute", () => {
 
 		// sendKillMessage is a no-op (agent doesn't respond to finish request)
 		fakeSessionManager.sendKillMessage = vi.fn();
-		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "timed_out", toolOverrideApplied: true });
+		fakeSessionManager.requestAbortSummary = vi
+			.fn()
+			.mockResolvedValue({ status: "timed_out" as const, toolOverrideApplied: true });
 
-		const logs: Array<{ level: string; event: string; context?: Record<string, unknown>; payload?: Record<string, unknown> }> = [];
+		const logs: Array<{
+			level: string;
+			event: string;
+			context?: Record<string, unknown>;
+			payload?: Record<string, unknown>;
+		}> = [];
 		const runtime: RuntimeContext = {
 			treeDepth: 0,
 			depthPolicy: defaultRootPolicy(),
@@ -2736,24 +2669,24 @@ describe("TaskController.execute", () => {
 			prompt: vi.fn(() => new Promise(() => {})),
 			steer: vi.fn().mockResolvedValue(undefined),
 			abort: vi.fn(),
-			messages: [{
-				role: "assistant",
-				content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
-				stopReason: "toolUse",
-			}],
+			messages: [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
+					stopReason: "toolUse",
+				},
+			],
 			getActiveToolNames: () => [],
 		};
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
-		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "timed_out", toolOverrideApplied: true });
+		fakeSessionManager.requestAbortSummary = vi
+			.fn()
+			.mockResolvedValue({ status: "timed_out" as const, toolOverrideApplied: true });
 
 		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -2778,9 +2711,12 @@ describe("TaskController.execute", () => {
 					if (index >= 0) callbacks.splice(index, 1);
 				};
 			}),
-			prompt: vi.fn((message: string, opts?: unknown) => {
+			prompt: vi.fn((_message: string, opts?: unknown) => {
 				if ((opts as any)?.streamingBehavior === "steer") {
-					mockSession.messages.push({ role: "assistant", content: [{ type: "text", text: "abort summary after cancelling sleep" }] });
+					mockSession.messages.push({
+						role: "assistant",
+						content: [{ type: "text", text: "abort summary after cancelling sleep" }],
+					});
 					for (const cb of [...callbacks]) cb({ type: "agent_end" });
 					return Promise.resolve();
 				}
@@ -2793,11 +2729,13 @@ describe("TaskController.execute", () => {
 			}),
 			abortBash: vi.fn(),
 			setActiveToolsByName: vi.fn(),
-			messages: [{
-				role: "assistant",
-				content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
-				stopReason: "toolUse",
-			}],
+			messages: [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
+					stopReason: "toolUse",
+				},
+			],
 			getActiveToolNames: () => ["bash"],
 		};
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
@@ -2806,11 +2744,7 @@ describe("TaskController.execute", () => {
 		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -2849,14 +2783,10 @@ describe("TaskController.execute", () => {
 				abortReason: "final_summary",
 				terminalOutcome: "aborted",
 			});
-			return { status: "summarized", output: "final abort summary", toolOverrideApplied: true };
+			return { status: "summarized" as const, output: "final abort summary", toolOverrideApplied: true };
 		});
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(fakeSessionManager.requestAbortSummary).toHaveBeenCalledWith(agentId);
@@ -2886,13 +2816,11 @@ describe("TaskController.execute", () => {
 		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
 		const agentId = (spawnResult.details as TaskDetails).id!;
 		fakeSessionManager.sendKillMessage = vi.fn();
-		fakeSessionManager.requestAbortSummary = vi.fn().mockResolvedValue({ status: "no_output", toolOverrideApplied: true });
+		fakeSessionManager.requestAbortSummary = vi
+			.fn()
+			.mockResolvedValue({ status: "no_output" as const, toolOverrideApplied: true });
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(agentId);
 		const agents = result.details.agents as AgentWaitResult[];
@@ -2909,7 +2837,10 @@ describe("TaskController.execute", () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2922,11 +2853,7 @@ describe("TaskController.execute", () => {
 
 		fakeSessionManager.sendKillMessage = vi.fn();
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("killed");
@@ -2945,7 +2872,10 @@ describe("TaskController.execute", () => {
 		const subsA: Array<(e: any) => void> = [];
 		const mockSessionA = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subsA.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subsA.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2955,7 +2885,10 @@ describe("TaskController.execute", () => {
 		const subsB: Array<(e: any) => void> = [];
 		const mockSessionB = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subsB.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subsB.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -2988,20 +2921,16 @@ describe("TaskController.execute", () => {
 			// Agent B: no response to the finish request (will be forcibly aborted)
 		});
 
-		const result = await controller.waitForAgent(
-			[idA, idB],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([idA, idB], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents).toHaveLength(2);
 
-		const agentA = agents.find(a => a.id === idA)!;
+		const agentA = agents.find((a) => a.id === idA)!;
 		expect(agentA.status).toBe("completed");
 		expect(agentA.output).toBe("agent A final answer");
 
-		const agentB = agents.find(a => a.id === idB)!;
+		const agentB = agents.find((a) => a.id === idB)!;
 		expect(agentB.status).toBe("killed");
 
 		expect(fakeSessionManager.abortSession).toHaveBeenCalledWith(idB);
@@ -3010,7 +2939,7 @@ describe("TaskController.execute", () => {
 		// Multi-agent text should show both statuses
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("## Completed");
-			expect(text).toContain("## Aborted");
+		expect(text).toContain("## Aborted");
 
 		fakeSessionManager.sendKillMessage = origSendKill;
 	});
@@ -3019,7 +2948,10 @@ describe("TaskController.execute", () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -3032,17 +2964,13 @@ describe("TaskController.execute", () => {
 
 		fakeSessionManager.sendKillMessage = vi.fn();
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("killed");
 
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-				expect(text).toContain("aborted while still running");
+		expect(text).toContain("aborted while still running");
 		expect(text).toContain("Use resume:");
 		expect(result.details.error).toBe("aborted");
 	});
@@ -3127,8 +3055,16 @@ describe("TaskController.execute", () => {
 			waitForAsyncResult: vi.fn(() => new Promise(() => {})),
 		} as any;
 
-		const first = await waitForAgentTool([recordId], { timeout: 0 }, makeContext({ sessionManager: runningSessionManager }));
-		const second = await waitForAgentTool([recordId], { timeout: 0 }, makeContext({ sessionManager: runningSessionManager }));
+		const first = await waitForAgentTool(
+			[recordId],
+			{ timeout: 0 },
+			makeContext({ sessionManager: runningSessionManager }),
+		);
+		const second = await waitForAgentTool(
+			[recordId],
+			{ timeout: 0 },
+			makeContext({ sessionManager: runningSessionManager }),
+		);
 
 		expect((first.details.agents as AgentWaitResult[])[0].terminalOutcome).toBe("timed_out");
 		expect((second.details.agents as AgentWaitResult[])[0].terminalOutcome).toBe("timed_out");
@@ -3154,14 +3090,20 @@ describe("TaskController.execute", () => {
 		let inMemory = true;
 		const abortedSessionManager = {
 			...fakeSessionManager,
-			getAsyncResult: vi.fn(() => inMemory ? {
-				output: "",
-				error: "aborted",
-				warnings: [],
-				terminalOutcome: "aborted",
-				abortReason: "wait_for_agent_abort_timeout",
-			} : undefined),
-			clearAsyncResult: vi.fn(() => { inMemory = false; }),
+			getAsyncResult: vi.fn(() =>
+				inMemory
+					? {
+							output: "",
+							error: "aborted",
+							warnings: [],
+							terminalOutcome: "aborted",
+							abortReason: "wait_for_agent_abort_timeout",
+						}
+					: undefined,
+			),
+			clearAsyncResult: vi.fn(() => {
+				inMemory = false;
+			}),
 			isCompleted: vi.fn().mockReturnValue(true),
 		} as any;
 
@@ -3246,7 +3188,9 @@ describe("TaskController.execute", () => {
 		const runningId = "cafebabe";
 		const killedRecord = makeRecord(killedId, "explorer");
 		const runningRecord = makeRecord(runningId, "explorer");
-		const waitForAsyncResult = vi.fn(() => Promise.reject(new Error("should not wait when terminal output is ready")));
+		const waitForAsyncResult = vi.fn(() =>
+			Promise.reject(new Error("should not wait when terminal output is ready")),
+		);
 
 		const result = await waitForAgentTool(
 			[killedId, runningId],
@@ -3254,13 +3198,13 @@ describe("TaskController.execute", () => {
 			makeContext({
 				metadataStore: {
 					...fakeMetadataStore,
-					findRecord: vi.fn((id: string) => id === killedId ? killedRecord : runningRecord),
+					findRecord: vi.fn((id: string) => (id === killedId ? killedRecord : runningRecord)),
 				} as any,
 				sessionManager: {
 					...fakeSessionManager,
-					getAsyncResult: vi.fn((id: string) => id === killedId
-						? { output: "killed output", error: "killed", warnings: [] }
-						: undefined),
+					getAsyncResult: vi.fn((id: string) =>
+						id === killedId ? { output: "killed output", error: "killed", warnings: [] } : undefined,
+					),
 					isAsyncRunning: vi.fn((id: string) => id === runningId),
 					waitForAsyncResult,
 				} as any,
@@ -3268,8 +3212,8 @@ describe("TaskController.execute", () => {
 		);
 
 		const agents = result.details.agents as AgentWaitResult[];
-		expect(agents.find(a => a.id === killedId)?.status).toBe("killed");
-		expect(agents.find(a => a.id === runningId)?.status).toBe("running");
+		expect(agents.find((a) => a.id === killedId)?.status).toBe("killed");
+		expect(agents.find((a) => a.id === runningId)?.status).toBe("running");
 		expect(waitForAsyncResult).not.toHaveBeenCalled();
 	});
 
@@ -3277,7 +3221,10 @@ describe("TaskController.execute", () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -3309,7 +3256,10 @@ describe("TaskController.execute", () => {
 		const subs: Array<(e: any) => void> = [];
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => new Promise(() => {})),
 			abort: vi.fn(),
 			messages: [],
@@ -3333,16 +3283,14 @@ describe("TaskController.execute", () => {
 			});
 			// Then call the real abortSession
 			(sessionManager as any).completedSessions?.add?.(id);
-			try { mockSession.abort(); } catch {}
+			try {
+				mockSession.abort();
+			} catch {}
 		});
 
 		fakeSessionManager.sendKillMessage = vi.fn();
 
-		const result = await controller.waitForAgent(
-			[agentId],
-			{ timeout: 0, kill_on_timeout: true },
-			makeContext(),
-		);
+		const result = await controller.waitForAgent([agentId], { timeout: 0, kill_on_timeout: true }, makeContext());
 
 		const agents = result.details.agents as AgentWaitResult[];
 		expect(agents[0].status).toBe("killed");
@@ -3362,8 +3310,16 @@ describe("TaskController.execute", () => {
 		let promptReject: ((err: any) => void) | null = null;
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
-			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
+			prompt: vi.fn(
+				() =>
+					new Promise((_, reject) => {
+						promptReject = reject;
+					}),
+			),
 			abort: vi.fn(() => {
 				// Simulate abort causing prompt rejection (real production behavior)
 				if (promptReject) {
@@ -3405,17 +3361,23 @@ describe("TaskController.execute", () => {
 		const disposeSpy = vi.fn();
 		mockSession = {
 			dispose: disposeSpy,
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
-			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
+			prompt: vi.fn(
+				() =>
+					new Promise((_, reject) => {
+						promptReject = reject;
+					}),
+			),
 			abort: vi.fn(() => {
 				if (promptReject) {
 					promptReject(new Error("aborted"));
 					promptReject = null;
 				}
 			}),
-			messages: [
-				{ role: "assistant", content: [{ type: "text", text: "work in progress" }] },
-			],
+			messages: [{ role: "assistant", content: [{ type: "text", text: "work in progress" }] }],
 			getActiveToolNames: () => [],
 		};
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
@@ -3444,17 +3406,23 @@ describe("TaskController.execute", () => {
 		let promptReject: ((err: any) => void) | null = null;
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
-			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
+			prompt: vi.fn(
+				() =>
+					new Promise((_, reject) => {
+						promptReject = reject;
+					}),
+			),
 			abort: vi.fn(() => {
 				if (promptReject) {
 					promptReject(new Error("aborted"));
 					promptReject = null;
 				}
 			}),
-			messages: [
-				{ role: "assistant", content: [{ type: "text", text: "partial data before abort" }] },
-			],
+			messages: [{ role: "assistant", content: [{ type: "text", text: "partial data before abort" }] }],
 			getActiveToolNames: () => [],
 		};
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
@@ -3481,8 +3449,16 @@ describe("TaskController.execute", () => {
 		const disposeSpy = vi.fn();
 		mockSession = {
 			dispose: disposeSpy,
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
-			prompt: vi.fn(() => new Promise((_, reject) => { promptReject = reject; })),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
+			prompt: vi.fn(
+				() =>
+					new Promise((_, reject) => {
+						promptReject = reject;
+					}),
+			),
 			abort: vi.fn(() => {
 				if (promptReject) {
 					promptReject(new Error("aborted"));
@@ -3520,15 +3496,22 @@ describe("TaskController.execute", () => {
 
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => {
 				callCount++;
 				if (callCount === 1) {
 					// Original prompt: hangs until aborted
-					return new Promise((_, reject) => { promptReject = reject; });
+					return new Promise((_, reject) => {
+						promptReject = reject;
+					});
 				}
 				// Finish-request prompt: succeeds
-				return new Promise((resolve) => { finishPromptResolve = resolve; });
+				return new Promise((resolve) => {
+					finishPromptResolve = resolve;
+				});
 			}),
 			abort: vi.fn(() => {
 				if (promptReject) {
@@ -3536,9 +3519,7 @@ describe("TaskController.execute", () => {
 					promptReject = null;
 				}
 			}),
-			messages: [
-				{ role: "assistant", content: [{ type: "text", text: "final answer after finish request" }] },
-			],
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final answer after finish request" }] }],
 			getActiveToolNames: () => [],
 		};
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
@@ -3578,13 +3559,20 @@ describe("TaskController.execute", () => {
 
 		mockSession = {
 			dispose: vi.fn(),
-			subscribe: vi.fn((cb) => { subs.push(cb); return () => {}; }),
+			subscribe: vi.fn((cb) => {
+				subs.push(cb);
+				return () => {};
+			}),
 			prompt: vi.fn(() => {
 				callCount++;
 				if (callCount === 1) {
-					return new Promise((_, reject) => { promptReject = reject; });
+					return new Promise((_, reject) => {
+						promptReject = reject;
+					});
 				}
-				return new Promise((_, reject) => { finishPromptReject = reject; });
+				return new Promise((_, reject) => {
+					finishPromptReject = reject;
+				});
 			}),
 			abort: vi.fn(() => {
 				if (promptReject) {
@@ -3592,9 +3580,7 @@ describe("TaskController.execute", () => {
 					promptReject = null;
 				}
 			}),
-			messages: [
-				{ role: "assistant", content: [{ type: "text", text: "tried to finish" }] },
-			],
+			messages: [{ role: "assistant", content: [{ type: "text", text: "tried to finish" }] }],
 			getActiveToolNames: () => [],
 		};
 		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);

@@ -145,7 +145,10 @@ export class AsyncAgentNotifier implements AsyncAgentNotificationPort {
 
 	private takeDueNotificationInternal(opportunity: AsyncAgentNotificationOpportunity): string | null {
 		const currentOpportunity = this.advanceOpportunity(opportunity);
-		if (this.lastOpportunity === currentOpportunity && this.lastOpportunityCompletionVersion === this.completionStateVersion) {
+		if (
+			this.lastOpportunity === currentOpportunity &&
+			this.lastOpportunityCompletionVersion === this.completionStateVersion
+		) {
 			return null;
 		}
 
@@ -181,9 +184,10 @@ export class AsyncAgentNotifier implements AsyncAgentNotificationPort {
 
 		const ids = [...this.completed].sort();
 		const idList = ids.map((id) => `"${id}"`).join(", ");
-		const header = kind === "reminder"
-			? `[System] Reminder: the following async sub-agent(s) have completed and are still waiting for you to retrieve their output:`
-			: `[System] The following async sub-agent(s) have completed and are waiting for you to retrieve their output:`;
+		const header =
+			kind === "reminder"
+				? `[System] Reminder: the following async sub-agent(s) have completed and are still waiting for you to retrieve their output:`
+				: `[System] The following async sub-agent(s) have completed and are waiting for you to retrieve their output:`;
 
 		const lines = [
 			header,

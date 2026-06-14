@@ -48,9 +48,7 @@ function seedDirectory(bundledDir: string, targetDir: string): void {
 		try {
 			fs.copyFileSync(src, path.join(targetDir, entry.name));
 		} catch (err) {
-			console.warn(
-				`[pi-subagent] Failed to seed "${entry.name}": ${(err as Error).message}`,
-			);
+			console.warn(`[pi-subagent] Failed to seed "${entry.name}": ${(err as Error).message}`);
 		}
 	}
 }
@@ -64,13 +62,7 @@ function seedDirectory(bundledDir: string, targetDir: string): void {
 export function seedAgentConfig(): void {
 	const agentDir = getAgentDir();
 
-	seedDirectory(
-		path.resolve(thisDir, "agents"),
-		path.join(agentDir, "agents"),
-	);
+	seedDirectory(path.resolve(thisDir, "agents"), path.join(agentDir, "agents"));
 
-	seedDirectory(
-		path.resolve(thisDir, "prompt-parts"),
-		path.join(agentDir, "prompt-parts"),
-	);
+	seedDirectory(path.resolve(thisDir, "prompt-parts"), path.join(agentDir, "prompt-parts"));
 }

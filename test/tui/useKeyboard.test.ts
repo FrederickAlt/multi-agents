@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { getFieldName } from "../../src/tui/state/option-columns.js";
 import {
 	handleExpandedEnterOrSpace,
 	handleKeyboardInput,
@@ -7,6 +6,7 @@ import {
 	type KeyboardActions,
 	type KeyboardState,
 } from "../../src/tui/hooks/useKeyboard.js";
+import { getFieldName } from "../../src/tui/state/option-columns.js";
 
 function makeState(overrides: Partial<KeyboardState> = {}): KeyboardState {
 	return {
@@ -82,10 +82,7 @@ describe("Keyboard Enter/Space action routing", () => {
 			openOverlay: vi.fn(),
 		} as Pick<KeyboardActions, "selectFocusedOption" | "openOverlay">;
 
-		handleExpandedEnterOrSpace(
-			{ agentIndex: 0, fieldName: getFieldName(0) },
-			actions,
-		);
+		handleExpandedEnterOrSpace({ agentIndex: 0, fieldName: getFieldName(0) }, actions);
 
 		expect(actions.selectFocusedOption).toHaveBeenCalledTimes(1);
 		expect(actions.openOverlay).not.toHaveBeenCalled();
@@ -97,10 +94,7 @@ describe("Keyboard Enter/Space action routing", () => {
 			openOverlay: vi.fn(),
 		} as Pick<KeyboardActions, "selectFocusedOption" | "openOverlay">;
 
-		handleExpandedEnterOrSpace(
-			{ agentIndex: 0, fieldName: "display_name" },
-			actions,
-		);
+		handleExpandedEnterOrSpace({ agentIndex: 0, fieldName: "display_name" }, actions);
 
 		expect(actions.openOverlay).toHaveBeenCalledTimes(1);
 		expect(actions.openOverlay).toHaveBeenCalledWith(0, "display_name");
@@ -149,24 +143,21 @@ describe("Keyboard input dispatch for confirmation overlays", () => {
 });
 
 describe("Keyboard input dispatch for inline option filtering", () => {
-	it.each(["r", "q", "h", "j", "k", "l"]) (
-		"routes typed %s to option filter in expanded inline columns",
-		(char) => {
-			const actions = makeActions();
-			const exit = vi.fn();
-			const state = makeState({ optionColumnFilter: "pre" });
-			handleKeyboardInput(char, {}, state, actions, exit);
+	it.each(["r", "q", "h", "j", "k", "l"])("routes typed %s to option filter in expanded inline columns", (char) => {
+		const actions = makeActions();
+		const exit = vi.fn();
+		const state = makeState({ optionColumnFilter: "pre" });
+		handleKeyboardInput(char, {}, state, actions, exit);
 
-			expect(actions.setOptionColumnFilter).toHaveBeenCalledWith(`pre${char}`);
-			expect(actions.setOptionColumnFilter).toHaveBeenCalledTimes(1);
-			expect(actions.focusPrevOptionItem).not.toHaveBeenCalled();
-			expect(actions.focusNextOptionItem).not.toHaveBeenCalled();
-			expect(actions.focusPrevField).not.toHaveBeenCalled();
-			expect(actions.focusNextField).not.toHaveBeenCalled();
-			expect(actions.rescan).not.toHaveBeenCalled();
-			expect(exit).not.toHaveBeenCalled();
-		},
-	);
+		expect(actions.setOptionColumnFilter).toHaveBeenCalledWith(`pre${char}`);
+		expect(actions.setOptionColumnFilter).toHaveBeenCalledTimes(1);
+		expect(actions.focusPrevOptionItem).not.toHaveBeenCalled();
+		expect(actions.focusNextOptionItem).not.toHaveBeenCalled();
+		expect(actions.focusPrevField).not.toHaveBeenCalled();
+		expect(actions.focusNextField).not.toHaveBeenCalled();
+		expect(actions.rescan).not.toHaveBeenCalled();
+		expect(exit).not.toHaveBeenCalled();
+	});
 
 	it("backspace/delete shortens the inline option filter", () => {
 		const actions = makeActions();
@@ -239,23 +230,20 @@ describe("Keyboard input dispatch for inline option filtering", () => {
 });
 
 describe("Keyboard input dispatch for expanded non-option fields", () => {
-	it.each(["h", "j", "k", "l"]) (
-		"routes typed %s to field navigation in expanded non-option mode",
-		(input) => {
-			const actions = makeActions();
-			const exit = vi.fn();
-			const state = makeState({
-				fieldName: "description",
-				optionColumnFilter: "filter",
-			});
-			handleKeyboardInput(input, {}, state, actions, exit);
+	it.each(["h", "j", "k", "l"])("routes typed %s to field navigation in expanded non-option mode", (input) => {
+		const actions = makeActions();
+		const exit = vi.fn();
+		const state = makeState({
+			fieldName: "description",
+			optionColumnFilter: "filter",
+		});
+		handleKeyboardInput(input, {}, state, actions, exit);
 
-			expect(actions.setOptionColumnFilter).not.toHaveBeenCalled();
-			expect(actions.focusPrevField).toHaveBeenCalledTimes(input === "h" || input === "k" ? 1 : 0);
-			expect(actions.focusNextField).toHaveBeenCalledTimes(input === "j" || input === "l" ? 1 : 0);
-			expect(actions.focusPrevOptionItem).not.toHaveBeenCalled();
-			expect(actions.focusNextOptionItem).not.toHaveBeenCalled();
-			expect(exit).not.toHaveBeenCalled();
-		},
-	);
+		expect(actions.setOptionColumnFilter).not.toHaveBeenCalled();
+		expect(actions.focusPrevField).toHaveBeenCalledTimes(input === "h" || input === "k" ? 1 : 0);
+		expect(actions.focusNextField).toHaveBeenCalledTimes(input === "j" || input === "l" ? 1 : 0);
+		expect(actions.focusPrevOptionItem).not.toHaveBeenCalled();
+		expect(actions.focusNextOptionItem).not.toHaveBeenCalled();
+		expect(exit).not.toHaveBeenCalled();
+	});
 });

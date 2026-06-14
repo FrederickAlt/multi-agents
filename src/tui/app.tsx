@@ -1,16 +1,16 @@
-import React, { useState, useCallback } from "react";
 import { Box, Text } from "ink";
-import { useConfig } from "./hooks/useConfig.js";
-import { useKeyboard } from "./hooks/useKeyboard.js";
-import { useMouse } from "./hooks/useMouse.js";
+import React, { useCallback, useState } from "react";
 import { Board } from "./components/Board.js";
 import { CheckboxOverlay } from "./components/CheckboxOverlay.js";
 import { DropdownOverlay } from "./components/DropdownOverlay.js";
-import { StaleCleanupOverlay } from "./components/StaleCleanupOverlay.js";
-import { HelpFooter } from "./components/HelpFooter.js";
 import { EmptyState } from "./components/EmptyState.js";
-import { getFieldName, isOptionColumnField } from "./state/option-columns.js";
+import { HelpFooter } from "./components/HelpFooter.js";
+import { StaleCleanupOverlay } from "./components/StaleCleanupOverlay.js";
 import type { AgentConfigDebugInfo } from "./debug.js";
+import { useConfig } from "./hooks/useConfig.js";
+import { useKeyboard } from "./hooks/useKeyboard.js";
+import { useMouse } from "./hooks/useMouse.js";
+import { getFieldName, isOptionColumnField } from "./state/option-columns.js";
 
 interface AppProps {
 	debugInfo?: AgentConfigDebugInfo;
@@ -61,9 +61,7 @@ export function App({ debugInfo }: AppProps = {}) {
 		rescan,
 	} = useConfig();
 	const filteringInlineOptions =
-		!state.overlay &&
-		state.expandedAgentIndex !== null &&
-		isOptionColumnField(getFieldName(state.focus.fieldIndex));
+		!state.overlay && state.expandedAgentIndex !== null && isOptionColumnField(getFieldName(state.focus.fieldIndex));
 	// Overlay-local focus index (for up/down navigation within overlay items)
 	const [overlayFocusIndex, setOverlayFocusIndex] = useState(0);
 
@@ -213,20 +211,12 @@ export function App({ debugInfo }: AppProps = {}) {
 
 			{/* Overlays */}
 			{overlay && overlay.type === "checkbox" && (
-				<CheckboxOverlay
-					overlay={overlay}
-					focusedIndex={overlayFocusIndex}
-				/>
+				<CheckboxOverlay overlay={overlay} focusedIndex={overlayFocusIndex} />
 			)}
 			{overlay && overlay.type === "dropdown" && (
-				<DropdownOverlay
-					overlay={overlay}
-					focusedIndex={overlayFocusIndex}
-				/>
+				<DropdownOverlay overlay={overlay} focusedIndex={overlayFocusIndex} />
 			)}
-			{overlay && overlay.type === "stale-cleanup" && (
-				<StaleCleanupOverlay overlay={overlay} />
-			)}
+			{overlay && overlay.type === "stale-cleanup" && <StaleCleanupOverlay overlay={overlay} />}
 
 			<DebugBanner debugInfo={debugInfo} />
 			<HelpFooter filteringInlineOptions={filteringInlineOptions} />

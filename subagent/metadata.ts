@@ -12,11 +12,11 @@
  * The class is designed to be testable without live Pi sessions or an LLM.
  */
 
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomBytes } from "node:crypto";
-import { makeNoopDebugLogger, type DebugLogger } from "./debug-logger.js";
 import type { SubagentContextUsage } from "./context-usage.js";
+import { type DebugLogger, makeNoopDebugLogger } from "./debug-logger.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -25,9 +25,36 @@ import type { SubagentContextUsage } from "./context-usage.js";
 const HEX_ID_BYTES = 4;
 
 const HUMAN_NAMES = [
-	"Tom", "Ada", "Max", "Ivy", "Leo", "Nora", "Sam", "Mia", "Eli", "Zoe",
-	"Kai", "Ava", "Ben", "Lia", "Gus", "Nia", "Ray", "Uma", "Jan", "Eva",
-	"Sol", "Kim", "Ari", "Liv", "Cal", "Bea", "Ned", "Pia", "Ren", "Tess",
+	"Tom",
+	"Ada",
+	"Max",
+	"Ivy",
+	"Leo",
+	"Nora",
+	"Sam",
+	"Mia",
+	"Eli",
+	"Zoe",
+	"Kai",
+	"Ava",
+	"Ben",
+	"Lia",
+	"Gus",
+	"Nia",
+	"Ray",
+	"Uma",
+	"Jan",
+	"Eva",
+	"Sol",
+	"Kim",
+	"Ari",
+	"Liv",
+	"Cal",
+	"Bea",
+	"Ned",
+	"Pia",
+	"Ren",
+	"Tess",
 ];
 
 // ---------------------------------------------------------------------------
@@ -111,14 +138,19 @@ export class MetadataStore {
 	private _metadata: MetadataFile | null = null;
 	private readonly logger: DebugLogger;
 
-	constructor(public readonly ctx: MetadataStoreContext, logger?: DebugLogger) {
+	constructor(
+		public readonly ctx: MetadataStoreContext,
+		logger?: DebugLogger,
+	) {
 		this.logger = logger ?? makeNoopDebugLogger();
 	}
 
 	private async withPathLock<T>(fn: () => T | Promise<T>): Promise<T> {
 		const previous = MetadataStore.pathLocks.get(this.path) ?? Promise.resolve();
 		let release!: () => void;
-		const current = new Promise<void>((resolve) => { release = resolve; });
+		const current = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		const tail = previous.catch(() => undefined).then(() => current);
 		MetadataStore.pathLocks.set(this.path, tail);
 		await previous.catch(() => undefined);
@@ -285,11 +317,7 @@ export class MetadataStore {
 	 * @param parentAgentId  Optional ID of the parent agent.
 	 * @param depth  Nesting depth for the new sub-agent (default 1).
 	 */
-	async allocateRecord(
-		agentName: string,
-		parentAgentId?: string,
-		depth: number = 1,
-	): Promise<SubagentRecord> {
+	async allocateRecord(agentName: string, parentAgentId?: string, depth: number = 1): Promise<SubagentRecord> {
 		const logger = this.logger.child({ component: "metadata", agentName, parentAgentId, depth });
 		logger.debug("metadata_allocate_start");
 		return this.withPathLock(() => {
@@ -362,15 +390,21 @@ export class MetadataStore {
 	 *
 	 * @param sm  An object with getSessionDir, getSessionId, getSessionFile methods.
 	 */
-	static fromSessionManager(sm: {
-		getSessionDir(): string;
-		getSessionId(): string;
-		getSessionFile(): string | undefined;
-	}, logger?: DebugLogger): MetadataStore {
-		return new MetadataStore({
-			sessionDir: sm.getSessionDir(),
-			sessionId: sm.getSessionId(),
-			sessionFile: sm.getSessionFile(),
-		}, logger);
+	static fromSessionManager(
+		sm: {
+			getSessionDir(): string;
+			getSessionId(): string;
+			getSessionFile(): string | undefined;
+		},
+		logger?: DebugLogger,
+	): MetadataStore {
+		return new MetadataStore(
+			{
+				sessionDir: sm.getSessionDir(),
+				sessionId: sm.getSessionId(),
+				sessionFile: sm.getSessionFile(),
+			},
+			logger,
+		);
 	}
 }

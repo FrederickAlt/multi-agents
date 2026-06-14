@@ -28,8 +28,8 @@ export function readSubagentContextUsage(session: unknown): SubagentContextUsage
 	const contextWindow = finiteNumber(usage.contextWindow);
 	if (contextWindow === undefined) return undefined;
 
-	const tokens = usage.tokens === null ? null : finiteNumber(usage.tokens) ?? null;
-	const percent = usage.percent === null ? null : finiteNumber(usage.percent) ?? null;
+	const tokens = usage.tokens === null ? null : (finiteNumber(usage.tokens) ?? null);
+	const percent = usage.percent === null ? null : (finiteNumber(usage.percent) ?? null);
 
 	return { tokens, contextWindow, percent };
 }

@@ -1,4 +1,4 @@
-import { useInput, useApp, useStdin } from "ink";
+import { useApp, useInput, useStdin } from "ink";
 import { isOptionColumnField } from "../state/option-columns.js";
 
 export interface KeyboardActions {
@@ -54,13 +54,7 @@ type KeyboardKey = {
 };
 
 const isInlineColumnFilterInput = (input: string, key: KeyboardKey): boolean => {
-	return (
-		input.length === 1 &&
-		input !== " " &&
-		!key.ctrl &&
-		!key.meta &&
-		!key.alt
-	);
+	return input.length === 1 && input !== " " && !key.ctrl && !key.meta && !key.alt;
 };
 
 export function isInlineEditableField(fieldName: string): boolean {
@@ -85,11 +79,9 @@ export function handleKeyboardInput(
 	actions: KeyboardActions,
 	exit: () => void,
 ): void {
-	const isInlineOptionColumn =
-		state.isExpanded && isOptionColumnField(state.fieldName);
+	const isInlineOptionColumn = state.isExpanded && isOptionColumnField(state.fieldName);
 
-	const shouldHandleGlobalShortcuts =
-		!state.isExpanded || !isInlineOptionColumn || state.isOverlayOpen;
+	const shouldHandleGlobalShortcuts = !state.isExpanded || !isInlineOptionColumn || state.isOverlayOpen;
 
 	if (shouldHandleGlobalShortcuts && key.escape && !state.isOverlayOpen && !state.isExpanded) {
 		exit();
@@ -246,16 +238,16 @@ export function handleKeyboardInput(
  * Hook that maps keyboard input to TUI actions.
  * Uses Ink's useInput for keypress handling.
  */
-export function useKeyboard(
-	actions: KeyboardActions,
-	getState: () => KeyboardState,
-) {
+export function useKeyboard(actions: KeyboardActions, getState: () => KeyboardState) {
 	const { exit } = useApp();
 	const { isRawModeSupported } = useStdin();
 	const inputIsActive = Boolean(isRawModeSupported && typeof process.stdin.setRawMode === "function");
 
-	useInput((input, key) => {
-		const state = getState();
-		handleKeyboardInput(input, key, state, actions, exit);
-	}, { isActive: inputIsActive });
+	useInput(
+		(input, key) => {
+			const state = getState();
+			handleKeyboardInput(input, key, state, actions, exit);
+		},
+		{ isActive: inputIsActive },
+	);
 }

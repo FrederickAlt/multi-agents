@@ -1,4 +1,3 @@
-import React from "react";
 import { Board } from "../components/Board.js";
 import { MODEL_OPTION_DEGRADED_STATUS } from "../state/option-columns.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../state/types.js";
@@ -8,13 +7,23 @@ const options: DiscoveredOptions = {
 	tools: ["read", "bash", "write", "edit", "grep", "find", "sed", "awk", "cat", "ls", "pwd"],
 	extensions: ["multi-agents", "theme-pack"],
 	models: [
-		{ provider: "anthropic", modelId: "claude-haiku", displayName: "Claude Haiku", canonicalRef: "anthropic/claude-haiku" },
-		{ provider: "anthropic", modelId: "claude-sonnet", displayName: "Claude Sonnet", canonicalRef: "anthropic/claude-sonnet" },
+		{
+			provider: "anthropic",
+			modelId: "claude-haiku",
+			displayName: "Claude Haiku",
+			canonicalRef: "anthropic/claude-haiku",
+		},
+		{
+			provider: "anthropic",
+			modelId: "claude-sonnet",
+			displayName: "Claude Sonnet",
+			canonicalRef: "anthropic/claude-sonnet",
+		},
 		{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "openai/gpt-5" },
 	],
 	defaultModel: "Claude Sonnet",
 	modelDiscovery: {
-		status: "ready",
+		status: "ready" as const,
 		error: null,
 	},
 	reasoningEfforts: ["low", "medium", "high", "maximum"],
@@ -55,6 +64,7 @@ function state(overrides: Partial<ConfigState> = {}): ConfigState {
 		statuses: new Map(),
 		scrollOffset: 0,
 		optionColumnScrollOffset: 0,
+		optionColumnItemOrder: null,
 		optionColumnFilter: "",
 		globalError: null,
 		...overrides,
@@ -90,7 +100,7 @@ const scenarios: Array<{ name: string; state: ConfigState }> = [
 			options: {
 				...options,
 				models: [],
-				modelDiscovery: { status: "degraded", error: "offline" },
+				modelDiscovery: { status: "degraded" as const, error: "offline" },
 			},
 			agents: [
 				{

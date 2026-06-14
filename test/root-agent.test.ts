@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveRootAgent } from "../subagent/root-agent.js";
 import type { AgentConfig } from "../subagent/agents.js";
+import { resolveRootAgent } from "../subagent/root-agent.js";
 
 function makeAgent(name: string): AgentConfig {
 	return {
@@ -44,9 +44,11 @@ describe("resolveRootAgent", () => {
 	});
 
 	it("throws a visible error when the configured default Root agent is missing", () => {
-		expect(() => resolveRootAgent({
-			agents: [makeAgent("planner")],
-			defaultRootAgent: "missing",
-		})).toThrow('Default Root agent "missing" was not found');
+		expect(() =>
+			resolveRootAgent({
+				agents: [makeAgent("planner")],
+				defaultRootAgent: "missing",
+			}),
+		).toThrow('Default Root agent "missing" was not found');
 	});
 });

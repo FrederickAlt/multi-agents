@@ -1,4 +1,3 @@
-import React from "react";
 import { Box, Text } from "ink";
 import type { OverlayState } from "../state/types.js";
 
@@ -21,36 +20,29 @@ export function StaleCleanupOverlay({ overlay }: StaleCleanupOverlayProps) {
 			: paddedValue.padEnd(contentWidth, " ");
 	};
 	const rows = [
-		"Stale tools/extensions found. Remove them?",
-		`agent: ${overlay.agentName}`,
-		...tools.map((item) => `tools: ${item} (missing)`),
-		...extensions.map((item) => `extensions: ${item} (missing)`),
-		"",
-		"Enter/y: remove  Esc/n: keep",
+		{ key: "title", text: "Stale tools/extensions found. Remove them?" },
+		{ key: "agent", text: `agent: ${overlay.agentName}` },
+		...tools.map((item) => ({ key: `tool:${item}`, text: `tools: ${item} (missing)` })),
+		...extensions.map((item) => ({ key: `extension:${item}`, text: `extensions: ${item} (missing)` })),
+		{ key: "spacer", text: "" },
+		{ key: "help", text: "Enter/y: remove  Esc/n: keep" },
 	];
 	const helpRowIndex = rows.length - 1;
-	while (rows.length < popupHeight - 2) rows.push("");
+	while (rows.length < popupHeight - 2) rows.push({ key: `blank:${rows.length}`, text: "" });
+	const overlayPosition = { position: "absolute" as const, top: 0, left: 0 };
 
 	return (
 		<Box
-			position="absolute"
-			top={0}
-			left={0}
+			{...overlayPosition}
 			width={terminalWidth}
 			height={terminalHeight}
 			alignItems="center"
 			justifyContent="center"
 		>
-			<Box
-				flexDirection="column"
-				borderStyle="double"
-				borderColor="yellow"
-				width={popupWidth}
-				height={popupHeight}
-			>
+			<Box flexDirection="column" borderStyle="double" borderColor="yellow" width={popupWidth} height={popupHeight}>
 				{rows.slice(0, popupHeight - 2).map((row, index) => (
-					<Text key={index} bold={index === 0} dimColor={index === helpRowIndex}>
-						{padLine(row)}
+					<Text key={row.key} bold={index === 0} dimColor={index === helpRowIndex}>
+						{padLine(row.text)}
 					</Text>
 				))}
 			</Box>

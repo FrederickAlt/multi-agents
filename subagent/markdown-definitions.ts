@@ -168,9 +168,11 @@ export function loadDefinitionsFromDir(
  * Only the user-level agent directory is scanned; bundled and project-level
  * directories are no longer used at runtime.
  */
-export function discoverMarkdownDefinitions(
-	options: MarkdownDiscoveryOptions,
-): { definitions: RawMarkdownDefinition[]; diagnostics: MarkdownDiagnostic[]; projectDir: null } {
+export function discoverMarkdownDefinitions(options: MarkdownDiscoveryOptions): {
+	definitions: RawMarkdownDefinition[];
+	diagnostics: MarkdownDiagnostic[];
+	projectDir: null;
+} {
 	const diagnostics: MarkdownDiagnostic[] = [];
 
 	const userDir = path.join(getAgentDir(), options.userSubdir);

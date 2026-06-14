@@ -69,9 +69,7 @@ export function formatAgentConfigUsage(): string {
 
 export function prepareDebugAgentDir(options: { debugDir?: string } = {}): AgentConfigDebugInfo {
 	const sourceDir = path.resolve(getAgentDir());
-	const debugDir = path.resolve(
-		options.debugDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-config-debug-")),
-	);
+	const debugDir = path.resolve(options.debugDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-config-debug-")));
 
 	if (sourceDir === debugDir) {
 		throw new Error("Debug agent directory must be different from the source agent directory.");

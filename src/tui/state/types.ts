@@ -20,37 +20,37 @@ export interface FocusState {
 
 export type OverlayState =
 	| {
-		type: "checkbox";
-		agentIndex: number;
-		fieldName: string;
-		currentValue: string[] | string | number | undefined; // from agent frontmatter
-		availableItems: string[];
-		staleItems: string[];
-		// For checkbox: locally toggled set (starts as currentValue resolved)
-		localSelection: string[];
-		localSelected: string;
-		// Tri-state: true when the field was missing (undefined) before opening
-		wasImplicit: boolean;
-	}
+			type: "checkbox";
+			agentIndex: number;
+			fieldName: string;
+			currentValue: string[] | string | number | undefined; // from agent frontmatter
+			availableItems: string[];
+			staleItems: string[];
+			// For checkbox: locally toggled set (starts as currentValue resolved)
+			localSelection: string[];
+			localSelected: string;
+			// Tri-state: true when the field was missing (undefined) before opening
+			wasImplicit: boolean;
+	  }
 	| {
-		type: "dropdown";
-		agentIndex: number;
-		fieldName: string;
-		currentValue: string[] | string | number | undefined; // from agent frontmatter
-		availableItems: string[];
-		staleItems: string[];
-		localSelection: string[];
-		// For dropdown: locally selected item
-		localSelected: string;
-		// Tri-state: true when the field was missing (undefined) before opening
-		wasImplicit: boolean;
-	}
+			type: "dropdown";
+			agentIndex: number;
+			fieldName: string;
+			currentValue: string[] | string | number | undefined; // from agent frontmatter
+			availableItems: string[];
+			staleItems: string[];
+			localSelection: string[];
+			// For dropdown: locally selected item
+			localSelected: string;
+			// Tri-state: true when the field was missing (undefined) before opening
+			wasImplicit: boolean;
+	  }
 	| {
-		type: "stale-cleanup";
-		agentIndex: number;
-		agentName: string;
-		staleItems: Partial<Record<"tools" | "extensions", string[]>>;
-	};
+			type: "stale-cleanup";
+			agentIndex: number;
+			agentName: string;
+			staleItems: Partial<Record<"tools" | "extensions", string[]>>;
+	  };
 
 export interface ModelDiscoveryState {
 	status: "loading" | "ready" | "degraded";

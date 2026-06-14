@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgent } from "../../src/tui/file-io/read-agent.js";
 import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
@@ -49,9 +49,7 @@ function readTempFile(filePath: string): string {
 describe("writeFieldToFile", () => {
 	describe("scalar fields", () => {
 		it("writes a new scalar field to frontmatter", () => {
-			const p = writeTempFile(
-				["---", "description: test", "---", "", "body"].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "---", "", "body"].join("\n"));
 			const result = writeFieldToFile(p, "model", "claude-sonnet");
 			expect(result.success).toBe(true);
 			const content = readTempFile(p);
@@ -61,16 +59,7 @@ describe("writeFieldToFile", () => {
 		});
 
 		it("modifies an existing scalar field", () => {
-			const p = writeTempFile(
-				[
-					"---",
-					"description: test",
-					"model: old-model",
-					"---",
-					"",
-					"body",
-				].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "model: old-model", "---", "", "body"].join("\n"));
 			const result = writeFieldToFile(p, "model", "new-model");
 			expect(result.success).toBe(true);
 			const content = readTempFile(p);
@@ -80,16 +69,7 @@ describe("writeFieldToFile", () => {
 		});
 
 		it("removes a field when value is undefined", () => {
-			const p = writeTempFile(
-				[
-					"---",
-					"description: test",
-					"model: old-model",
-					"---",
-					"",
-					"body",
-				].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "model: old-model", "---", "", "body"].join("\n"));
 			const result = writeFieldToFile(p, "model", undefined);
 			expect(result.success).toBe(true);
 			const content = readTempFile(p);
@@ -98,18 +78,14 @@ describe("writeFieldToFile", () => {
 		});
 
 		it("writes numeric field", () => {
-			const p = writeTempFile(
-				["---", "description: test", "---", "", "body"].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "---", "", "body"].join("\n"));
 			const result = writeFieldToFile(p, "depth", 3);
 			expect(result.success).toBe(true);
 			expect(readTempFile(p)).toContain("depth: 3");
 		});
 
 		it("quotes special YAML characters in strings", () => {
-			const p = writeTempFile(
-				["---", "description: test", "---", "", "body"].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "---", "", "body"].join("\n"));
 			const result = writeFieldToFile(p, "model", "model#with#hash");
 			expect(result.success).toBe(true);
 			expect(readTempFile(p)).toContain('model: "model#with#hash"');
@@ -118,9 +94,7 @@ describe("writeFieldToFile", () => {
 
 	describe("list fields", () => {
 		it("writes a new list field", () => {
-			const p = writeTempFile(
-				["---", "description: test", "---", "", "body"].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "---", "", "body"].join("\n"));
 			const result = writeFieldToFile(p, "tools", ["read", "bash"]);
 			expect(result.success).toBe(true);
 			const content = readTempFile(p);
@@ -131,16 +105,7 @@ describe("writeFieldToFile", () => {
 
 		it("modifies an existing list field", () => {
 			const p = writeTempFile(
-				[
-					"---",
-					"description: test",
-					"tools:",
-					"  - read",
-					"  - bash",
-					"---",
-					"",
-					"body",
-				].join("\n"),
+				["---", "description: test", "tools:", "  - read", "  - bash", "---", "", "body"].join("\n"),
 			);
 			const result = writeFieldToFile(p, "tools", ["edit", "write"]);
 			expect(result.success).toBe(true);
@@ -152,9 +117,7 @@ describe("writeFieldToFile", () => {
 		});
 
 		it("writes empty list as []", () => {
-			const p = writeTempFile(
-				["---", "description: test", "---", "", "body"].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "---", "", "body"].join("\n"));
 			const result = writeFieldToFile(p, "tools", []);
 			expect(result.success).toBe(true);
 			const content = readTempFile(p);
@@ -163,16 +126,7 @@ describe("writeFieldToFile", () => {
 
 		it("replaces existing list with empty []", () => {
 			const p = writeTempFile(
-				[
-					"---",
-					"description: test",
-					"tools:",
-					"  - read",
-					"  - bash",
-					"---",
-					"",
-					"body",
-				].join("\n"),
+				["---", "description: test", "tools:", "  - read", "  - bash", "---", "", "body"].join("\n"),
 			);
 			const result = writeFieldToFile(p, "tools", []);
 			expect(result.success).toBe(true);
@@ -209,9 +163,7 @@ describe("writeFieldToFile", () => {
 
 		it("does not modify the body markdown", () => {
 			const bodyContent = "# Heading\n\nSome markdown with --- in it\n\n* list item";
-			const p = writeTempFile(
-				["---", "description: test", "---", "", bodyContent].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "---", "", bodyContent].join("\n"));
 			writeFieldToFile(p, "model", "claude");
 			const content = readTempFile(p);
 			expect(content).toContain(bodyContent);
@@ -229,15 +181,7 @@ describe("writeFieldToFile", () => {
 		});
 
 		it("handles file with CRLF line endings", () => {
-			const p = writeTempFile(
-				[
-					"---\r",
-					"description: test\r",
-					"model: old\r",
-					"---\r",
-					"body\r",
-				].join("\r\n"),
-			);
+			const p = writeTempFile(["---\r", "description: test\r", "model: old\r", "---\r", "body\r"].join("\r\n"));
 			const result = writeFieldToFile(p, "model", "new");
 			expect(result.success).toBe(true);
 			const content = readTempFile(p);
@@ -245,19 +189,13 @@ describe("writeFieldToFile", () => {
 		});
 
 		it("returns error for nonexistent file", () => {
-			const result = writeFieldToFile(
-				path.join(tempDir, "nope.md"),
-				"model",
-				"claude",
-			);
+			const result = writeFieldToFile(path.join(tempDir, "nope.md"), "model", "claude");
 			expect(result.success).toBe(false);
 			expect(result.error).toBeDefined();
 		});
 
 		it("includes 'read-only' in error for EACCES / EPERM", () => {
-			const p = writeTempFile(
-				["---", "description: test", "---", "", "body"].join("\n"),
-			);
+			const p = writeTempFile(["---", "description: test", "---", "", "body"].join("\n"));
 			mockWriteFile.shouldFail = true;
 
 			try {
@@ -272,17 +210,9 @@ describe("writeFieldToFile", () => {
 
 		it("removing a field works even when field had list value", () => {
 			const p = writeTempFile(
-				[
-					"---",
-					"description: test",
-					"tools:",
-					"  - read",
-					"  - bash",
-					"model: claude",
-					"---",
-					"",
-					"body",
-				].join("\n"),
+				["---", "description: test", "tools:", "  - read", "  - bash", "model: claude", "---", "", "body"].join(
+					"\n",
+				),
 			);
 			const result = writeFieldToFile(p, "tools", undefined);
 			expect(result.success).toBe(true);
@@ -293,11 +223,7 @@ describe("writeFieldToFile", () => {
 		});
 
 		it("round-trip: write then read matches", () => {
-			const p = writeTempFile(
-				["---", "description: test agent", "---", "", "some body"].join(
-					"\n",
-				),
-			);
+			const p = writeTempFile(["---", "description: test agent", "---", "", "some body"].join("\n"));
 
 			writeFieldToFile(p, "tools", ["read", "bash", "edit"]);
 			writeFieldToFile(p, "model", "claude-sonnet");

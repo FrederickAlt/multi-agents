@@ -2,7 +2,7 @@
  * Unit tests for the isolated debug logger module.
  */
 
-import { mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,18 +25,21 @@ describe("debug logger", () => {
 	afterEach(() => {
 		if (tempDir) {
 			try {
-			rmSync(tempDir, { recursive: true, force: true });
-		} catch {
-			/* ignore */
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
-	}
 	});
 
 	it("can be explicitly disabled", () => {
-		const logger = makeSessionDebugLogger({
-			getSessionDir: () => tempDir,
-			getSessionId: () => "session-disabled",
-		}, { enabled: false });
+		const logger = makeSessionDebugLogger(
+			{
+				getSessionDir: () => tempDir,
+				getSessionId: () => "session-disabled",
+			},
+			{ enabled: false },
+		);
 
 		expect(logger.isEnabled).toBe(false);
 		logger.info("task_run_start", { message: "should not persist" });

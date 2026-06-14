@@ -1,5 +1,5 @@
-import * as path from "node:path";
 import { homedir } from "node:os";
+import * as path from "node:path";
 
 /**
  * Minimal standalone replacements for the Pi helpers used by the TUI.
@@ -18,9 +18,7 @@ export interface ParsedFrontmatter<T extends Record<string, unknown>> {
 	body: string;
 }
 
-export function parseFrontmatter<T extends Record<string, unknown>>(
-	content: string,
-): ParsedFrontmatter<T> {
+export function parseFrontmatter<T extends Record<string, unknown>>(content: string): ParsedFrontmatter<T> {
 	const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
 	if (!match) {
 		return { frontmatter: {} as T, body: content };
@@ -72,10 +70,7 @@ function parseYamlObject(yaml: string): Record<string, unknown> {
 	return result;
 }
 
-function parseIndentedBlock(
-	lines: string[],
-	startIndex: number,
-): { value: unknown; nextIndex: number } {
+function parseIndentedBlock(lines: string[], startIndex: number): { value: unknown; nextIndex: number } {
 	const list: unknown[] = [];
 	const object: Record<string, unknown> = {};
 	let mode: "none" | "list" | "object" = "none";
@@ -155,7 +150,7 @@ function stripYamlComment(raw: string): string {
 			continue;
 		}
 		if (!escaped && (ch === '"' || ch === "'")) {
-			quote = quote === ch ? null : quote ?? ch;
+			quote = quote === ch ? null : (quote ?? ch);
 		}
 		if (!quote && ch === "#" && (i === 0 || /\s/.test(raw[i - 1]))) {
 			return raw.slice(0, i);
@@ -199,7 +194,7 @@ function splitInlineList(inner: string): string[] {
 			continue;
 		}
 		if (!escaped && (ch === '"' || ch === "'")) {
-			quote = quote === ch ? null : quote ?? ch;
+			quote = quote === ch ? null : (quote ?? ch);
 		}
 		if (!quote && ch === ",") {
 			items.push(current.trim());

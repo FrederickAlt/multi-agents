@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { Writable } from "node:stream";
-import React, { act } from "react";
 import { render } from "ink";
+import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 import { useConfig } from "../../src/tui/hooks/useConfig.js";
+import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
 const discoveryMock = vi.hoisted(() => ({
 	agents: [] as AgentConfigState[],
@@ -35,7 +35,7 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 		extensions: ["ext-a"],
 		models: [],
 		defaultModel: "",
-		modelDiscovery: { status: "ready", error: null },
+		modelDiscovery: { status: "ready" as const, error: null },
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: [],
@@ -81,18 +81,21 @@ describe("stale cleanup confirmation", () => {
 
 	function writeAgent(): string {
 		const filePath = path.join(tempDir, "agent.md");
-		fs.writeFileSync(filePath, [
-			"---",
-			"description: test",
-			"tools:",
-			"  - read",
-			"  - deleted_tool",
-			"extensions:",
-			"  - ext-a",
-			"  - missing-ext",
-			"---",
-			"body",
-		].join("\n"));
+		fs.writeFileSync(
+			filePath,
+			[
+				"---",
+				"description: test",
+				"tools:",
+				"  - read",
+				"  - deleted_tool",
+				"extensions:",
+				"  - ext-a",
+				"  - missing-ext",
+				"---",
+				"body",
+			].join("\n"),
+		);
 		return filePath;
 	}
 
@@ -104,7 +107,11 @@ describe("stale cleanup confirmation", () => {
 			},
 		});
 		app = render(
-			<ConfigProbe onFrame={(config) => { latest = config; }} />,
+			<ConfigProbe
+				onFrame={(config) => {
+					latest = config;
+				}}
+			/>,
 			{
 				stdout: stdout as unknown as NodeJS.WriteStream,
 				patchConsole: false,
@@ -139,7 +146,13 @@ describe("stale cleanup confirmation", () => {
 
 		discoveryMock.agents = [makeStaleAgent(filePath)];
 		act(() => {
-			app!.rerender(<ConfigProbe onFrame={(config) => { latest = config; }} />);
+			app!.rerender(
+				<ConfigProbe
+					onFrame={(config) => {
+						latest = config;
+					}}
+				/>,
+			);
 		});
 		await flush();
 		await flush();

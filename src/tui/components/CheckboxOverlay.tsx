@@ -1,4 +1,3 @@
-import React from "react";
 import { Box, Text } from "ink";
 import type { OverlayState } from "../state/types.js";
 
@@ -9,16 +8,15 @@ interface CheckboxOverlayProps {
 
 export function CheckboxOverlay({ overlay, focusedIndex }: CheckboxOverlayProps) {
 	const { agentIndex, fieldName, availableItems, localSelection, staleItems, wasImplicit } = overlay;
+	const overlayPosition = { position: "absolute" as const, top: 4, left: 10 };
 
 	return (
 		<Box
+			{...overlayPosition}
 			flexDirection="column"
 			borderStyle="double"
 			borderColor="yellow"
 			paddingX={1}
-			position="absolute"
-			top={4}
-			left={10}
 			width={40}
 			height={Math.min(availableItems.length + 5, 20)}
 		>
@@ -26,9 +24,7 @@ export function CheckboxOverlay({ overlay, focusedIndex }: CheckboxOverlayProps)
 				{fieldName} — agent {agentIndex}
 			</Text>
 
-			{wasImplicit && (
-				<Text dimColor>All items selected (field not in file)</Text>
-			)}
+			{wasImplicit && <Text dimColor>All items selected (field not in file)</Text>}
 
 			{availableItems.map((item, idx) => {
 				const isChecked = localSelection.includes(item);
@@ -37,10 +33,7 @@ export function CheckboxOverlay({ overlay, focusedIndex }: CheckboxOverlayProps)
 
 				return (
 					<Box key={item} flexDirection="row">
-						<Text
-							color={isFocused ? "cyan" : undefined}
-							bold={isFocused}
-						>
+						<Text color={isFocused ? "cyan" : undefined} bold={isFocused}>
 							{isFocused ? "> " : "  "}
 							{isChecked ? "☑" : "☐"} {item}
 							{isStale ? " (missing)" : ""}
@@ -50,7 +43,7 @@ export function CheckboxOverlay({ overlay, focusedIndex }: CheckboxOverlayProps)
 			})}
 
 			<Box marginTop={1}>
-				<Text dimColor>Enter: close  Esc: close  Space: toggle (saves immediately)</Text>
+				<Text dimColor>Enter: close Esc: close Space: toggle (saves immediately)</Text>
 			</Box>
 		</Box>
 	);

@@ -6,7 +6,9 @@
  * redirect the user config dir to a temp directory for isolation.
  */
 import * as fs from "node:fs";
+
 const { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = fs;
+
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,10 +22,7 @@ describe("seedAgentConfig", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(
-			tmpdir(),
-			`pi-seeding-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-		);
+		tempDir = join(tmpdir(), `pi-seeding-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		process.env.PI_CODING_AGENT_DIR = tempDir;
 	});
 
@@ -44,9 +43,7 @@ describe("seedAgentConfig", () => {
 	 */
 	const mdFiles = (dir: string): string[] => {
 		if (!existsSync(dir)) return [];
-		return readdirSync(dir).filter(
-			(f) => f.endsWith(".md") && !f.startsWith("."),
-		);
+		return readdirSync(dir).filter((f) => f.endsWith(".md") && !f.startsWith("."));
 	};
 
 	/**
@@ -122,16 +119,10 @@ describe("seedAgentConfig", () => {
 		const agentsDir = join(tempDir, "agents");
 		const partsDir = join(tempDir, "prompt-parts");
 		const initialAgentMtimes = Object.fromEntries(
-			readdirSync(agentsDir).map((f) => [
-				f,
-				fs.statSync(join(agentsDir, f)).mtimeMs,
-			]),
+			readdirSync(agentsDir).map((f) => [f, fs.statSync(join(agentsDir, f)).mtimeMs]),
 		);
 		const initialPartMtimes = Object.fromEntries(
-			readdirSync(partsDir).map((f) => [
-				f,
-				fs.statSync(join(partsDir, f)).mtimeMs,
-			]),
+			readdirSync(partsDir).map((f) => [f, fs.statSync(join(partsDir, f)).mtimeMs]),
 		);
 		const initialAgentFiles = readdirSync(agentsDir).sort();
 		const initialPartFiles = readdirSync(partsDir).sort();

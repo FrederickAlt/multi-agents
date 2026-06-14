@@ -10,15 +10,15 @@
  *    ambiguous bare rejected with warning/fallback
  */
 import { describe, expect, it } from "vitest";
-import { PiModelResolver } from "../subagent/session-manager.js";
 import {
 	computeCanonicalModelRefs,
-	resolveModelDisplayName,
-	modelDisplayNameToCanonicalRef,
 	disambiguateModelDisplayNames,
+	modelDisplayNameToCanonicalRef,
 	orderModelsByProvider,
+	resolveModelDisplayName,
 } from "../src/tui/discovery/options.js";
 import type { ModelOption } from "../src/tui/state/types.js";
+import { PiModelResolver } from "../subagent/session-manager.js";
 
 // ---------------------------------------------------------------------------
 // Model registry factory for tests
@@ -43,15 +43,11 @@ function makeModel(
  * @param models      - The full list of models (getAll)
  * @param authModels  - Subset of models whose provider has auth configured (hasConfiguredAuth)
  */
-function makeRegistry(
-	models: MockModel[],
-	authModels: MockModel[] = models,
-) {
+function makeRegistry(models: MockModel[], authModels: MockModel[] = models) {
 	const authSet = new Set(authModels);
 	return {
 		getAll: () => [...models],
-		find: (provider: string, id: string) =>
-			models.find((m) => m.provider === provider && m.id === id) ?? null,
+		find: (provider: string, id: string) => models.find((m) => m.provider === provider && m.id === id) ?? null,
 		hasConfiguredAuth: (m: MockModel) => authSet.has(m),
 	};
 }
@@ -68,10 +64,7 @@ describe("PiModelResolver.resolve", () => {
 	// ---- Exact canonical references ----
 
 	it("resolves an exact canonical provider/model-id reference", () => {
-		const resolver = makeResolver([
-			makeModel("anthropic", "claude-sonnet"),
-			makeModel("openai", "gpt-5"),
-		]);
+		const resolver = makeResolver([makeModel("anthropic", "claude-sonnet"), makeModel("openai", "gpt-5")]);
 		const warnings: string[] = [];
 
 		const result = resolver.resolve("anthropic/claude-sonnet", undefined, warnings);
@@ -83,9 +76,7 @@ describe("PiModelResolver.resolve", () => {
 	});
 
 	it("resolves a canonical reference when model ID contains a slash", () => {
-		const resolver = makeResolver([
-			makeModel("acme", "some/weird-id"),
-		]);
+		const resolver = makeResolver([makeModel("acme", "some/weird-id")]);
 		const warnings: string[] = [];
 
 		const result = resolver.resolve("acme/some/weird-id", undefined, warnings);
@@ -101,10 +92,7 @@ describe("PiModelResolver.resolve", () => {
 	// ---- Exact bare model IDs ----
 
 	it("resolves a unique bare model ID by exact match", () => {
-		const resolver = makeResolver([
-			makeModel("anthropic", "claude-sonnet-4-20250514"),
-			makeModel("openai", "gpt-5"),
-		]);
+		const resolver = makeResolver([makeModel("anthropic", "claude-sonnet-4-20250514"), makeModel("openai", "gpt-5")]);
 		const warnings: string[] = [];
 
 		const result = resolver.resolve("claude-sonnet-4-20250514", undefined, warnings);
@@ -116,10 +104,7 @@ describe("PiModelResolver.resolve", () => {
 	});
 
 	it("resolves a slash-containing bare model ID by exact match", () => {
-		const resolver = makeResolver([
-			makeModel("acme", "models/with/slashes"),
-			makeModel("openai", "gpt-5"),
-		]);
+		const resolver = makeResolver([makeModel("acme", "models/with/slashes"), makeModel("openai", "gpt-5")]);
 		const warnings: string[] = [];
 
 		const result = resolver.resolve("models/with/slashes", undefined, warnings);
@@ -134,10 +119,7 @@ describe("PiModelResolver.resolve", () => {
 	it("prefers exact ID match over canonical parsing for slash-containing IDs", () => {
 		// A model with ID "acme/gpt" exists, and there's also an "acme" provider
 		// with a "gpt" model. The exact ID match should win.
-		const resolver = makeResolver([
-			makeModel("weird", "acme/gpt"),
-			makeModel("acme", "gpt"),
-		]);
+		const resolver = makeResolver([makeModel("weird", "acme/gpt"), makeModel("acme", "gpt")]);
 		const warnings: string[] = [];
 
 		const result = resolver.resolve("acme/gpt", undefined, warnings);
@@ -170,10 +152,7 @@ describe("PiModelResolver.resolve", () => {
 		const deepseekModel = makeModel("deepseek", "deepseek-v4-flash");
 		const opencodeModel = makeModel("opencode-go", "deepseek-v4-flash");
 		// Only deepseek has auth configured
-		const resolver = makeResolver(
-			[deepseekModel, opencodeModel],
-			[deepseekModel],
-		);
+		const resolver = makeResolver([deepseekModel, opencodeModel], [deepseekModel]);
 		const fallback = makeModel("anthropic", "claude-sonnet");
 		const warnings: string[] = [];
 
@@ -188,9 +167,7 @@ describe("PiModelResolver.resolve", () => {
 	// ---- Missing models ----
 
 	it("warns and falls back when model is not found (bare ID)", () => {
-		const resolver = makeResolver([
-			makeModel("anthropic", "claude-sonnet"),
-		]);
+		const resolver = makeResolver([makeModel("anthropic", "claude-sonnet")]);
 		const fallback = makeModel("openai", "gpt-5");
 		const warnings: string[] = [];
 
@@ -202,9 +179,7 @@ describe("PiModelResolver.resolve", () => {
 	});
 
 	it("warns and falls back when canonical reference provider is not found", () => {
-		const resolver = makeResolver([
-			makeModel("anthropic", "claude-sonnet"),
-		]);
+		const resolver = makeResolver([makeModel("anthropic", "claude-sonnet")]);
 		const fallback = makeModel("openai", "gpt-5");
 		const warnings: string[] = [];
 
@@ -216,9 +191,7 @@ describe("PiModelResolver.resolve", () => {
 	});
 
 	it("warns and falls back when canonical reference model ID is not found under provider", () => {
-		const resolver = makeResolver([
-			makeModel("openai", "gpt-5"),
-		]);
+		const resolver = makeResolver([makeModel("openai", "gpt-5")]);
 		const fallback = makeModel("anthropic", "claude-sonnet");
 		const warnings: string[] = [];
 
@@ -310,10 +283,7 @@ describe("computeCanonicalModelRefs", () => {
 	}
 
 	it("uses bare modelId for unique model IDs", () => {
-		const models = [
-			mo("anthropic", "claude-sonnet"),
-			mo("openai", "gpt-5"),
-		];
+		const models = [mo("anthropic", "claude-sonnet"), mo("openai", "gpt-5")];
 		computeCanonicalModelRefs(models);
 
 		expect(models[0].canonicalRef).toBe("claude-sonnet");
@@ -321,10 +291,7 @@ describe("computeCanonicalModelRefs", () => {
 	});
 
 	it("uses provider/modelId for ambiguous (duplicate) model IDs", () => {
-		const models = [
-			mo("deepseek", "deepseek-v4"),
-			mo("opencode-go", "deepseek-v4"),
-		];
+		const models = [mo("deepseek", "deepseek-v4"), mo("opencode-go", "deepseek-v4")];
 		computeCanonicalModelRefs(models);
 
 		expect(models[0].canonicalRef).toBe("deepseek/deepseek-v4");
@@ -347,10 +314,7 @@ describe("computeCanonicalModelRefs", () => {
 	});
 
 	it("handles slash-containing model IDs (unique)", () => {
-		const models = [
-			mo("acme", "models/with/slashes"),
-			mo("openai", "gpt-5"),
-		];
+		const models = [mo("acme", "models/with/slashes"), mo("openai", "gpt-5")];
 		computeCanonicalModelRefs(models);
 
 		expect(models[0].canonicalRef).toBe("models/with/slashes");
@@ -358,10 +322,7 @@ describe("computeCanonicalModelRefs", () => {
 	});
 
 	it("uses canonical ref for duplicate slash-containing IDs", () => {
-		const models = [
-			mo("acme", "shared/slash-id"),
-			mo("other", "shared/slash-id"),
-		];
+		const models = [mo("acme", "shared/slash-id"), mo("other", "shared/slash-id")];
 		computeCanonicalModelRefs(models);
 
 		expect(models[0].canonicalRef).toBe("acme/shared/slash-id");
@@ -378,16 +339,17 @@ describe("disambiguateModelDisplayNames", () => {
 		const models: ModelOption[] = [
 			{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
 			{ provider: "openrouter", modelId: "openai/gpt-5", displayName: "GPT-5", canonicalRef: "openai/gpt-5" },
-			{ provider: "anthropic", modelId: "claude-sonnet", displayName: "Claude Sonnet", canonicalRef: "claude-sonnet" },
+			{
+				provider: "anthropic",
+				modelId: "claude-sonnet",
+				displayName: "Claude Sonnet",
+				canonicalRef: "claude-sonnet",
+			},
 		];
 
 		disambiguateModelDisplayNames(models);
 
-		expect(models.map((m) => m.displayName)).toEqual([
-			"GPT-5 (openai)",
-			"GPT-5 (openrouter)",
-			"Claude Sonnet",
-		]);
+		expect(models.map((m) => m.displayName)).toEqual(["GPT-5 (openai)", "GPT-5 (openrouter)", "Claude Sonnet"]);
 	});
 
 	it("falls back to provider/modelId when provider-only labels are still ambiguous", () => {
@@ -398,10 +360,7 @@ describe("disambiguateModelDisplayNames", () => {
 
 		disambiguateModelDisplayNames(models);
 
-		expect(models.map((m) => m.displayName)).toEqual([
-			"llama (local/a)",
-			"llama (local/b)",
-		]);
+		expect(models.map((m) => m.displayName)).toEqual(["llama (local/a)", "llama (local/b)"]);
 	});
 });
 
@@ -433,9 +392,24 @@ describe("orderModelsByProvider", () => {
 
 describe("resolveModelDisplayName", () => {
 	const models: ModelOption[] = [
-		{ provider: "anthropic", modelId: "claude-sonnet-4", displayName: "Claude Sonnet 4", canonicalRef: "claude-sonnet-4" },
-		{ provider: "deepseek", modelId: "deepseek-v4", displayName: "DeepSeek V4", canonicalRef: "deepseek/deepseek-v4" },
-		{ provider: "opencode-go", modelId: "deepseek-v4", displayName: "DeepSeek V4 (opencode)", canonicalRef: "opencode-go/deepseek-v4" },
+		{
+			provider: "anthropic",
+			modelId: "claude-sonnet-4",
+			displayName: "Claude Sonnet 4",
+			canonicalRef: "claude-sonnet-4",
+		},
+		{
+			provider: "deepseek",
+			modelId: "deepseek-v4",
+			displayName: "DeepSeek V4",
+			canonicalRef: "deepseek/deepseek-v4",
+		},
+		{
+			provider: "opencode-go",
+			modelId: "deepseek-v4",
+			displayName: "DeepSeek V4 (opencode)",
+			canonicalRef: "opencode-go/deepseek-v4",
+		},
 	];
 
 	it("resolves canonicalRef to display name", () => {
@@ -475,8 +449,18 @@ describe("resolveModelDisplayName", () => {
 
 describe("modelDisplayNameToCanonicalRef", () => {
 	const models: ModelOption[] = [
-		{ provider: "anthropic", modelId: "claude-sonnet-4", displayName: "Claude Sonnet 4", canonicalRef: "claude-sonnet-4" },
-		{ provider: "deepseek", modelId: "deepseek-v4", displayName: "DeepSeek V4", canonicalRef: "deepseek/deepseek-v4" },
+		{
+			provider: "anthropic",
+			modelId: "claude-sonnet-4",
+			displayName: "Claude Sonnet 4",
+			canonicalRef: "claude-sonnet-4",
+		},
+		{
+			provider: "deepseek",
+			modelId: "deepseek-v4",
+			displayName: "DeepSeek V4",
+			canonicalRef: "deepseek/deepseek-v4",
+		},
 	];
 
 	it("maps display name to canonical reference", () => {
@@ -487,7 +471,12 @@ describe("modelDisplayNameToCanonicalRef", () => {
 	it("resolves slash-containing and ambiguous model display names to canonical refs", () => {
 		const slashAndDuplicateModels: ModelOption[] = [
 			{ provider: "acme", modelId: "shared/model", displayName: "Acme Shared", canonicalRef: "shared/model" },
-			{ provider: "other", modelId: "shared/model", displayName: "Other Shared", canonicalRef: "other/shared/model" },
+			{
+				provider: "other",
+				modelId: "shared/model",
+				displayName: "Other Shared",
+				canonicalRef: "other/shared/model",
+			},
 			{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
 		];
 

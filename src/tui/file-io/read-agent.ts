@@ -46,9 +46,7 @@ export function readAgent(filePath: string): AgentConfigState {
 		};
 	}
 
-	const description = frontmatter.description
-		? String(frontmatter.description)
-		: "";
+	const description = frontmatter.description ? String(frontmatter.description) : "";
 
 	return {
 		name,
@@ -120,16 +118,9 @@ export function detectStaleItems(
 	}
 }
 
-function checkStale(
-	raw: unknown,
-	valid: Set<string>,
-	agent: AgentConfigState,
-	fieldName: string,
-): void {
+function checkStale(raw: unknown, valid: Set<string>, agent: AgentConfigState, fieldName: string): void {
 	if (raw === undefined || raw === null) return;
-	const items = Array.isArray(raw)
-		? raw.map(String)
-		: [String(raw)];
+	const items = Array.isArray(raw) ? raw.map(String) : [String(raw)];
 	const stale = items.filter((item) => item && !valid.has(item));
 	if (stale.length > 0) {
 		agent.staleItems[fieldName] = stale;

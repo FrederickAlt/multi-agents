@@ -91,9 +91,10 @@ export function writeFieldToFile(
 		return { success: true, frontmatter };
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
-		const reason = (code === "EACCES" || code === "EPERM" || code === "EROFS")
-			? `read-only: ${(err as Error).message}`
-			: (err as Error).message;
+		const reason =
+			code === "EACCES" || code === "EPERM" || code === "EROFS"
+				? `read-only: ${(err as Error).message}`
+				: (err as Error).message;
 		return {
 			success: false,
 			error: `Cannot write file: ${reason}`,
@@ -215,7 +216,7 @@ function yamlSafeString(value: string): string {
 		return `"${value}"`;
 	}
 	// If contains special YAML characters, quote it
-	if (/[#&*!|>'"%@`{}\[\],\n\r]/.test(value)) {
+	if (/[#&*!|>'"%@`{}[\],\n\r]/.test(value)) {
 		return `"${value.replace(/"/g, '\\"')}"`;
 	}
 	// If empty, quote it

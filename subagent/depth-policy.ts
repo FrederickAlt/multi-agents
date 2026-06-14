@@ -33,7 +33,7 @@ export interface DepthPolicyState {
 }
 
 export type SpawnDecision =
-	| { allowed: true }
+	| { allowed: true; code?: undefined; error?: undefined }
 	| { allowed: false; code: string; error: string };
 
 // ---------------------------------------------------------------------------
@@ -44,10 +44,7 @@ export type SpawnDecision =
  * Determine whether a Task call (new or resume) targeting `targetAgentName`
  * is permitted by `policy`.
  */
-export function checkTaskAllowed(
-	policy: DepthPolicyState,
-	targetAgentName: string,
-): SpawnDecision {
+export function checkTaskAllowed(policy: DepthPolicyState, targetAgentName: string): SpawnDecision {
 	// 1. Root tree-depth limit
 	if (policy.treeDepth >= policy.rootDepthLimit) {
 		return {
@@ -68,9 +65,7 @@ export function checkTaskAllowed(
 
 	// 3. can_spawn allowlist (undefined = unrestricted)
 	if (policy.can_spawn && !policy.can_spawn.includes(targetAgentName)) {
-		const list = policy.can_spawn.length > 0
-			? policy.can_spawn.join(", ")
-			: "none";
+		const list = policy.can_spawn.length > 0 ? policy.can_spawn.join(", ") : "none";
 		return {
 			allowed: false,
 			code: "spawn_not_allowed",

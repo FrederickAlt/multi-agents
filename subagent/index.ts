@@ -14,38 +14,50 @@ import {
 	getAgentDir,
 	loadProjectContextFiles,
 } from "@mariozechner/pi-coding-agent";
-import { MetadataStore } from "./metadata.js";
-import { seedAgentConfig } from "./seeding.js";
 import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
-import { discoverPromptParts } from "./prompt-parts.js";
-import { PiAgentSessionFactory, PiModelResolver, PiSessionManagerProvider, SubagentSessionManager } from "./session-manager.js";
 import { AsyncAgentNotifier } from "./async-agent-notifier.js";
-import { TaskController, type TaskExecuteContext, type TaskResult, type RuntimeContext, type AgentDiscoveryAdapter } from "./task-controller.js";
+import type { DebugLogger } from "./debug-logger.js";
+import { makeNoopDebugLogger, makeSessionDebugLogger } from "./debug-logger.js";
 import { defaultRootPolicy, selectedRootPolicy } from "./depth-policy.js";
-import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
+import { filterExtensionsForAgent } from "./extension-filter.js";
+import { MetadataStore } from "./metadata.js";
+import {
+	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
+	FINAL_RESPONSE_REQUIRED_MESSAGE,
+	needsFinalResponsePrompt,
+} from "./output-extraction.js";
 import {
 	buildPromptPartsFromOptions,
-	renderComposedAgentSystemPrompt,
 	type PromptParts,
 	type RenderContext,
-} from "./prompt-composition.js";
-import { FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS, FINAL_RESPONSE_REQUIRED_MESSAGE, needsFinalResponsePrompt } from "./output-extraction.js";
-import {
-	makeSessionDebugLogger,
-	makeNoopDebugLogger,
-} from "./debug-logger.js";
-import type { DebugLogger } from "./debug-logger.js";
-import { filterExtensionsForAgent } from "./extension-filter.js";
-import { configureTaskToolForRuntime, deactivateTaskTool } from "./task-tool-registration.js";
-
-export {
-	buildTemplateValues,
-	renderTemplateString,
-	renderPromptTemplate,
-	renderSubagentSystemPrompt,
 	renderComposedAgentSystemPrompt,
 } from "./prompt-composition.js";
+import { discoverPromptParts } from "./prompt-parts.js";
+import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
+import { seedAgentConfig } from "./seeding.js";
+import {
+	PiAgentSessionFactory,
+	PiModelResolver,
+	PiSessionManagerProvider,
+	SubagentSessionManager,
+} from "./session-manager.js";
+import {
+	type AgentDiscoveryAdapter,
+	type RuntimeContext,
+	TaskController,
+	type TaskExecuteContext,
+	type TaskResult,
+} from "./task-controller.js";
+import { configureTaskToolForRuntime, deactivateTaskTool } from "./task-tool-registration.js";
+
 export type { PromptParts, RenderContext, SystemPromptCompositionOptions } from "./prompt-composition.js";
+export {
+	buildTemplateValues,
+	renderComposedAgentSystemPrompt,
+	renderPromptTemplate,
+	renderSubagentSystemPrompt,
+	renderTemplateString,
+} from "./prompt-composition.js";
 
 function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
 	return agents.find((agent) => agent.name === name);
@@ -77,11 +89,7 @@ const _asyncAgentNotifier = new AsyncAgentNotifier();
 
 function getOrCreateSessionManager(logger?: DebugLogger): SubagentSessionManager {
 	if (!_sessionManager) {
-		_sessionManager = new SubagentSessionManager(
-			new PiSessionManagerProvider(),
-			new PiAgentSessionFactory(),
-			logger,
-		);
+		_sessionManager = new SubagentSessionManager(new PiSessionManagerProvider(), new PiAgentSessionFactory(), logger);
 		_sessionManager.setOnAsyncResultReady((id) => {
 			_asyncAgentNotifier.markCompleted(id);
 		});
@@ -91,7 +99,10 @@ function getOrCreateSessionManager(logger?: DebugLogger): SubagentSessionManager
 
 let seeded = false;
 export default function (pi: ExtensionAPI) {
-	if (!seeded) { seedAgentConfig(); seeded = true; }
+	if (!seeded) {
+		seedAgentConfig();
+		seeded = true;
+	}
 
 	let store: MetadataStore | undefined;
 	let dumpNextProviderRequest = false;
@@ -105,7 +116,11 @@ export default function (pi: ExtensionAPI) {
 		depthPolicy: defaultRootPolicy(),
 	};
 
-	const showMessage = (ctx: { ui: { notify(message: string, type?: string): void } }, content: string, type: string = "info") => {
+	const showMessage = (
+		ctx: { ui: { notify(message: string, type?: string): void } },
+		content: string,
+		type: string = "info",
+	) => {
 		ctx.ui.notify(content, type);
 	};
 
@@ -140,16 +155,17 @@ export default function (pi: ExtensionAPI) {
 			}));
 	};
 
-	const renderDump = (title: string, systemPrompt: string, note?: string) => [
-		`=== ${title} ===`,
-		"",
-		systemPrompt,
-		...(note ? ["", "=== NOTE ===", "", note] : []),
-		"",
-		"=== TOOLS ===",
-		"",
-		JSON.stringify(activeToolDefinitions(), null, 2),
-	].join("\n");
+	const renderDump = (title: string, systemPrompt: string, note?: string) =>
+		[
+			`=== ${title} ===`,
+			"",
+			systemPrompt,
+			...(note ? ["", "=== NOTE ===", "", note] : []),
+			"",
+			"=== TOOLS ===",
+			"",
+			JSON.stringify(activeToolDefinitions(), null, 2),
+		].join("\n");
 
 	const buildFallbackPromptPartsForCurrentRoot = (ctx: { cwd: string }): PromptParts => {
 		let activeTools: string[] = [];
@@ -181,20 +197,23 @@ export default function (pi: ExtensionAPI) {
 		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager, logger);
 		activeStore.load();
 		const agent = resolveRootAgentForSession(activeStore.selectedMainAgent);
-		return renderComposedAgentSystemPrompt({
-			agent,
-			parts: buildPromptPartsForCurrentRoot(ctx),
-		}, discoverPromptParts().parts);
+		return renderComposedAgentSystemPrompt(
+			{
+				agent,
+				parts: buildPromptPartsForCurrentRoot(ctx),
+			},
+			discoverPromptParts().parts,
+		);
 	};
 
 	const makeAgentRuntimeFactory = (
 		agent: AgentConfig,
 		runtime: RuntimeContext,
-		effectiveCwd: string,
+		_effectiveCwd: string,
 		contextFiles?: Array<{ path: string; content: string }>,
 	): ExtensionFactory => {
 		return (subPi) => {
-			registerTaskTool(subPi, runtime, effectiveCwd);
+			registerTaskTool(subPi, runtime);
 
 			// Discover prompt parts for this sub-agent's effective working directory.
 			const promptPartDefs = discoverPromptParts().parts;
@@ -294,7 +313,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event, ctx) => {
-		const activeStore = store ?? MetadataStore.fromSessionManager(ctx.sessionManager, mainRuntime.logger ?? makeNoopDebugLogger());
+		const activeStore =
+			store ?? MetadataStore.fromSessionManager(ctx.sessionManager, mainRuntime.logger ?? makeNoopDebugLogger());
 		try {
 			activeStore.load();
 			resolveRootAgentForSession(activeStore.selectedMainAgent);
@@ -401,7 +421,11 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("agent_end", (event: any) => {
-		if (!rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && needsFinalResponsePrompt(event?.messages ?? [])) {
+		if (
+			!rootFinalResponseGuardActive &&
+			rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS &&
+			needsFinalResponsePrompt(event?.messages ?? [])
+		) {
 			sendFinalResponseGuard({ delayed: true });
 		}
 		sendAsyncAgentNotification({ delayed: true });
@@ -415,12 +439,18 @@ export default function (pi: ExtensionAPI) {
 		const message = event?.message;
 		const content = Array.isArray(message?.content) ? message.content : [];
 		const hasToolCall = content.some((part: any) => part?.type === "toolCall");
-		if (message?.role === "assistant" && !rootFinalResponseGuardActive && rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS && !hasToolCall && needsFinalResponsePrompt([message])) {
+		if (
+			message?.role === "assistant" &&
+			!rootFinalResponseGuardActive &&
+			rootFinalResponseGuardAttempts < FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS &&
+			!hasToolCall &&
+			needsFinalResponsePrompt([message])
+		) {
 			sendFinalResponseGuard();
 		}
 	});
 
-	pi.on("session_shutdown", async (event, ctx) => {
+	pi.on("session_shutdown", async (event, _ctx) => {
 		mainRuntime.logger?.info?.("root_session_shutdown", {
 			reason: event.reason,
 			hasStore: Boolean(store),
@@ -454,13 +484,17 @@ export default function (pi: ExtensionAPI) {
 		const pParts = buildPromptPartsFromOptions(event.systemPromptOptions);
 		lastRootPromptParts = pParts;
 		const promptPartDefs = discoverPromptParts().parts;
-		const prompt = renderComposedAgentSystemPrompt({
-			agent,
-			parts: pParts,
-		}, promptPartDefs, {
-			baseSystemPrompt: event.systemPrompt,
-			appendSystemPrompt: event.systemPromptOptions.appendSystemPrompt,
-		});
+		const prompt = renderComposedAgentSystemPrompt(
+			{
+				agent,
+				parts: pParts,
+			},
+			promptPartDefs,
+			{
+				baseSystemPrompt: event.systemPrompt,
+				appendSystemPrompt: event.systemPromptOptions.appendSystemPrompt,
+			},
+		);
 		return { systemPrompt: prompt };
 	});
 
@@ -523,7 +557,10 @@ export default function (pi: ExtensionAPI) {
 				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
 				return;
 			}
-			const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager, mainRuntime.logger ?? makeNoopDebugLogger());
+			const activeStore = MetadataStore.fromSessionManager(
+				ctx.sessionManager,
+				mainRuntime.logger ?? makeNoopDebugLogger(),
+			);
 			store = activeStore;
 			activeStore.selectedMainAgent = agent.name;
 			mainRuntime.store = activeStore;
@@ -539,7 +576,6 @@ export default function (pi: ExtensionAPI) {
 			}
 		},
 	});
-
 }
 
 export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opts, context) => {
@@ -550,4 +586,10 @@ export const waitForAgent: TaskController["waitForAgent"] = async (agentIds, opt
 	return result;
 };
 
-export type { TaskExecuteParams, TaskExecuteContext, TaskDetails, TaskResult, RuntimeContext } from "./task-controller.js";
+export type {
+	RuntimeContext,
+	TaskDetails,
+	TaskExecuteContext,
+	TaskExecuteParams,
+	TaskResult,
+} from "./task-controller.js";

@@ -1,10 +1,7 @@
 import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT, OPTION_COLUMN_WIDTH } from "./state/types.js";
 
 /** Height of a single agent row given the expansion state. */
-export function getAgentRowHeight(
-	agentIndex: number,
-	expandedAgentIndex: number | null,
-): number {
+export function getAgentRowHeight(agentIndex: number, expandedAgentIndex: number | null): number {
 	if (agentIndex === expandedAgentIndex) {
 		return EXPANDED_ROW_HEIGHT;
 	}
@@ -77,20 +74,10 @@ export function clampHorizontalScrollOffset(
 		nextOffset = focusedIndex;
 	}
 
-	let visibleCount = getMaxVisibleOptionColumns(
-		termWidth,
-		columnCount,
-		columnWidths,
-		nextOffset,
-	);
+	let visibleCount = getMaxVisibleOptionColumns(termWidth, columnCount, columnWidths, nextOffset);
 	while (focusedIndex >= nextOffset + visibleCount && nextOffset < focusedIndex) {
 		nextOffset++;
-		visibleCount = getMaxVisibleOptionColumns(
-			termWidth,
-			columnCount,
-			columnWidths,
-			nextOffset,
-		);
+		visibleCount = getMaxVisibleOptionColumns(termWidth, columnCount, columnWidths, nextOffset);
 	}
 
 	return Math.max(0, Math.min(nextOffset, Math.max(0, columnCount - visibleCount)));

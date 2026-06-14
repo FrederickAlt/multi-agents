@@ -14,9 +14,9 @@
  */
 
 import {
-	type RawMarkdownDefinition,
-	type MarkdownDiagnostic,
 	discoverMarkdownDefinitions,
+	type MarkdownDiagnostic,
+	type RawMarkdownDefinition,
 } from "./markdown-definitions.js";
 
 /** Source origin of an agent definition.
@@ -76,8 +76,7 @@ export interface AgentDiagnostic {
 	reason: string;
 }
 
-export interface AgentRegistryOptions {
-}
+export interface AgentRegistryOptions {}
 
 // ---------------------------------------------------------------------------
 // Mapping helpers — RawMarkdownDefinition -> AgentConfig
@@ -88,9 +87,7 @@ export interface AgentRegistryOptions {
 // - null or empty array → empty array (none allowed)
 // - array → use directly
 // - any other type → empty array
-function parseCheckboxField(
-	value: unknown,
-): string[] | undefined {
+function parseCheckboxField(value: unknown): string[] | undefined {
 	if (value === undefined) return undefined;
 	if (value === null) return [];
 	if (Array.isArray(value)) {
@@ -100,26 +97,23 @@ function parseCheckboxField(
 	return [];
 }
 
-function parseRuntimeResourceField(
-	value: unknown,
-): string[] | undefined {
+function parseRuntimeResourceField(value: unknown): string[] | undefined {
 	if (value === undefined || value === null) return undefined;
 	if (Array.isArray(value)) {
 		const items = value.map((v: unknown) => String(v).trim()).filter(Boolean);
 		return items.length > 0 ? items : [];
 	}
 	if (typeof value === "string") {
-		const items = value.split(",").map((v) => v.trim()).filter(Boolean);
+		const items = value
+			.split(",")
+			.map((v) => v.trim())
+			.filter(Boolean);
 		return items.length > 0 ? items : undefined;
 	}
 	return [];
 }
 
-function parseAgentDepth(
-	rawDepth: unknown,
-	filePath: string,
-	warnings: AgentDiagnostic[],
-): number | undefined {
+function parseAgentDepth(rawDepth: unknown, filePath: string, warnings: AgentDiagnostic[]): number | undefined {
 	if (rawDepth === undefined || rawDepth === null || rawDepth === "") {
 		return undefined;
 	}
@@ -163,10 +157,7 @@ function parseAgentDepth(
  * Parses agent-specific frontmatter fields (tools, extensions, model,
  * reasoning_effort, depth, can_spawn, skills, prompt_parts) from the raw frontmatter map.
  */
-function mapToAgentConfig(
-	raw: RawMarkdownDefinition,
-	warnings: AgentDiagnostic[],
-): AgentConfig {
+function mapToAgentConfig(raw: RawMarkdownDefinition, warnings: AgentDiagnostic[]): AgentConfig {
 	const fm = raw.frontmatter;
 
 	const tools = parseRuntimeResourceField(fm.tools);
@@ -224,7 +215,7 @@ export class AgentRegistry {
 	private _diagnostics: AgentDiagnostic[];
 	private _discovered: boolean;
 
-	constructor(options?: AgentRegistryOptions) {
+	constructor(_options?: AgentRegistryOptions) {
 		this._agents = [];
 		this._projectAgentsDir = null;
 		this._diagnostics = [];
@@ -242,9 +233,7 @@ export class AgentRegistry {
 		});
 
 		this._diagnostics = result.diagnostics.map(mapToAgentDiagnostic);
-		this._agents = result.definitions.map((definition) =>
-			mapToAgentConfig(definition, this._diagnostics),
-		);
+		this._agents = result.definitions.map((definition) => mapToAgentConfig(definition, this._diagnostics));
 		this._projectAgentsDir = result.projectDir;
 		this._discovered = true;
 		return this;
@@ -292,13 +281,9 @@ export class AgentRegistry {
 		return formatAgentList(this.agents, maxItems);
 	}
 
-
-
 	private _ensureDiscovered(): void {
 		if (!this._discovered) {
-			throw new Error(
-				"AgentRegistry has not been initialized. Call .discover() before accessing agents.",
-			);
+			throw new Error("AgentRegistry has not been initialized. Call .discover() before accessing agents.");
 		}
 	}
 }
@@ -325,10 +310,7 @@ export function discoverAgents(): AgentDiscoveryResult {
  *
  * This function is stateless and does not depend on AgentRegistry.
  */
-export function formatAgentList(
-	agents: AgentConfig[],
-	maxItems: number,
-): { text: string; remaining: number } {
+export function formatAgentList(agents: AgentConfig[], maxItems: number): { text: string; remaining: number } {
 	if (agents.length === 0) return { text: "none", remaining: 0 };
 	const listed = agents.slice(0, maxItems);
 	const remaining = agents.length - listed.length;

@@ -1,6 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { randomBytes } from "node:crypto";
 
 export const MULTI_AGENTS_DEBUG_LOGGING_ENABLED = true;
 
@@ -122,7 +122,7 @@ function serializeForLog(
 ): unknown {
 	if (depth > options.maxDepth) return "[max-depth-reached]";
 	const primitive = serializePrimitive(input, options.maxValueLength);
-	if (typeof primitive !== "object" || typeof input === "function" || typeof input === "undefined") {
+	if (input === null || typeof primitive !== "object" || typeof input === "function" || typeof input === "undefined") {
 		return primitive;
 	}
 
@@ -146,9 +146,11 @@ function serializeForLog(
 	try {
 		if (Array.isArray(input)) {
 			const arrayLength = input.length;
-			const values = input.slice(0, options.maxArrayLength).map((value, index) =>
-				serializeForLog(value, depth + 1, options, seen, path ? `${path}[${index}]` : `${index}`),
-			);
+			const values = input
+				.slice(0, options.maxArrayLength)
+				.map((value, index) =>
+					serializeForLog(value, depth + 1, options, seen, path ? `${path}[${index}]` : `${index}`),
+				);
 			if (arrayLength > options.maxArrayLength) {
 				values.push({ _omitted: arrayLength - options.maxArrayLength });
 			}
@@ -185,13 +187,7 @@ function serializeForLog(
 				continue;
 			}
 			try {
-				output[rawKey] = serializeForLog(
-					rawValue,
-					depth + 1,
-					options,
-					seen,
-					path ? `${path}.${rawKey}` : rawKey,
-				);
+				output[rawKey] = serializeForLog(rawValue, depth + 1, options, seen, path ? `${path}.${rawKey}` : rawKey);
 			} catch {
 				output[rawKey] = "[unserializable]";
 			}
@@ -304,7 +300,9 @@ export function makeSessionDebugLogPath(sessionDir: string, sessionId: string): 
 
 export function makeSessionDebugLogger(
 	context: { getSessionDir(): string; getSessionId(): string },
-	options?: Pick<DebugLoggerOptions, "maxValueLength" | "maxArrayLength" | "maxDepth" | "redactedKeys"> & { enabled?: boolean },
+	options?: Pick<DebugLoggerOptions, "maxValueLength" | "maxArrayLength" | "maxDepth" | "redactedKeys"> & {
+		enabled?: boolean;
+	},
 ): DebugLogger {
 	const enabled = options?.enabled ?? MULTI_AGENTS_DEBUG_LOGGING_ENABLED;
 	return makeDebugLogger({

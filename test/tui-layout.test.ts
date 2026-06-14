@@ -1,19 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-	getAgentRowHeight,
-	getMaxVisibleAgents,
-	clampVerticalScrollOffset,
-} from "../src/tui/layout.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { clampVerticalScrollOffset, getAgentRowHeight, getMaxVisibleAgents } from "../src/tui/layout.js";
 import { COMPACT_ROW_HEIGHT, EXPANDED_ROW_HEIGHT } from "../src/tui/state/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const originalRowsDescriptor = Object.getOwnPropertyDescriptor(
-	process.stdout,
-	"rows",
-);
+const originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 
 function setTerminalRows(rows: number): void {
 	Object.defineProperty(process.stdout, "rows", {

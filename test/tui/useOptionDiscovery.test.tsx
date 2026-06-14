@@ -1,12 +1,13 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { Writable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import React, { act } from "react";
 import { render } from "ink";
+import React, { act } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscoveredModelsResult, PiRuntimeDiscovery } from "../../src/tui/discovery/options.js";
 import { useOptionDiscovery } from "../../src/tui/hooks/useOptionDiscovery.js";
+import type { ModelDiscoveryState } from "../../src/tui/state/types.js";
 
 interface DeferredModelResult {
 	resolve: (value: DiscoveredModelsResult) => void;
@@ -18,12 +19,8 @@ interface DeferredRuntimeResult {
 	reject: (reason?: unknown) => void;
 }
 
-const pendingModelDiscoveries = vi.hoisted(
-	() => [] as DeferredModelResult[],
-);
-const pendingRuntimeDiscoveries = vi.hoisted(
-	() => [] as DeferredRuntimeResult[],
-);
+const pendingModelDiscoveries = vi.hoisted(() => [] as DeferredModelResult[]);
+const pendingRuntimeDiscoveries = vi.hoisted(() => [] as DeferredRuntimeResult[]);
 
 const discoverModelsMock = vi.hoisted(() =>
 	vi.fn<(_agentDir: string) => Promise<DiscoveredModelsResult>>((_agentDir) => {
@@ -34,7 +31,7 @@ const discoverModelsMock = vi.hoisted(() =>
 );
 
 const discoverPiRuntimeResourcesMock = vi.hoisted(() =>
-	vi.fn(async () => undefined),
+	vi.fn<(_agentDir: string, _toolLists: string[][]) => Promise<PiRuntimeDiscovery | undefined>>(async () => undefined),
 );
 
 vi.mock("../../src/tui/discovery/options.js", async () => {
@@ -49,7 +46,7 @@ vi.mock("../../src/tui/discovery/options.js", async () => {
 });
 
 interface ProbeFrame {
-	status: "loading" | "ready" | "degraded";
+	status: ModelDiscoveryState["status"];
 	models: string[];
 	loading: boolean;
 	error: string | null;
@@ -111,15 +108,10 @@ describe("useOptionDiscovery", () => {
 
 	it("detects agent-declared tools that are not discovered as stale", async () => {
 		fs.mkdirSync(path.join(tempAgentDir, "agents"), { recursive: true });
-		fs.writeFileSync(path.join(tempAgentDir, "agents", "coder.md"), [
-			"---",
-			"description: coder",
-			"tools:",
-			"  - read",
-			"  - deleted_tool",
-			"---",
-			"body",
-		].join("\n"));
+		fs.writeFileSync(
+			path.join(tempAgentDir, "agents", "coder.md"),
+			["---", "description: coder", "tools:", "  - read", "  - deleted_tool", "---", "body"].join("\n"),
+		);
 		const frames: ProbeFrame[] = [];
 		const stdout = new Writable({
 			write(_chunk, _encoding, callback) {
@@ -134,16 +126,10 @@ describe("useOptionDiscovery", () => {
 
 		let app: ReturnType<typeof render> | null = null;
 		try {
-			app = render(
-				<OptionDiscoveryProbe
-					triggerRescan={false}
-					onFrame={(frame) => frames.push({ ...frame })}
-				/>,
-				{
-					stdout: stdout as unknown as NodeJS.WriteStream,
-					patchConsole: false,
-				},
-			);
+			app = render(<OptionDiscoveryProbe triggerRescan={false} onFrame={(frame) => frames.push({ ...frame })} />, {
+				stdout: stdout as unknown as NodeJS.WriteStream,
+				patchConsole: false,
+			});
 			await flush();
 			await flush();
 
@@ -164,15 +150,10 @@ describe("useOptionDiscovery", () => {
 			});
 		});
 		fs.mkdirSync(path.join(tempAgentDir, "agents"), { recursive: true });
-		fs.writeFileSync(path.join(tempAgentDir, "agents", "coder.md"), [
-			"---",
-			"description: coder",
-			"tools:",
-			"  - read",
-			"  - runtime_tool",
-			"---",
-			"body",
-		].join("\n"));
+		fs.writeFileSync(
+			path.join(tempAgentDir, "agents", "coder.md"),
+			["---", "description: coder", "tools:", "  - read", "  - runtime_tool", "---", "body"].join("\n"),
+		);
 		const frames: ProbeFrame[] = [];
 		const stdout = new Writable({
 			write(_chunk, _encoding, callback) {
@@ -187,16 +168,10 @@ describe("useOptionDiscovery", () => {
 
 		let app: ReturnType<typeof render> | null = null;
 		try {
-			app = render(
-				<OptionDiscoveryProbe
-					triggerRescan={false}
-					onFrame={(frame) => frames.push({ ...frame })}
-				/>,
-				{
-					stdout: stdout as unknown as NodeJS.WriteStream,
-					patchConsole: false,
-				},
-			);
+			app = render(<OptionDiscoveryProbe triggerRescan={false} onFrame={(frame) => frames.push({ ...frame })} />, {
+				stdout: stdout as unknown as NodeJS.WriteStream,
+				patchConsole: false,
+			});
 			await flush();
 
 			const initialLoadedFrame = frames.find((frame) => !frame.loading);
@@ -235,40 +210,29 @@ describe("useOptionDiscovery", () => {
 
 		let app: ReturnType<typeof render> | null = null;
 		try {
-			app = render(
-				<OptionDiscoveryProbe
-					triggerRescan={false}
-					onFrame={(frame) => frames.push({ ...frame })}
-				/>,
-				{
-					stdout: stdout as unknown as NodeJS.WriteStream,
-					patchConsole: false,
-				},
-			);
+			app = render(<OptionDiscoveryProbe triggerRescan={false} onFrame={(frame) => frames.push({ ...frame })} />, {
+				stdout: stdout as unknown as NodeJS.WriteStream,
+				patchConsole: false,
+			});
 
 			// Allow initial scan to start and trigger first model lookup.
 			await flush();
 			expect(pendingModelDiscoveries).toHaveLength(1);
 
 			// Trigger a rescan while first model lookup is still pending.
-			app.rerender(
-				<OptionDiscoveryProbe
-					triggerRescan={true}
-					onFrame={(frame) => frames.push({ ...frame })}
-				/>,
-			);
+			app.rerender(<OptionDiscoveryProbe triggerRescan={true} onFrame={(frame) => frames.push({ ...frame })} />);
 			await flush();
 			expect(pendingModelDiscoveries).toHaveLength(2);
 
 			const freshResult: DiscoveredModelsResult = {
 				models: [{ provider: "fresh", modelId: "fresh", displayName: "fresh", canonicalRef: "" }],
 				defaultModelDisplayName: "fresh",
-				status: "ready",
+				status: "ready" as const,
 			};
 			const staleResult: DiscoveredModelsResult = {
 				models: [{ provider: "stale", modelId: "stale", displayName: "stale", canonicalRef: "" }],
 				defaultModelDisplayName: "stale",
-				status: "ready",
+				status: "ready" as const,
 			};
 
 			// Fresh completion should win; stale completion from the first request must be ignored.

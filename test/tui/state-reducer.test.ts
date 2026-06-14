@@ -1,28 +1,35 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { configReducer, createInitialState, resolveCheckboxSelection, computeCheckboxSaveValue } from "../../src/tui/state/reducer.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
 	applyOptionColumnItemOrder,
 	getFieldName,
-	getOptionColumnItems,
 	getOptionColumnAvailableItems,
 	getOptionColumnDisabledItems,
+	getOptionColumnItems,
 	getOptionColumnSelectedValue,
 	getOptionColumnSelectedValues,
 	isOptionColumnItemDisabled,
-	MODEL_OPTION_LOADING_ITEM,
 	MODEL_OPTION_DEGRADED_STATUS,
+	MODEL_OPTION_LOADING_ITEM,
 } from "../../src/tui/state/option-columns.js";
-import type { ConfigState, AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
+import {
+	computeCheckboxSaveValue,
+	configReducer,
+	createInitialState,
+	resolveCheckboxSelection,
+} from "../../src/tui/state/reducer.js";
+import type { AgentConfigState, ConfigState, DiscoveredOptions, OverlayState } from "../../src/tui/state/types.js";
 import { FIELDS_ORDER } from "../../src/tui/state/types.js";
 
-const originalRowsDescriptor = Object.getOwnPropertyDescriptor(
-	process.stdout,
-	"rows",
-);
-const originalColumnsDescriptor = Object.getOwnPropertyDescriptor(
-	process.stdout,
-	"columns",
-);
+type SelectableOverlayState = Extract<OverlayState, { type: "checkbox" }> | Extract<OverlayState, { type: "dropdown" }>;
+
+function selectableOverlay(overlay: OverlayState | null): SelectableOverlayState {
+	expect(overlay).not.toBeNull();
+	expect(overlay?.type).not.toBe("stale-cleanup");
+	return overlay as SelectableOverlayState;
+}
+
+const originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+const originalColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
 
 function setTerminalRows(rows: number): void {
 	Object.defineProperty(process.stdout, "rows", {
@@ -73,7 +80,7 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 			{ provider: "openai", modelId: "gpt5", displayName: "gpt-5", canonicalRef: "gpt5" },
 		],
 		defaultModel: "claude",
-		modelDiscovery: { status: "ready", error: null },
+		modelDiscovery: { status: "ready" as const, error: null },
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: ["other-agent", "coder"],
@@ -140,9 +147,9 @@ describe("configReducer", () => {
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "tools" });
 		expect(next.overlay).not.toBeNull();
-		expect(next.overlay!.type).toBe("checkbox");
-		expect(next.overlay!.localSelection).toEqual(["read"]);
-		expect(next.overlay!.wasImplicit).toBe(false);
+		expect(selectableOverlay(next.overlay).type).toBe("checkbox");
+		expect(selectableOverlay(next.overlay).localSelection).toEqual(["read"]);
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
 	});
 
 	it("OPEN_OVERLAY creates implicit checkbox when field is missing", () => {
@@ -152,8 +159,8 @@ describe("configReducer", () => {
 			options: makeOptions(),
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "tools" });
-		expect(next.overlay!.localSelection).toEqual(["read", "bash", "write"]);
-		expect(next.overlay!.wasImplicit).toBe(true);
+		expect(selectableOverlay(next.overlay).localSelection).toEqual(["read", "bash", "write"]);
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(true);
 	});
 
 	it("OPEN_OVERLAY creates dropdown overlay for model", () => {
@@ -164,8 +171,8 @@ describe("configReducer", () => {
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
 		expect(next.overlay).not.toBeNull();
-		expect(next.overlay!.type).toBe("dropdown");
-		expect(next.overlay!.localSelected).toBe("gpt-5");
+		expect(selectableOverlay(next.overlay).type).toBe("dropdown");
+		expect(selectableOverlay(next.overlay).localSelected).toBe("gpt-5");
 	});
 
 	it("EXPAND opens stale cleanup confirmation before expanding agents with stale tools or extensions", () => {
@@ -222,10 +229,10 @@ describe("configReducer", () => {
 		const withOverlay = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "tools" });
 		// Uncheck "read"
 		let toggled = configReducer(withOverlay, { type: "TOGGLE_CHECKBOX", item: "read" });
-		expect(toggled.overlay!.localSelection).toEqual([]);
+		expect(selectableOverlay(toggled.overlay).localSelection).toEqual([]);
 		// Check "bash"
 		toggled = configReducer(toggled, { type: "TOGGLE_CHECKBOX", item: "bash" });
-		expect(toggled.overlay!.localSelection).toEqual(["bash"]);
+		expect(selectableOverlay(toggled.overlay).localSelection).toEqual(["bash"]);
 	});
 
 	it("TOGGLE_CHECKBOX from implicit state makes selection explicit", () => {
@@ -235,12 +242,12 @@ describe("configReducer", () => {
 			options: makeOptions(),
 		};
 		const withOverlay = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "tools" });
-		expect(withOverlay.overlay!.wasImplicit).toBe(true);
-		expect(withOverlay.overlay!.localSelection).toEqual(["read", "bash", "write"]);
+		expect(selectableOverlay(withOverlay.overlay).wasImplicit).toBe(true);
+		expect(selectableOverlay(withOverlay.overlay).localSelection).toEqual(["read", "bash", "write"]);
 		// Toggle one - should become explicit with all others checked except toggled
 		const toggled = configReducer(withOverlay, { type: "TOGGLE_CHECKBOX", item: "read" });
-		expect(toggled.overlay!.wasImplicit).toBe(false);
-		expect(toggled.overlay!.localSelection).toEqual(["bash", "write"]);
+		expect(selectableOverlay(toggled.overlay).wasImplicit).toBe(false);
+		expect(selectableOverlay(toggled.overlay).localSelection).toEqual(["bash", "write"]);
 	});
 
 	it("SAVE_COMPLETE updates statuses", () => {
@@ -321,12 +328,7 @@ describe("configReducer", () => {
 		});
 
 		const naturalItems = getOptionColumnItems(next.agents[0], options, "skills", next.agents[0].name);
-		const effectiveItems = applyOptionColumnItemOrder(
-			naturalItems,
-			next.optionColumnItemOrder,
-			0,
-			"skills",
-		);
+		const effectiveItems = applyOptionColumnItemOrder(naturalItems, next.optionColumnItemOrder, 0, "skills");
 		expect(effectiveItems).toEqual(["skill-a", "skill-b", "skill-d", "skill-c"]);
 		expect(next.focus.optionItemIndex).toBe(2);
 
@@ -362,10 +364,7 @@ describe("computeCheckboxSaveValue", () => {
 	});
 
 	it("does not return implicit-all when stale/extra values are present", () => {
-		const result = computeCheckboxSaveValue(
-			["read", "deleted_tool"],
-			["read", "bash", "write"],
-		);
+		const result = computeCheckboxSaveValue(["read", "deleted_tool"], ["read", "bash", "write"]);
 		expect(result).toEqual(["read", "deleted_tool"]);
 	});
 
@@ -405,21 +404,21 @@ describe("tri-state toggle flow", () => {
 			agentIndex: 0,
 			fieldName: "tools",
 		});
-		expect(withOverlay.overlay!.wasImplicit).toBe(true);
-		expect(withOverlay.overlay!.localSelection).toEqual(["read", "bash", "write"]);
+		expect(selectableOverlay(withOverlay.overlay).wasImplicit).toBe(true);
+		expect(selectableOverlay(withOverlay.overlay).localSelection).toEqual(["read", "bash", "write"]);
 
 		// First toggle removes one item and makes explicit
 		const toggled = configReducer(withOverlay, {
 			type: "TOGGLE_CHECKBOX",
 			item: "read",
 		});
-		expect(toggled.overlay!.wasImplicit).toBe(false);
-		expect(toggled.overlay!.localSelection).toEqual(["bash", "write"]);
+		expect(selectableOverlay(toggled.overlay).wasImplicit).toBe(false);
+		expect(selectableOverlay(toggled.overlay).localSelection).toEqual(["bash", "write"]);
 
 		// computeCheckboxSaveValue should return explicit list (not all selected)
 		const saveValue = computeCheckboxSaveValue(
-			toggled.overlay!.localSelection,
-			toggled.overlay!.availableItems,
+			selectableOverlay(toggled.overlay).localSelection,
+			selectableOverlay(toggled.overlay).availableItems,
 		);
 		expect(saveValue).toEqual(["bash", "write"]);
 	});
@@ -442,17 +441,17 @@ describe("tri-state toggle flow", () => {
 			agentIndex: 0,
 			fieldName: "tools",
 		});
-		expect(withOverlay.overlay!.localSelection).toEqual(["read", "deleted_tool"]);
+		expect(selectableOverlay(withOverlay.overlay).localSelection).toEqual(["read", "deleted_tool"]);
 
 		const toggled = configReducer(withOverlay, {
 			type: "TOGGLE_CHECKBOX",
 			item: "bash",
 		});
-		expect(toggled.overlay!.localSelection).toEqual(["read", "deleted_tool", "bash"]);
+		expect(selectableOverlay(toggled.overlay).localSelection).toEqual(["read", "deleted_tool", "bash"]);
 
 		const saveValue = computeCheckboxSaveValue(
-			toggled.overlay!.localSelection,
-			toggled.overlay!.availableItems,
+			selectableOverlay(toggled.overlay).localSelection,
+			selectableOverlay(toggled.overlay).availableItems,
 		);
 		expect(saveValue).toEqual(["read", "deleted_tool", "bash"]);
 	});
@@ -469,19 +468,19 @@ describe("tri-state toggle flow", () => {
 			agentIndex: 0,
 			fieldName: "tools",
 		});
-		expect(withOverlay.overlay!.localSelection).toEqual(["read"]);
+		expect(selectableOverlay(withOverlay.overlay).localSelection).toEqual(["read"]);
 
 		// Toggle last item off
 		const toggled = configReducer(withOverlay, {
 			type: "TOGGLE_CHECKBOX",
 			item: "read",
 		});
-		expect(toggled.overlay!.localSelection).toEqual([]);
+		expect(selectableOverlay(toggled.overlay).localSelection).toEqual([]);
 
 		// Should write [] (empty array), NOT undefined
 		const saveValue = computeCheckboxSaveValue(
-			toggled.overlay!.localSelection,
-			toggled.overlay!.availableItems,
+			selectableOverlay(toggled.overlay).localSelection,
+			selectableOverlay(toggled.overlay).availableItems,
 		);
 		expect(saveValue).toEqual([]);
 	});
@@ -502,19 +501,19 @@ describe("tri-state toggle flow", () => {
 			agentIndex: 0,
 			fieldName: "tools",
 		});
-		expect(withOverlay.overlay!.localSelection).toEqual(["read", "bash"]);
+		expect(selectableOverlay(withOverlay.overlay).localSelection).toEqual(["read", "bash"]);
 
 		// Toggle "write" on → now all three are selected
 		const toggled = configReducer(withOverlay, {
 			type: "TOGGLE_CHECKBOX",
 			item: "write",
 		});
-		expect(toggled.overlay!.localSelection).toEqual(["read", "bash", "write"]);
+		expect(selectableOverlay(toggled.overlay).localSelection).toEqual(["read", "bash", "write"]);
 
 		// All selected → save value should be undefined (remove field)
 		const saveValue = computeCheckboxSaveValue(
-			toggled.overlay!.localSelection,
-			toggled.overlay!.availableItems,
+			selectableOverlay(toggled.overlay).localSelection,
+			selectableOverlay(toggled.overlay).availableItems,
 		);
 		expect(saveValue).toBeUndefined();
 	});
@@ -578,18 +577,18 @@ describe("OPEN_OVERLAY dropdown", () => {
 	it("opens model dropdown with current value from frontmatter", () => {
 		const state = stateWithAgent({ model: "gpt-5" });
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
-		expect(next.overlay!.type).toBe("dropdown");
-		expect(next.overlay!.localSelected).toBe("gpt-5");
-		expect(next.overlay!.wasImplicit).toBe(false);
-		expect(next.overlay!.availableItems).toEqual(["claude", "gpt-5"]);
+		expect(selectableOverlay(next.overlay).type).toBe("dropdown");
+		expect(selectableOverlay(next.overlay).localSelected).toBe("gpt-5");
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
+		expect(selectableOverlay(next.overlay).availableItems).toEqual(["claude", "gpt-5"]);
 	});
 
 	it("opens model dropdown with default from options.defaultModel when field missing", () => {
 		const state = stateWithAgent({ description: "no model" });
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
-		expect(next.overlay!.type).toBe("dropdown");
-		expect(next.overlay!.localSelected).toBe("claude");
-		expect(next.overlay!.wasImplicit).toBe(true);
+		expect(selectableOverlay(next.overlay).type).toBe("dropdown");
+		expect(selectableOverlay(next.overlay).localSelected).toBe("claude");
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(true);
 	});
 
 	it("model dropdown falls back to first available when defaultModel is empty", () => {
@@ -599,7 +598,7 @@ describe("OPEN_OVERLAY dropdown", () => {
 			options: makeOptions({ defaultModel: "" }),
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
-		expect(next.overlay!.localSelected).toBe("claude");
+		expect(selectableOverlay(next.overlay).localSelected).toBe("claude");
 	});
 
 	it("model dropdown shows (none) when no models available", () => {
@@ -609,41 +608,41 @@ describe("OPEN_OVERLAY dropdown", () => {
 			options: makeOptions({ models: [], defaultModel: "" }),
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
-		expect(next.overlay!.localSelected).toBe("(none)");
-		expect(next.overlay!.availableItems).toEqual([]);
-		expect(next.overlay!.wasImplicit).toBe(true);
+		expect(selectableOverlay(next.overlay).localSelected).toBe("(none)");
+		expect(selectableOverlay(next.overlay).availableItems).toEqual([]);
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(true);
 	});
 
 	it("opens depth dropdown with default 0 when field missing", () => {
 		const state = stateWithAgent({ description: "no depth" });
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
-		expect(next.overlay!.type).toBe("dropdown");
-		expect(next.overlay!.localSelected).toBe("0");
-		expect(next.overlay!.wasImplicit).toBe(true);
-		expect(next.overlay!.availableItems).toEqual(["0", "1", "2", "3", "4", "5"]);
+		expect(selectableOverlay(next.overlay).type).toBe("dropdown");
+		expect(selectableOverlay(next.overlay).localSelected).toBe("0");
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(true);
+		expect(selectableOverlay(next.overlay).availableItems).toEqual(["0", "1", "2", "3", "4", "5"]);
 	});
 
 	it("opens depth dropdown with current value from frontmatter", () => {
 		const state = stateWithAgent({ depth: 3 });
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
-		expect(next.overlay!.localSelected).toBe("3");
-		expect(next.overlay!.wasImplicit).toBe(false);
+		expect(selectableOverlay(next.overlay).localSelected).toBe("3");
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
 	});
 
 	it("opens reasoning_effort dropdown with default medium when field missing", () => {
 		const state = stateWithAgent({ description: "no reasoning" });
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "reasoning_effort" });
-		expect(next.overlay!.type).toBe("dropdown");
-		expect(next.overlay!.localSelected).toBe("medium");
-		expect(next.overlay!.wasImplicit).toBe(true);
-		expect(next.overlay!.availableItems).toEqual(["low", "medium", "high", "maximum"]);
+		expect(selectableOverlay(next.overlay).type).toBe("dropdown");
+		expect(selectableOverlay(next.overlay).localSelected).toBe("medium");
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(true);
+		expect(selectableOverlay(next.overlay).availableItems).toEqual(["low", "medium", "high", "maximum"]);
 	});
 
 	it("opens reasoning_effort dropdown with current value from frontmatter", () => {
 		const state = stateWithAgent({ reasoning_effort: "high" });
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "reasoning_effort" });
-		expect(next.overlay!.localSelected).toBe("high");
-		expect(next.overlay!.wasImplicit).toBe(false);
+		expect(selectableOverlay(next.overlay).localSelected).toBe("high");
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
 	});
 
 	it("rejects OPEN_OVERLAY when agent has error", () => {
@@ -672,7 +671,7 @@ describe("SELECT_DROPDOWN", () => {
 		};
 		const withOverlay = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
 		const updated = configReducer(withOverlay, { type: "SELECT_DROPDOWN", item: "gpt-5" });
-		expect(updated.overlay!.localSelected).toBe("gpt-5");
+		expect(selectableOverlay(updated.overlay).localSelected).toBe("gpt-5");
 	});
 
 	it("is a no-op when overlay is not dropdown", () => {
@@ -706,7 +705,7 @@ describe("OPEN_OVERLAY validation", () => {
 			options: makeOptions(),
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
-		expect(next.overlay!.availableItems).toEqual(["0", "1", "2", "3", "4", "5"]);
+		expect(selectableOverlay(next.overlay).availableItems).toEqual(["0", "1", "2", "3", "4", "5"]);
 	});
 
 	it("opens dropdown with model display names from discovered models", () => {
@@ -716,7 +715,7 @@ describe("OPEN_OVERLAY validation", () => {
 			options: makeOptions(),
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "model" });
-		expect(next.overlay!.availableItems).toEqual(["claude", "gpt-5"]);
+		expect(selectableOverlay(next.overlay).availableItems).toEqual(["claude", "gpt-5"]);
 	});
 
 	it("selecting default value still sets wasImplicit to true", () => {
@@ -727,9 +726,9 @@ describe("OPEN_OVERLAY validation", () => {
 		};
 		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "depth" });
 		// Depth was missing in frontmatter
-		expect(next.overlay!.wasImplicit).toBe(true);
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(true);
 		// Default value "0" is selected
-		expect(next.overlay!.localSelected).toBe("0");
+		expect(selectableOverlay(next.overlay).localSelected).toBe("0");
 	});
 });
 
@@ -892,13 +891,7 @@ describe("inline Option columns", () => {
 			...createInitialState(),
 			agents: [makeAgent({ frontmatter: { skills: "skill-beta" } })],
 			options: makeOptions({
-				skills: [
-					"skill-alpha",
-					"skill-beta",
-					"skill-gamma",
-					"other-skill",
-					"another",
-				],
+				skills: ["skill-alpha", "skill-beta", "skill-gamma", "other-skill", "another"],
 			}),
 			expandedAgentIndex: 0,
 			focus: { agentIndex: 0, fieldIndex: 6, optionItemIndex: 1 },
@@ -922,12 +915,7 @@ describe("inline Option columns", () => {
 			...createInitialState(),
 			agents: [makeAgent({ frontmatter: { skills: "skill-beta" } })],
 			options: makeOptions({
-				skills: [
-					"skill-alpha",
-					"skill-beta",
-					"skill-gamma",
-					"skill-delta",
-				],
+				skills: ["skill-alpha", "skill-beta", "skill-gamma", "skill-delta"],
 			}),
 			expandedAgentIndex: 0,
 			focus: { agentIndex: 0, fieldIndex: 6, optionItemIndex: 1 },
@@ -1115,7 +1103,6 @@ describe("inline Option columns", () => {
 
 		expect(next.focus.fieldIndex).toBe(3);
 		expect(next.optionColumnScrollOffset).toBe(4);
-
 	});
 
 	it("realigns focused item after a stale custom value is replaced", () => {
@@ -1145,12 +1132,7 @@ describe("inline Option columns", () => {
 		});
 		const options = makeOptions();
 
-		expect(getOptionColumnItems(agent, options, "tools")).toEqual([
-			"read",
-			"deleted_tool",
-			"bash",
-			"write",
-		]);
+		expect(getOptionColumnItems(agent, options, "tools")).toEqual(["read", "deleted_tool", "bash", "write"]);
 
 		const state: ConfigState = {
 			...createInitialState(),
@@ -1190,33 +1172,29 @@ describe("model discovery options", () => {
 	it("shows loading placeholder in model option column while discovery is pending", () => {
 		const options = {
 			...makeOptions(),
-			modelDiscovery: { status: "loading", error: null },
+			modelDiscovery: { status: "loading" as const, error: null },
 			models: [],
 			defaultModel: "",
 		};
 
-		expect(getOptionColumnAvailableItems(options, "model")).toEqual([
-			MODEL_OPTION_LOADING_ITEM,
-		]);
+		expect(getOptionColumnAvailableItems(options, "model")).toEqual([MODEL_OPTION_LOADING_ITEM]);
 	});
 
 	it("shows degraded placeholder for unresolved model discovery", () => {
 		const options = {
 			...makeOptions(),
-			modelDiscovery: { status: "degraded", error: "registry missing" },
+			modelDiscovery: { status: "degraded" as const, error: "registry missing" },
 			models: [],
 			defaultModel: "",
 		};
 
-		expect(getOptionColumnAvailableItems(options, "model")).toEqual([
-			MODEL_OPTION_DEGRADED_STATUS,
-		]);
+		expect(getOptionColumnAvailableItems(options, "model")).toEqual([MODEL_OPTION_DEGRADED_STATUS]);
 	});
 
 	it("shows degraded marker while keeping fallback models when present", () => {
 		const options = {
 			...makeOptions(),
-			modelDiscovery: { status: "degraded", error: "using builtin fallback" },
+			modelDiscovery: { status: "degraded" as const, error: "using builtin fallback" },
 			models: [
 				{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "claude" },
 				{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
@@ -1233,7 +1211,7 @@ describe("model discovery options", () => {
 	it("keeps degraded marker pinned and inserts a stale model after it", () => {
 		const options = {
 			...makeOptions(),
-			modelDiscovery: { status: "degraded", error: "using builtin fallback" },
+			modelDiscovery: { status: "degraded" as const, error: "using builtin fallback" },
 			models: [
 				{ provider: "anthropic", modelId: "claude", displayName: "Claude", canonicalRef: "claude" },
 				{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "gpt-5" },
@@ -1252,16 +1230,13 @@ describe("model discovery options", () => {
 	it("keeps loading placeholder visible when an existing model is already set", () => {
 		const options = {
 			...makeOptions(),
-			modelDiscovery: { status: "loading", error: null },
+			modelDiscovery: { status: "loading" as const, error: null },
 			models: [],
 			defaultModel: "",
 		};
 		const agent = makeAgent({ frontmatter: { model: "claude", description: "agent" } });
 
-		expect(getOptionColumnItems(agent, options, "model")).toEqual([
-			MODEL_OPTION_LOADING_ITEM,
-			"claude",
-		]);
+		expect(getOptionColumnItems(agent, options, "model")).toEqual([MODEL_OPTION_LOADING_ITEM, "claude"]);
 		expect(getOptionColumnSelectedValue(agent, options, "model")).toBe("claude");
 	});
 
@@ -1272,7 +1247,7 @@ describe("model discovery options", () => {
 			agents: [agent],
 			options: {
 				...makeOptions(),
-				modelDiscovery: { status: "loading", error: null },
+				modelDiscovery: { status: "loading" as const, error: null },
 				models: [],
 				defaultModel: "",
 			},
@@ -1286,7 +1261,7 @@ describe("model discovery options", () => {
 
 		const loadedOptions = {
 			...makeOptions(),
-			modelDiscovery: { status: "ready", error: null },
+			modelDiscovery: { status: "ready" as const, error: null },
 		};
 		const next = configReducer(baseState, {
 			type: "UPDATE_OPTIONS",
@@ -1304,7 +1279,7 @@ describe("model discovery options", () => {
 		const agent = makeAgent({ frontmatter: { model: "claude", description: "agent" } });
 		const baseline = {
 			...makeOptions(),
-			modelDiscovery: { status: "ready", error: null },
+			modelDiscovery: { status: "ready" as const, error: null },
 		};
 		let state = configReducer(createInitialState(), {
 			type: "INIT_COMPLETE",
@@ -1322,7 +1297,7 @@ describe("model discovery options", () => {
 			options: {
 				...makeOptions(),
 				models: [],
-				modelDiscovery: { status: "degraded", error: "network" },
+				modelDiscovery: { status: "degraded" as const, error: "network" },
 				defaultModel: "",
 			},
 		});
@@ -1342,7 +1317,7 @@ describe("model discovery options", () => {
 			agents: [agent],
 			options: {
 				...makeOptions(),
-				modelDiscovery: { status: "loading", error: null },
+				modelDiscovery: { status: "loading" as const, error: null },
 				models: [],
 			},
 		});
@@ -1355,7 +1330,7 @@ describe("model discovery options", () => {
 			type: "UPDATE_OPTIONS",
 			options: {
 				...makeOptions(),
-				modelDiscovery: { status: "ready", error: null },
+				modelDiscovery: { status: "ready" as const, error: null },
 				defaultModel: "claude",
 			},
 		});

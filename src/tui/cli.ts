@@ -5,12 +5,8 @@
 import { render } from "ink";
 import React from "react";
 import { App } from "./app.js";
-import {
-	formatAgentConfigUsage,
-	parseAgentConfigArgs,
-	prepareDebugAgentDir,
-} from "./debug.js";
 import type { AgentConfigDebugInfo } from "./debug.js";
+import { formatAgentConfigUsage, parseAgentConfigArgs, prepareDebugAgentDir } from "./debug.js";
 
 let debugInfo: AgentConfigDebugInfo | undefined;
 try {
@@ -28,7 +24,7 @@ try {
 	process.exit(1);
 }
 
-render(React.createElement(App, { debugInfo }), {
+render(React.createElement(App as React.ComponentType<{ debugInfo?: AgentConfigDebugInfo }>, { debugInfo }), {
 	exitOnCtrlC: true,
 	patchConsole: false,
 });

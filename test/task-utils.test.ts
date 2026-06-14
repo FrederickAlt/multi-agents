@@ -2,9 +2,13 @@
  * Unit tests for prompt rendering helpers.
  */
 import { describe, expect, it } from "vitest";
-import { SUBAGENT_REPORTING_NOTICE, renderComposedAgentSystemPrompt, renderPromptTemplate } from "../subagent/prompt-composition.js";
-import type { PromptParts, RenderContext } from "../subagent/prompt-composition.js";
 import type { AgentConfig } from "../subagent/agents.js";
+import type { PromptParts, RenderContext } from "../subagent/prompt-composition.js";
+import {
+	renderComposedAgentSystemPrompt,
+	renderPromptTemplate,
+	SUBAGENT_REPORTING_NOTICE,
+} from "../subagent/prompt-composition.js";
 
 // ---------------------------------------------------------------------------
 // renderPromptTemplate
@@ -14,7 +18,8 @@ describe("renderPromptTemplate", () => {
 	const baseAgent: AgentConfig = {
 		name: "TestAgent",
 		description: "A test agent",
-		systemPrompt: "You are {{agent_name}}.\n\nAvailable tools:\n{{tools}}\n\nGuidelines:\n{{guidelines}}\n\nCWD: {{cwd}}\nDate: {{date}}",
+		systemPrompt:
+			"You are {{agent_name}}.\n\nAvailable tools:\n{{tools}}\n\nGuidelines:\n{{guidelines}}\n\nCWD: {{cwd}}\nDate: {{date}}",
 		source: "builtin",
 		filePath: "/tmp/test.md",
 	};
@@ -183,10 +188,7 @@ describe("renderPromptTemplate", () => {
 			agent: { ...baseAgent, skills: [], systemPrompt: "Skills:\n{{skills}}" },
 			parts: {
 				...baseParts,
-				skills: [
-					{ name: "tdd" },
-					{ name: "diagnose" },
-				],
+				skills: [{ name: "tdd" }, { name: "diagnose" }],
 			},
 		};
 		const result = renderPromptTemplate(ctx);
@@ -340,13 +342,15 @@ describe("renderPromptTemplate", () => {
 				{ name: "diagnose", description: "Debugging" },
 			],
 		};
-		const promptParts = [{
-			name: "shared",
-			description: "shared prompt part",
-			systemPrompt: "Shared sees {{agent_description}} and {{skills}}",
-			source: "builtin" as const,
-			filePath: "/tmp/shared.md",
-		}];
+		const promptParts = [
+			{
+				name: "shared",
+				description: "shared prompt part",
+				systemPrompt: "Shared sees {{agent_description}} and {{skills}}",
+				source: "builtin" as const,
+				filePath: "/tmp/shared.md",
+			},
+		];
 
 		const rootPrompt = renderComposedAgentSystemPrompt({ agent, parts }, promptParts, {
 			baseSystemPrompt: "Root raw/base prompt that must not affect semantics",

@@ -9,21 +9,25 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import type { AgentConfig } from "../subagent/agents.js";
+import type { DebugLogger } from "../subagent/debug-logger.js";
+import type { SubagentRecord } from "../subagent/metadata.js";
 import { MetadataStore } from "../subagent/metadata.js";
 import {
 	ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS,
 	ABORT_FINAL_SUMMARY_MESSAGE,
 	ABORT_FINAL_SUMMARY_TIMEOUT_MS,
+	type AgentSessionFactory,
+	type ManagedAgentSession,
+	type ModelResolver,
 	PiAgentSessionFactory,
-	SubagentSessionManager,
+	type SessionManagerProvider,
 	type SessionSetupContext,
+	SubagentSessionManager,
 } from "../subagent/session-manager.js";
-import { DefaultResourceLoader, SessionManager, type AgentSession } from "@mariozechner/pi-coding-agent";
-import type { SubagentRecord } from "../subagent/metadata.js";
-import type { AgentConfig } from "../subagent/agents.js";
-import type { DebugLogger } from "../subagent/debug-logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,16 +58,17 @@ function makeAgent(name = "scout"): AgentConfig {
 
 interface MockSessionCallbacks {
 	callbacks: Array<(event: any) => void>;
-	dispose: ReturnType<typeof vi.fn>;
-	prompt: ReturnType<typeof vi.fn>;
-	abort: ReturnType<typeof vi.fn>;
-	subscribe: ReturnType<typeof vi.fn>;
-	unsubscribe: ReturnType<typeof vi.fn>;
+	dispose: Mock<() => void>;
+	prompt: Mock<(message: string, options?: { streamingBehavior?: "steer" }) => unknown>;
+	steer?: Mock<(message: string) => unknown>;
+	abort: Mock<() => void>;
+	subscribe: Mock<(cb: (event: unknown) => void) => () => void>;
+	unsubscribe: Mock<() => void>;
 	messages: any[];
 	getActiveToolNames: () => string[];
 }
 
-function makeMockSession(tools?: string[]): MockSessionCallbacks & AgentSession {
+function makeMockSession(tools?: string[]): MockSessionCallbacks & ManagedAgentSession {
 	const callbacks: Array<(event: any) => void> = [];
 	const unsubscribe = vi.fn(() => {
 		callbacks.length = 0;
@@ -80,7 +85,7 @@ function makeMockSession(tools?: string[]): MockSessionCallbacks & AgentSession 
 		messages: [],
 		callbacks,
 		unsubscribe,
-	} as unknown as MockSessionCallbacks & AgentSession;
+	} as unknown as MockSessionCallbacks & ManagedAgentSession;
 	return session;
 }
 
@@ -94,7 +99,7 @@ function makeSpyDebugLogger(sink: Array<{ event: string }>): DebugLogger {
 	const create = (context: Record<string, unknown>): DebugLogger => ({
 		isEnabled: true,
 		child: (childContext) => create({ ...context, ...childContext }),
-		log: (level, event) => {
+		log: (_level, event) => {
 			sink.push({ event });
 		},
 		debug: (event) => create(context).log("debug", event),
@@ -113,16 +118,12 @@ function makeSpyDebugLogger(sink: Array<{ event: string }>): DebugLogger {
 describe("SubagentSessionManager", () => {
 	let tempDir: string;
 	let metadataStore: MetadataStore;
-	let mockSessionManagerProvider: {
-		openOrCreate: ReturnType<typeof vi.fn>;
-	};
+	let mockSessionManagerProvider: SessionManagerProvider;
 	let mockAgentSessionFactory: {
-		create: ReturnType<typeof vi.fn>;
+		create: Mock<(config: Parameters<AgentSessionFactory["create"]>[0]) => ReturnType<AgentSessionFactory["create"]>>;
 	};
-	let mockModelResolver: {
-		resolve: ReturnType<typeof vi.fn>;
-	};
-	let defaultCreateResourceLoader: ReturnType<typeof vi.fn>;
+	let mockModelResolver: ModelResolver;
+	let defaultCreateResourceLoader: Mock<(agent: AgentConfig) => Promise<DefaultResourceLoader>>;
 	let defaultSetupContext: SessionSetupContext;
 
 	beforeEach(() => {
@@ -137,7 +138,7 @@ describe("SubagentSessionManager", () => {
 		metadataStore.load();
 
 		mockSessionManagerProvider = {
-			openOrCreate: vi.fn(() => makeMockPiSessionManager(join(tempDir, "sub-test.jsonl"))),
+			openOrCreate: vi.fn(() => makeMockPiSessionManager(join(tempDir, "sub-test.jsonl")) as SessionManager),
 		};
 		mockAgentSessionFactory = {
 			create: vi.fn(() => Promise.resolve(makeMockSession())),
@@ -145,7 +146,9 @@ describe("SubagentSessionManager", () => {
 		mockModelResolver = {
 			resolve: vi.fn((_name, fallback, _warnings) => fallback),
 		};
-		defaultCreateResourceLoader = vi.fn(() => Promise.resolve({ reload: vi.fn() } as any));
+		defaultCreateResourceLoader = vi.fn(() =>
+			Promise.resolve({ reload: vi.fn() } as unknown as DefaultResourceLoader),
+		);
 
 		defaultSetupContext = {
 			metadataStore,
@@ -158,16 +161,16 @@ describe("SubagentSessionManager", () => {
 
 	afterEach(() => {
 		if (tempDir) {
-			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 
 	function createManager(options?: { logger?: DebugLogger }): SubagentSessionManager {
-		return new SubagentSessionManager(
-			mockSessionManagerProvider,
-			mockAgentSessionFactory,
-			options?.logger,
-		);
+		return new SubagentSessionManager(mockSessionManagerProvider, mockAgentSessionFactory, options?.logger);
 	}
 
 	// ---- Session tracking ----
@@ -211,12 +214,7 @@ describe("SubagentSessionManager", () => {
 			const existing = makeMockSession();
 			sm.trackSession("abc", existing);
 
-			const result = await sm.getOrCreateSession(
-				makeRecord("abc"),
-				makeAgent(),
-				[],
-				defaultSetupContext,
-			);
+			const result = await sm.getOrCreateSession(makeRecord("abc"), makeAgent(), [], defaultSetupContext);
 			expect(result).toBe(existing);
 			expect(mockAgentSessionFactory.create).not.toHaveBeenCalled();
 			expect(defaultCreateResourceLoader).not.toHaveBeenCalled();
@@ -246,11 +244,7 @@ describe("SubagentSessionManager", () => {
 			expect(defaultCreateResourceLoader).toHaveBeenCalledWith(agent);
 
 			// Session manager provider was called — record.sessionFile is "" for new records
-			expect(mockSessionManagerProvider.openOrCreate).toHaveBeenCalledWith(
-				"",
-				tempDir,
-				tempDir,
-			);
+			expect(mockSessionManagerProvider.openOrCreate).toHaveBeenCalledWith("", tempDir, tempDir);
 
 			// Agent session factory received the right args
 			const createArg = mockAgentSessionFactory.create.mock.calls[0][0];
@@ -269,11 +263,7 @@ describe("SubagentSessionManager", () => {
 				...defaultSetupContext,
 				fallbackModel: fallback,
 			});
-			expect(mockModelResolver.resolve).toHaveBeenCalledWith(
-				"custom-model",
-				fallback,
-				expect.any(Array),
-			);
+			expect(mockModelResolver.resolve).toHaveBeenCalledWith("custom-model", fallback, expect.any(Array));
 		});
 
 		it("collects model warnings when configured model not found", async () => {
@@ -294,9 +284,7 @@ describe("SubagentSessionManager", () => {
 			const agent = makeAgent("strict");
 			agent.tools = ["read", "bash", "missing-tool"];
 			// Mock session only has read and bash
-			mockAgentSessionFactory.create = vi.fn(() =>
-				Promise.resolve(makeMockSession(["read", "bash"])),
-			);
+			mockAgentSessionFactory.create = vi.fn(() => Promise.resolve(makeMockSession(["read", "bash"])));
 
 			await sm.getOrCreateSession(makeRecord("tool-warn"), agent, warnings, defaultSetupContext);
 			expect(warnings).toContain('Configured tool "missing-tool" is not available for strict.');
@@ -360,18 +348,14 @@ describe("SubagentSessionManager", () => {
 			// Unsubscribe was called before the original dispose
 			expect(mockSession.unsubscribe).toHaveBeenCalledOnce();
 			expect(disposeSpy).toHaveBeenCalledOnce();
-			expect(mockSession.unsubscribe.mock.invocationCallOrder[0])
-				.toBeLessThan(disposeSpy.mock.invocationCallOrder[0]);
+			expect(mockSession.unsubscribe.mock.invocationCallOrder[0]).toBeLessThan(
+				disposeSpy.mock.invocationCallOrder[0],
+			);
 		});
 
 		it("tracks the newly created session after factory call", async () => {
 			const sm = createManager();
-			const session = await sm.getOrCreateSession(
-				makeRecord("xyz"),
-				makeAgent(),
-				[],
-				defaultSetupContext,
-			);
+			const session = await sm.getOrCreateSession(makeRecord("xyz"), makeAgent(), [], defaultSetupContext);
 			expect(sm.getOpenSession("xyz")).toBe(session);
 		});
 
@@ -452,7 +436,9 @@ describe("SubagentSessionManager", () => {
 			sm.trackSession("abc", session);
 
 			let resolved = false;
-			const promise = sm.waitForSessionEnd("abc").then(() => { resolved = true; });
+			const promise = sm.waitForSessionEnd("abc").then(() => {
+				resolved = true;
+			});
 
 			// Fire a non-agent_end event — should not resolve
 			for (const cb of session.callbacks) {
@@ -500,7 +486,9 @@ describe("SubagentSessionManager", () => {
 		it("waits until storeAsyncResult is called", async () => {
 			const sm = createManager();
 			let resolved = false;
-			const promise = sm.waitForAsyncResult("pending").then(() => { resolved = true; });
+			const promise = sm.waitForAsyncResult("pending").then(() => {
+				resolved = true;
+			});
 
 			await new Promise((r) => setTimeout(r, 10));
 			expect(resolved).toBe(false);
@@ -838,9 +826,12 @@ describe("SubagentSessionManager", () => {
 
 			let rejectKillPrompt: ((error: Error) => void) | undefined;
 			const session = makeMockSession();
-			session.prompt = vi.fn(() => new Promise<void>((_resolve, reject) => {
-				rejectKillPrompt = reject;
-			})) as any;
+			session.prompt = vi.fn(
+				() =>
+					new Promise<void>((_resolve, reject) => {
+						rejectKillPrompt = reject;
+					}),
+			) as any;
 			sm.trackSession("kill-late", session);
 
 			sm.sendKillMessage("kill-late", 1);
@@ -861,7 +852,9 @@ describe("SubagentSessionManager", () => {
 			const id = "finish-before-abort";
 			const calls: string[] = [];
 			const session = makeMockSession();
-			session.abort = vi.fn(() => { calls.push("abort"); }) as any;
+			session.abort = vi.fn(() => {
+				calls.push("abort");
+			}) as any;
 			(session as any).steer = vi.fn(() => {
 				calls.push("steer");
 				return Promise.resolve();
@@ -883,9 +876,12 @@ describe("SubagentSessionManager", () => {
 			const id = "kill-steer";
 			const session = makeMockSession();
 			let steerResolve: (() => void) | undefined;
-			session.steer = vi.fn(() => new Promise<void>((resolve) => {
-				steerResolve = resolve;
-			})) as any;
+			session.steer = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						steerResolve = resolve;
+					}),
+			) as any;
 			session.messages = [{ role: "assistant", content: [{ type: "text", text: "finish-request steer result" }] }];
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
@@ -895,7 +891,7 @@ describe("SubagentSessionManager", () => {
 			await Promise.resolve();
 
 			expect(session.steer).toHaveBeenCalledTimes(1);
-			expect((session.prompt as any)).not.toHaveBeenCalled();
+			expect(session.prompt as any).not.toHaveBeenCalled();
 			expect(sm.isCompleted(id)).toBe(true);
 			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
 			expect(sm.getAsyncResult(id)?.terminalError).toBeUndefined();
@@ -907,11 +903,13 @@ describe("SubagentSessionManager", () => {
 			const id = "kill-steer-pending-tool";
 			const session = makeMockSession();
 			session.steer = vi.fn().mockResolvedValue(undefined) as any;
-			session.messages = [{
-				role: "assistant",
-				content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
-				stopReason: "toolUse",
-			}];
+			session.messages = [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 120" } }],
+					stopReason: "toolUse",
+				},
+			];
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
 
@@ -960,10 +958,12 @@ describe("SubagentSessionManager", () => {
 			let resolveKillPrompt: (() => void) | undefined;
 			let promptArgs: any[] | undefined;
 			session.prompt = vi.fn((_message: string, opts?: unknown) => {
-				promptArgs = [(_message as string), opts as any];
+				promptArgs = [_message as string, opts as any];
 				return new Promise<void>((resolve) => {
 					resolveKillPrompt = () => {
-						session.messages = [{ role: "assistant", content: [{ type: "text", text: "finish-request prompt result" }] }];
+						session.messages = [
+							{ role: "assistant", content: [{ type: "text", text: "finish-request prompt result" }] },
+						];
 						resolve();
 					};
 				});
@@ -990,9 +990,12 @@ describe("SubagentSessionManager", () => {
 			const id = "soft-complete";
 			let resolveKillPrompt: (() => void) | undefined;
 			const session = makeMockSession();
-			session.prompt = vi.fn(() => new Promise<void>((resolve) => {
-				resolveKillPrompt = resolve;
-			})) as any;
+			session.prompt = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						resolveKillPrompt = resolve;
+					}),
+			) as any;
 			session.messages = [{ role: "assistant", content: [{ type: "text", text: "finish-request final output" }] }];
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
@@ -1020,9 +1023,12 @@ describe("SubagentSessionManager", () => {
 			let rejectKillPrompt: ((error: Error) => void) | undefined;
 			const session = makeMockSession();
 			session.messages = [{ role: "assistant", content: [{ type: "text", text: "partial output" }] }];
-			session.prompt = vi.fn(() => new Promise<void>((_resolve, reject) => {
-				rejectKillPrompt = reject;
-			})) as any;
+			session.prompt = vi.fn(
+				() =>
+					new Promise<void>((_resolve, reject) => {
+						rejectKillPrompt = reject;
+					}),
+			) as any;
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
 
@@ -1054,8 +1060,12 @@ describe("SubagentSessionManager", () => {
 				}, 0);
 				return Promise.resolve();
 			}) as any;
-			(session as any).abortBash = vi.fn(() => { calls.push("abortBash"); });
-			const setActiveToolsByName = vi.fn(() => { calls.push("setTools"); });
+			(session as any).abortBash = vi.fn(() => {
+				calls.push("abortBash");
+			});
+			const setActiveToolsByName = vi.fn(() => {
+				calls.push("setTools");
+			});
 			(session as any).setActiveToolsByName = setActiveToolsByName;
 			session.prompt = vi.fn(() => {
 				calls.push("prompt");
@@ -1073,7 +1083,11 @@ describe("SubagentSessionManager", () => {
 			expect(calls).toEqual(["abortBash", "abort", "setTools", "prompt"]);
 			expect(setActiveToolsByName).toHaveBeenCalledWith([]);
 			expect(session.prompt).toHaveBeenCalledWith(ABORT_FINAL_SUMMARY_MESSAGE, { streamingBehavior: "steer" });
-			expect(result).toMatchObject({ status: "summarized", output: "final abort summary", toolOverrideApplied: true });
+			expect(result).toMatchObject({
+				status: "summarized",
+				output: "final abort summary",
+				toolOverrideApplied: true,
+			});
 			expect(sm.getAsyncResult(id)).toMatchObject({
 				output: "final abort summary",
 				error: "aborted",
@@ -1168,7 +1182,9 @@ describe("SubagentSessionManager", () => {
 			}) as any;
 			(session as any).setActiveToolsByName = vi.fn();
 			session.prompt = vi.fn(() => {
-				session.messages = [{ role: "assistant", content: [{ type: "text", text: "summary after failed finish request" }] }];
+				session.messages = [
+					{ role: "assistant", content: [{ type: "text", text: "summary after failed finish request" }] },
+				];
 				setTimeout(() => {
 					for (const cb of session.callbacks) cb({ type: "agent_end" });
 				}, 0);
@@ -1211,11 +1227,16 @@ describe("SubagentSessionManager", () => {
 					}, 100);
 				}) as any;
 				session.prompt = vi.fn(() => {
-					expect(session.messages).toContainEqual(expect.objectContaining({
-						role: "toolResult",
-						content: [{ type: "text", text: "tests passed before abort" }],
-					}));
-					session.messages.push({ role: "assistant", content: [{ type: "text", text: "summary includes tests passed" }] });
+					expect(session.messages).toContainEqual(
+						expect.objectContaining({
+							role: "toolResult",
+							content: [{ type: "text", text: "tests passed before abort" }],
+						}),
+					);
+					session.messages.push({
+						role: "assistant",
+						content: [{ type: "text", text: "summary includes tests passed" }],
+					});
 					return Promise.resolve();
 				}) as any;
 				sm.trackSession(id, session);
@@ -1227,7 +1248,10 @@ describe("SubagentSessionManager", () => {
 				expect(session.prompt).toHaveBeenCalledTimes(1);
 				for (const cb of [...session.callbacks]) cb({ type: "agent_end" });
 
-				await expect(promise).resolves.toMatchObject({ status: "summarized", output: "summary includes tests passed" });
+				await expect(promise).resolves.toMatchObject({
+					status: "summarized",
+					output: "summary includes tests passed",
+				});
 			} finally {
 				vi.useRealTimers();
 			}
@@ -1367,7 +1391,7 @@ describe("PiAgentSessionFactory", () => {
 						description: "Registered while the extension loads",
 						parameters: params,
 						async execute() {
-							return { content: [{ type: "text", text: "load" }] };
+							return { content: [{ type: "text", text: "load" }], details: {} };
 						},
 					});
 					pi.on("session_start", () => {
@@ -1377,7 +1401,7 @@ describe("PiAgentSessionFactory", () => {
 							description: "Registered from session_start",
 							parameters: params,
 							async execute() {
-								return { content: [{ type: "text", text: "session" }] };
+								return { content: [{ type: "text", text: "session" }], details: {} };
 							},
 						});
 					});

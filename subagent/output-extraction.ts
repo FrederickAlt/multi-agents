@@ -74,9 +74,8 @@ function getTerminalToolResultDiagnosticFromMessages(messages: any[]): string {
 	const toolCall = findMatchingToolCall(messages, index);
 	const toolName = typeof msg.toolName === "string" ? msg.toolName : toolCall?.name;
 	const prefix = toolName ? `${toolName} tool failed: ${text}` : text;
-	const command = toolName === "bash" && typeof toolCall?.arguments?.command === "string"
-		? toolCall.arguments.command.trim()
-		: "";
+	const command =
+		toolName === "bash" && typeof toolCall?.arguments?.command === "string" ? toolCall.arguments.command.trim() : "";
 	return command ? `${prefix}\nCommand: ${sanitizeTextForDiagnostic(command)}` : prefix;
 }
 /**
@@ -116,22 +115,20 @@ export function getTerminalDiagnosticFromMessages(messages: any[]): string {
 	return getTerminalToolResultDiagnosticFromMessages(messages);
 }
 
-export function extractTerminalOutput(
-	messages: any[],
-): { text: string; source: 'assistant' | 'diagnostic' | 'none' } {
+export function extractTerminalOutput(messages: any[]): { text: string; source: "assistant" | "diagnostic" | "none" } {
 	const diagnostic = getTerminalDiagnosticFromMessages(messages);
 	if (diagnostic) {
-		return { text: diagnostic, source: 'diagnostic' };
+		return { text: diagnostic, source: "diagnostic" };
 	}
 	const assistantText = getTerminalTextFromMessages(messages);
 	if (assistantText) {
-		return { text: assistantText, source: 'assistant' };
+		return { text: assistantText, source: "assistant" };
 	}
-	return { text: '', source: 'none' };
+	return { text: "", source: "none" };
 }
 
 export function needsFinalResponsePrompt(messages: any[]): boolean {
-	return extractTerminalOutput(messages).source === 'none';
+	return extractTerminalOutput(messages).source === "none";
 }
 
 /**
@@ -145,21 +142,21 @@ export function needsFinalResponsePrompt(messages: any[]): boolean {
 export function extractOutput(
 	messages: any[],
 	error?: string,
-): { text: string; source: 'assistant' | 'diagnostic' | 'none' } {
+): { text: string; source: "assistant" | "diagnostic" | "none" } {
 	const pendingTool = getPendingToolCallDiagnosticFromMessages(messages);
 	if (pendingTool) {
-		return { text: pendingTool, source: 'diagnostic' };
+		return { text: pendingTool, source: "diagnostic" };
 	}
 	const assistantText = getFinalTextFromMessages(messages);
 	if (assistantText) {
-		return { text: assistantText, source: 'assistant' };
+		return { text: assistantText, source: "assistant" };
 	}
 	const terminalDiagnostic = getTerminalDiagnosticFromMessages(messages);
 	if (terminalDiagnostic) {
-		return { text: terminalDiagnostic, source: 'diagnostic' };
+		return { text: terminalDiagnostic, source: "diagnostic" };
 	}
 	if (error) {
-		return { text: error, source: 'diagnostic' };
+		return { text: error, source: "diagnostic" };
 	}
-	return { text: '', source: 'none' };
+	return { text: "", source: "none" };
 }

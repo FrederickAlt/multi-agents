@@ -1,10 +1,5 @@
-import React from "react";
 import { Box, Text } from "ink";
-import {
-	getModelPinnedStatus,
-	getOptionColumnLabel,
-	getOptionColumnWidth,
-} from "../option-column-layout.js";
+import { getModelPinnedStatus, getOptionColumnLabel, getOptionColumnWidth } from "../option-column-layout.js";
 
 interface OptionColumnProps {
 	fieldName: string;
@@ -64,8 +59,7 @@ export function OptionColumn({
 	width,
 }: OptionColumnProps) {
 	const label = getOptionColumnLabel(fieldName);
-	const effectiveSelectedValues = selectedValues ??
-		(selectedValueProp !== undefined ? [selectedValueProp] : []);
+	const effectiveSelectedValues = selectedValues ?? (selectedValueProp !== undefined ? [selectedValueProp] : []);
 	const selectedSet = new Set(effectiveSelectedValues);
 	const selectedValue = effectiveSelectedValues[0] ?? "";
 	const staleSet = new Set(staleItems);
@@ -73,28 +67,25 @@ export function OptionColumn({
 	const visibleItemCount = Math.max(1, maxVisibleItems);
 	const filterValue = filterText?.trim() ?? "";
 	const showFilterBar = isFocused && filterValue.length > 0;
-	const columnWidth = width ?? getOptionColumnWidth({
-		fieldName,
-		items,
-		selectedValues,
-		selectedValue: selectedValueProp,
-		isFocused,
-		isCheckbox,
-		staleItems,
-		filterText,
-	});
+	const columnWidth =
+		width ??
+		getOptionColumnWidth({
+			fieldName,
+			items,
+			selectedValues,
+			selectedValue: selectedValueProp,
+			isFocused,
+			isCheckbox,
+			staleItems,
+			filterText,
+		});
 	const pinnedStatus = fieldName === "model" ? getModelPinnedStatus(items) : undefined;
 	const reservedLines = (showFilterBar ? 1 : 0) + (pinnedStatus ? 1 : 0);
 	const scrollableItems = pinnedStatus ? items.slice(1) : items;
 	const visibleItemWindow = Math.max(0, visibleItemCount - reservedLines);
-	const focusedInScrollable = pinnedStatus && focusedItemIndex > 0
-		? focusedItemIndex - 1
-		: Math.max(0, focusedItemIndex);
-	const { start, end } = getVisibleRange(
-		scrollableItems.length,
-		focusedInScrollable,
-		visibleItemWindow,
-	);
+	const focusedInScrollable =
+		pinnedStatus && focusedItemIndex > 0 ? focusedItemIndex - 1 : Math.max(0, focusedItemIndex);
+	const { start, end } = getVisibleRange(scrollableItems.length, focusedInScrollable, visibleItemWindow);
 	const visibleItems = scrollableItems.slice(start, end);
 
 	return (
@@ -106,47 +97,42 @@ export function OptionColumn({
 			borderColor={disabled ? "gray" : isFocused ? "cyan" : "gray"}
 			paddingX={1}
 		>
-			<Text bold color={!disabled && isFocused ? "cyan" : undefined} dimColor={disabled} wrap="truncate">{label}</Text>
+			<Text bold color={!disabled && isFocused ? "cyan" : undefined} dimColor={disabled} wrap="truncate">
+				{label}
+			</Text>
 			{showFilterBar && (
-				<Text dimColor wrap="truncate">filter: {filterValue}</Text>
+				<Text dimColor wrap="truncate">
+					filter: {filterValue}
+				</Text>
 			)}
 
 			{pinnedStatus && (
 				<Text
 					key={`${fieldName}-status`}
 					color={
-						isFocused && focusedItemIndex === 0
-							? "cyan"
-							: pinnedStatus === selectedValue
-								? "green"
-								: undefined
+						isFocused && focusedItemIndex === 0 ? "cyan" : pinnedStatus === selectedValue ? "green" : undefined
 					}
 					bold={isFocused && focusedItemIndex === 0}
 					wrap="truncate"
 				>
-					{isFocused && focusedItemIndex === 0 ? ">" : " "} {pinnedStatus === selectedValue ? "●" : "○"} {pinnedStatus}
+					{isFocused && focusedItemIndex === 0 ? ">" : " "} {pinnedStatus === selectedValue ? "●" : "○"}{" "}
+					{pinnedStatus}
 				</Text>
 			)}
 			{visibleItems.map((item, index) => {
 				const absoluteIndexInScrollable = start + index;
-				const absoluteIndex = pinnedStatus
-					? absoluteIndexInScrollable + 1
-					: absoluteIndexInScrollable;
+				const absoluteIndex = pinnedStatus ? absoluteIndexInScrollable + 1 : absoluteIndexInScrollable;
 				const isFocusedItem = isFocused && absoluteIndex === focusedItemIndex;
 				const isSelected = selectedSet.has(item);
 				const isMissing = staleSet.has(item);
 				const isDisabledItem = disabled || disabledSet.has(item);
-				const mark = isCheckbox
-					? isSelected
-						? "☑"
-						: "☐"
-					: isSelected
-						? "●"
-						: "○";
+				const mark = isCheckbox ? (isSelected ? "☑" : "☐") : isSelected ? "●" : "○";
 				return (
 					<Text
 						key={`${fieldName}-${item}-${absoluteIndex}`}
-						color={!isDisabledItem && isFocusedItem ? "cyan" : !isDisabledItem && isSelected ? "green" : undefined}
+						color={
+							!isDisabledItem && isFocusedItem ? "cyan" : !isDisabledItem && isSelected ? "green" : undefined
+						}
 						dimColor={isDisabledItem}
 						bold={!isDisabledItem && isFocusedItem}
 						wrap="truncate"

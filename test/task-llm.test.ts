@@ -10,9 +10,15 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getModel } from "@mariozechner/pi-ai";
-import { AuthStorage, createAgentSession, DefaultResourceLoader, ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+	AuthStorage,
+	createAgentSession,
+	DefaultResourceLoader,
+	ModelRegistry,
+	SessionManager,
+} from "@mariozechner/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import taskExtension from "../subagent/index.js";
 
 const RUN_REAL_LLM_TESTS = process.env.RUN_REAL_LLM_TESTS === "1";
@@ -36,7 +42,7 @@ describe.skipIf(!SHOULD_RUN_REAL_LLM_TESTS)("Task with real LLM (gpt-5.4-mini) [
 	let projectDir: string;
 	let agentDir: string;
 	let session: any;
-	let cleanup: () => void;
+	let _cleanup: () => void;
 
 	beforeEach(async () => {
 		tempDir = join(tmpdir(), `pi-task-llm-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -47,7 +53,11 @@ describe.skipIf(!SHOULD_RUN_REAL_LLM_TESTS)("Task with real LLM (gpt-5.4-mini) [
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 
 		// Seed a default root agent so before_agent_start can resolve the root.
-		writeFileSync(join(agentDir, "agents", "default.md"), `---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`, "utf-8");
+		writeFileSync(
+			join(agentDir, "agents", "default.md"),
+			`---\ndescription: Default Root Agent\ndepth: 1\n---\n\nDefault Root Agent\n`,
+			"utf-8",
+		);
 
 		// Write a README with unique markers so the test can verify the subagent actually read it.
 		writeFileSync(
@@ -87,7 +97,7 @@ CRITICAL SAFETY RULES:
 	it("spawns a subagent that reads a file and returns content", async () => {
 		const authPath = join(homedir(), ".pi", "agent", "auth.json");
 		const authStorage = AuthStorage.create(authPath);
-		const modelRegistry = ModelRegistry.create(authStorage);
+		const _modelRegistry = ModelRegistry.create(authStorage);
 
 		const sessionDir = join(projectDir, ".sessions");
 		const sessionManager = SessionManager.create(projectDir, sessionDir);
@@ -144,7 +154,7 @@ Summarize the project in one sentence.`,
 	it("resumes a subagent and it remembers the prior conversation", async () => {
 		const authPath = join(homedir(), ".pi", "agent", "auth.json");
 		const authStorage = AuthStorage.create(authPath);
-		const modelRegistry = ModelRegistry.create(authStorage);
+		const _modelRegistry = ModelRegistry.create(authStorage);
 
 		const sessionDir = join(projectDir, ".sessions");
 		const sessionManager = SessionManager.create(projectDir, sessionDir);

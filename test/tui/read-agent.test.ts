@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readAgent, scanAgents, detectStaleItems } from "../../src/tui/file-io/read-agent.js";
+import { detectStaleItems, readAgent, scanAgents } from "../../src/tui/file-io/read-agent.js";
 import type { AgentConfigState } from "../../src/tui/state/types.js";
 
 let tempDir: string;
@@ -66,10 +66,7 @@ describe("readAgent", () => {
 	});
 
 	it("handles invalid YAML frontmatter", () => {
-		const p = writeAgentFile(
-			"bad.md",
-			["---", "invalid: [unclosed", "---", "", "body"].join("\n"),
-		);
+		const p = writeAgentFile("bad.md", ["---", "invalid: [unclosed", "---", "", "body"].join("\n"));
 		const agent = readAgent(p);
 		expect(agent.error).toContain("Invalid YAML");
 		expect(agent.frontmatter).toBeNull();
@@ -83,10 +80,7 @@ describe("readAgent", () => {
 	});
 
 	it("extracts description from frontmatter", () => {
-		const p = writeAgentFile(
-			"desc.md",
-			["---", 'description: "Helpful agent"', "---", "", "body"].join("\n"),
-		);
+		const p = writeAgentFile("desc.md", ["---", 'description: "Helpful agent"', "---", "", "body"].join("\n"));
 		const agent = readAgent(p);
 		expect(agent.description).toBe("Helpful agent");
 	});
@@ -94,9 +88,7 @@ describe("readAgent", () => {
 	it("handles numeric and boolean frontmatter values", () => {
 		const p = writeAgentFile(
 			"nums.md",
-			["---", "description: test", "depth: 3", "active: true", "---", "", "body"].join(
-				"\n",
-			),
+			["---", "description: test", "depth: 3", "active: true", "---", "", "body"].join("\n"),
 		);
 		const agent = readAgent(p);
 		expect(agent.frontmatter).toMatchObject({
@@ -114,28 +106,16 @@ describe("scanAgents", () => {
 	});
 
 	it("scans all .md files in agents dir", () => {
-		writeAgentFile(
-			"a.md",
-			["---", 'description: "Agent A"', "---", "", "body A"].join("\n"),
-		);
-		writeAgentFile(
-			"b.md",
-			["---", 'description: "Agent B"', "---", "", "body B"].join("\n"),
-		);
+		writeAgentFile("a.md", ["---", 'description: "Agent A"', "---", "", "body A"].join("\n"));
+		writeAgentFile("b.md", ["---", 'description: "Agent B"', "---", "", "body B"].join("\n"));
 		const agents = scanAgents(tempDir);
 		expect(agents).toHaveLength(2);
 		expect(agents.map((a) => a.name).sort()).toEqual(["a", "b"]);
 	});
 
 	it("skips hidden files", () => {
-		writeAgentFile(
-			".hidden.md",
-			["---", 'description: "Hidden"', "---", "", "body"].join("\n"),
-		);
-		writeAgentFile(
-			"visible.md",
-			["---", 'description: "Visible"', "---", "", "body"].join("\n"),
-		);
+		writeAgentFile(".hidden.md", ["---", 'description: "Hidden"', "---", "", "body"].join("\n"));
+		writeAgentFile("visible.md", ["---", 'description: "Visible"', "---", "", "body"].join("\n"));
 		const agents = scanAgents(tempDir);
 		expect(agents).toHaveLength(1);
 		expect(agents[0].name).toBe("visible");
@@ -168,14 +148,7 @@ describe("detectStaleItems", () => {
 			},
 		];
 
-		detectStaleItems(
-			agents,
-			["existing-agent"],
-			["read", "bash"],
-			[],
-			[],
-			[],
-		);
+		detectStaleItems(agents, ["existing-agent"], ["read", "bash"], [], [], []);
 
 		expect(agents[0].staleItems.can_spawn).toEqual(["deleted-agent"]);
 		expect(agents[0].staleItems.tools).toEqual(["unknown-tool"]);

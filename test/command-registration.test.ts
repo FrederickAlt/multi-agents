@@ -8,13 +8,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	createAgentSession,
-	DefaultResourceLoader,
-	SessionManager,
-} from "@mariozechner/pi-coding-agent";
 import { getModel } from "@mariozechner/pi-ai";
+import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import taskExtension from "../subagent/index.js";
 
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -51,8 +47,9 @@ function uniqueCommands(content: string): string[] {
 function documentedExtensionCommands(): string[] {
 	const agentsMdCommands = extractAgentsMdCommands(readText(AGENTS_MD_PATH));
 	const readmeCommands = extractSubagentReadmeCommands(readText(SUBAGENT_README_PATH));
-	expect(agentsMdCommands, "AGENTS.md and subagent/README.md should document the same extension commands")
-		.toEqual(readmeCommands);
+	expect(agentsMdCommands, "AGENTS.md and subagent/README.md should document the same extension commands").toEqual(
+		readmeCommands,
+	);
 	return agentsMdCommands;
 }
 
@@ -112,7 +109,11 @@ describe("command registration docs contract", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		if (tempDir && existsSync(tempDir)) {
-			try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 		}
 	});
 

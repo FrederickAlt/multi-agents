@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { DiscoveredOptions, ModelOption } from "../state/types.js";
+import type { ModelOption } from "../state/types.js";
 
 type LoadedPiExtension = {
 	path?: string;
@@ -86,9 +86,7 @@ function readPackageName(baseDir: string | undefined): string | undefined {
 	if (!baseDir) return undefined;
 	try {
 		const packageJson = JSON.parse(fs.readFileSync(path.join(baseDir, "package.json"), "utf-8"));
-		return typeof packageJson.name === "string" && packageJson.name.trim()
-			? packageJson.name.trim()
-			: undefined;
+		return typeof packageJson.name === "string" && packageJson.name.trim() ? packageJson.name.trim() : undefined;
 	} catch {
 		return undefined;
 	}
@@ -120,8 +118,9 @@ function displayNameFromExtension(extension: {
 }): string | undefined {
 	const source = extension.sourceInfo?.source;
 	if (extension.sourceInfo?.origin === "package") {
-		return readPackageName(extension.sourceInfo.baseDir)
-			?? (source ? displayNameFromPackageSource(source) : undefined);
+		return (
+			readPackageName(extension.sourceInfo.baseDir) ?? (source ? displayNameFromPackageSource(source) : undefined)
+		);
 	}
 
 	const p = extension.resolvedPath || extension.path;
@@ -153,7 +152,7 @@ export async function discoverPiRuntimeResources(
 ): Promise<PiRuntimeDiscovery | undefined> {
 	let pi: PiCodingAgentApi;
 	try {
-		pi = await importPiCodingAgent() as PiCodingAgentApi;
+		pi = (await importPiCodingAgent()) as PiCodingAgentApi;
 	} catch {
 		return undefined;
 	}
@@ -171,7 +170,8 @@ export async function discoverPiRuntimeResources(
 			const result = await pi.createAgentSession({ cwd, agentDir, settingsManager, sessionManager });
 			session = result.session;
 			await session.bindExtensions({ onError: () => undefined });
-			dynamicTools = session.getAllTools()
+			dynamicTools = session
+				.getAllTools()
 				.map((tool) => ({ name: String(tool.name ?? ""), sourceInfo: tool.sourceInfo }))
 				.filter((tool) => tool.name.length > 0);
 			loader = session.resourceLoader;
@@ -256,9 +256,8 @@ export function computeCanonicalModelRefs(models: ModelOption[]): void {
 }
 
 function modelDisplayBase(model: ModelOption): string {
-	const fallback = model.provider && model.modelId
-		? `${model.provider}/${model.modelId}`
-		: model.modelId || model.provider;
+	const fallback =
+		model.provider && model.modelId ? `${model.provider}/${model.modelId}` : model.modelId || model.provider;
 	return (model.displayName || fallback).trim();
 }
 
@@ -274,10 +273,12 @@ function withModelQualifier(base: string, qualifier: string): string {
  * item key, so duplicate labels would otherwise be indistinguishable.
  */
 function compareModelOptionsByProvider(a: ModelOption, b: ModelOption): number {
-	return a.provider.localeCompare(b.provider)
-		|| a.displayName.localeCompare(b.displayName)
-		|| a.modelId.localeCompare(b.modelId)
-		|| a.canonicalRef.localeCompare(b.canonicalRef);
+	return (
+		a.provider.localeCompare(b.provider) ||
+		a.displayName.localeCompare(b.displayName) ||
+		a.modelId.localeCompare(b.modelId) ||
+		a.canonicalRef.localeCompare(b.canonicalRef)
+	);
 }
 
 export function orderModelsByProvider(models: ModelOption[]): void {
@@ -307,9 +308,10 @@ export function disambiguateModelDisplayNames(models: ModelOption[]): void {
 		const base = baseNames[index] ?? "";
 		let displayName = providerQualified[index] ?? base;
 		if (baseCounts.get(base)! > 1 && providerQualifiedCounts.get(displayName)! > 1) {
-			const qualifier = model.provider && model.modelId
-				? `${model.provider}/${model.modelId}`
-				: model.canonicalRef || model.modelId || model.provider;
+			const qualifier =
+				model.provider && model.modelId
+					? `${model.provider}/${model.modelId}`
+					: model.canonicalRef || model.modelId || model.provider;
 			displayName = withModelQualifier(base, qualifier);
 		}
 
@@ -324,10 +326,7 @@ export function disambiguateModelDisplayNames(models: ModelOption[]): void {
  * to the best-matching display name for the TUI dropdown.
  * Returns undefined if no model matches or if a bare/display value is ambiguous.
  */
-export function resolveModelDisplayName(
-	value: string | undefined,
-	models: ModelOption[],
-): string | undefined {
+export function resolveModelDisplayName(value: string | undefined, models: ModelOption[]): string | undefined {
 	if (!value) return undefined;
 	// Try exact match by canonicalRef.
 	let match = models.find((m) => m.canonicalRef === value);
@@ -349,10 +348,7 @@ export function resolveModelDisplayName(
  * Map a display name back to the canonical runtime reference.
  * Returns undefined if no model matches the display name.
  */
-export function modelDisplayNameToCanonicalRef(
-	displayName: string,
-	models: ModelOption[],
-): string | undefined {
+export function modelDisplayNameToCanonicalRef(displayName: string, models: ModelOption[]): string | undefined {
 	const matches = models.filter((m) => m.displayName === displayName);
 	return matches.length === 1 ? matches[0]!.canonicalRef : undefined;
 }
@@ -362,26 +358,14 @@ export function modelDisplayNameToCanonicalRef(
 // ---------------------------------------------------------------------------
 
 /** Built-in Pi tool names (hardcoded from pi-coding-agent SDK). */
-const BUILTIN_TOOLS = [
-	"read",
-	"bash",
-	"edit",
-	"write",
-	"grep",
-	"find",
-	"ls",
-	"Task",
-];
+const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "Task"];
 
 /**
  * Discover available tools.
  * Fallback discovery only knows Pi's built-in tools; agent-declared values are
  * not availability evidence because that would hide stale tool references.
  */
-export function discoverTools(
-	_agentDir: string,
-	_agentToolLists: string[][],
-): string[] {
+export function discoverTools(_agentDir: string, _agentToolLists: string[][]): string[] {
 	const toolSet = new Set(BUILTIN_TOOLS);
 	return [...toolSet].sort();
 }
@@ -455,10 +439,7 @@ export async function discoverModels(agentDir: string): Promise<DiscoveredModels
 
 async function importPiCodingAgent(): Promise<PiCodingAgentModule> {
 	const errors: string[] = [];
-	for (const specifier of [
-		"@earendil-works/pi-coding-agent",
-		"@mariozechner/pi-coding-agent",
-	]) {
+	for (const specifier of ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"]) {
 		try {
 			return await import(specifier);
 		} catch (err) {
@@ -483,7 +464,9 @@ function resolveInstalledPiIndex(): string | undefined {
 		const piPath = execFileSync("which", ["pi"], {
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "ignore"],
-		}).trim().split(/\r?\n/)[0];
+		})
+			.trim()
+			.split(/\r?\n/)[0];
 		if (!piPath) return undefined;
 
 		const realPiPath = fs.realpathSync(piPath);
@@ -495,10 +478,7 @@ function resolveInstalledPiIndex(): string | undefined {
 	}
 }
 
-function discoverModelsFromPiPackage(
-	pcg: PiCodingAgentModule,
-	agentDir: string,
-): DiscoveredModelsResult {
+function discoverModelsFromPiPackage(pcg: PiCodingAgentModule, agentDir: string): DiscoveredModelsResult {
 	const AuthStorage = pcg.AuthStorage;
 	const ModelRegistry = pcg.ModelRegistry;
 	if (!AuthStorage || !ModelRegistry) {
@@ -507,18 +487,22 @@ function discoverModelsFromPiPackage(
 
 	const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
 	const modelsJsonPath = path.join(agentDir, "models.json");
-	const registry = typeof ModelRegistry.create === "function"
-		? ModelRegistry.create(authStorage, modelsJsonPath)
-		: new ModelRegistry(authStorage, modelsJsonPath);
+	const registry =
+		typeof ModelRegistry.create === "function"
+			? ModelRegistry.create(authStorage, modelsJsonPath)
+			: new ModelRegistry(authStorage, modelsJsonPath);
 	registry.refresh?.();
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const allModels: ModelOption[] = registry.getAll().map((m: any) => ({
-		provider: m.provider ?? "",
-		modelId: m.id ?? m.modelId ?? "",
-		displayName: m.name ?? m.id ?? `${m.provider}/${m.id}`,
-		canonicalRef: "", // populated below
-	})).filter((m: ModelOption) => m.modelId.length > 0);
+	const allModels: ModelOption[] = registry
+		.getAll()
+		.map((m: any) => ({
+			provider: m.provider ?? "",
+			modelId: m.id ?? m.modelId ?? "",
+			displayName: m.name ?? m.id ?? `${m.provider}/${m.id}`,
+			canonicalRef: "", // populated below
+		}))
+		.filter((m: ModelOption) => m.modelId.length > 0);
 	computeCanonicalModelRefs(allModels);
 	disambiguateModelDisplayNames(allModels);
 	orderModelsByProvider(allModels);
@@ -530,9 +514,9 @@ function discoverModelsFromPiPackage(
 		if (available && available.length > 0) {
 			const firstProvider: string = available[0].provider ?? "";
 			const firstId: string = available[0].id ?? available[0].modelId;
-			const match = allModels.find(
-				(m) => m.provider === firstProvider && m.modelId === firstId,
-			) ?? allModels.find((m) => m.modelId === firstId);
+			const match =
+				allModels.find((m) => m.provider === firstProvider && m.modelId === firstId) ??
+				allModels.find((m) => m.modelId === firstId);
 			if (match) defaultModelDisplayName = match.displayName;
 		}
 	} catch {
@@ -551,10 +535,7 @@ function discoverModelsFromPiPackage(
 	};
 }
 
-export function discoverModelsFromPiCli(
-	agentDir: string,
-	piCommand = "pi",
-): DiscoveredModelsResult {
+export function discoverModelsFromPiCli(agentDir: string, piCommand = "pi"): DiscoveredModelsResult {
 	const result = spawnSync(piCommand, ["--list-models"], {
 		encoding: "utf8",
 		env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
@@ -609,7 +590,12 @@ function getBuiltInModels(): ModelOption[] {
 	const models: ModelOption[] = [
 		{ provider: "anthropic", modelId: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4", canonicalRef: "" },
 		{ provider: "anthropic", modelId: "claude-opus-4-20250514", displayName: "Claude Opus 4", canonicalRef: "" },
-		{ provider: "anthropic", modelId: "claude-haiku-4-5-20250514", displayName: "Claude Haiku 4.5", canonicalRef: "" },
+		{
+			provider: "anthropic",
+			modelId: "claude-haiku-4-5-20250514",
+			displayName: "Claude Haiku 4.5",
+			canonicalRef: "",
+		},
 		{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "" },
 	];
 	computeCanonicalModelRefs(models);
@@ -626,21 +612,13 @@ function getBuiltInModels(): ModelOption[] {
  * Discover spawnable agent names from ~/.pi/agent/agents/*.md.
  * Includes the agent itself; self-spawn is a valid configuration.
  */
-export function discoverCanSpawn(
-	agentDir: string,
-	_selfName: string,
-): string[] {
+export function discoverCanSpawn(agentDir: string, _selfName: string): string[] {
 	const agentsDir = path.join(agentDir, "agents");
 	if (!fs.existsSync(agentsDir)) return [];
 
 	const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
 	return entries
-		.filter(
-			(e) =>
-				(e.isFile() || e.isSymbolicLink()) &&
-				e.name.endsWith(".md") &&
-				!e.name.startsWith("."),
-		)
+		.filter((e) => (e.isFile() || e.isSymbolicLink()) && e.name.endsWith(".md") && !e.name.startsWith("."))
 		.map((e) => path.basename(e.name, ".md"))
 		.sort();
 }
@@ -654,12 +632,7 @@ export function discoverAllAgentNames(agentDir: string): string[] {
 
 	const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
 	return entries
-		.filter(
-			(e) =>
-				(e.isFile() || e.isSymbolicLink()) &&
-				e.name.endsWith(".md") &&
-				!e.name.startsWith("."),
-		)
+		.filter((e) => (e.isFile() || e.isSymbolicLink()) && e.name.endsWith(".md") && !e.name.startsWith("."))
 		.map((e) => path.basename(e.name, ".md"))
 		.sort();
 }
@@ -706,13 +679,7 @@ export function discoverPromptParts(agentDir: string): string[] {
 
 	return fs
 		.readdirSync(ppDir, { withFileTypes: true })
-		.filter(
-			(e) =>
-				e.isFile() &&
-				e.name.endsWith(".md") &&
-				!e.name.startsWith("."),
-		)
+		.filter((e) => e.isFile() && e.name.endsWith(".md") && !e.name.startsWith("."))
 		.map((e) => path.basename(e.name, ".md"))
 		.sort();
 }
-
