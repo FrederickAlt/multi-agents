@@ -45,13 +45,13 @@ function writeFile(...segments: string[]): string {
 // ---------------------------------------------------------------------------
 
 describe("discoverTools", () => {
-	it("returns built-in tools plus tools from agent definitions", () => {
+	it("returns built-in tools without treating agent-declared tools as available", () => {
 		const agentToolLists = [["custom-tool", "bash"], ["another-tool"]];
 		const tools = discoverTools(tempDir, agentToolLists);
 		expect(tools).toContain("read");
 		expect(tools).toContain("bash");
-		expect(tools).toContain("custom-tool");
-		expect(tools).toContain("another-tool");
+		expect(tools).not.toContain("custom-tool");
+		expect(tools).not.toContain("another-tool");
 	});
 
 	it("returns built-in tools when no agent definitions", () => {
@@ -71,6 +71,8 @@ describe("discoverTools", () => {
 		const tools = discoverTools(tempDir, [["z-tool", "a-tool"]]);
 		const sorted = [...tools].sort();
 		expect(tools).toEqual(sorted);
+		expect(tools).not.toContain("a-tool");
+		expect(tools).not.toContain("z-tool");
 	});
 });
 

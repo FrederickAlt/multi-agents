@@ -18,20 +18,39 @@ export interface FocusState {
 	optionItemIndex: number; // index into focused inline option column when focused field is inline
 }
 
-export interface OverlayState {
-	type: "checkbox" | "dropdown";
-	agentIndex: number;
-	fieldName: string;
-	currentValue: string[] | string | number | undefined; // from agent frontmatter
-	availableItems: string[];
-	staleItems: string[];
-	// For checkbox: locally toggled set (starts as currentValue resolved)
-	localSelection: string[];
-	// For dropdown: locally selected item
-	localSelected: string;
-	// Tri-state: true when the field was missing (undefined) before opening
-	wasImplicit: boolean;
-}
+export type OverlayState =
+	| {
+		type: "checkbox";
+		agentIndex: number;
+		fieldName: string;
+		currentValue: string[] | string | number | undefined; // from agent frontmatter
+		availableItems: string[];
+		staleItems: string[];
+		// For checkbox: locally toggled set (starts as currentValue resolved)
+		localSelection: string[];
+		localSelected: string;
+		// Tri-state: true when the field was missing (undefined) before opening
+		wasImplicit: boolean;
+	}
+	| {
+		type: "dropdown";
+		agentIndex: number;
+		fieldName: string;
+		currentValue: string[] | string | number | undefined; // from agent frontmatter
+		availableItems: string[];
+		staleItems: string[];
+		localSelection: string[];
+		// For dropdown: locally selected item
+		localSelected: string;
+		// Tri-state: true when the field was missing (undefined) before opening
+		wasImplicit: boolean;
+	}
+	| {
+		type: "stale-cleanup";
+		agentIndex: number;
+		agentName: string;
+		staleItems: Partial<Record<"tools" | "extensions", string[]>>;
+	};
 
 export interface ModelDiscoveryState {
 	status: "loading" | "ready" | "degraded";
@@ -45,9 +64,8 @@ export interface ModelDiscoveryState {
 export interface DiscoveredOptions {
 	tools: string[];
 	/**
-	 * Tool name -> extension identifiers that provide it. Built-in and
-	 * agent-defined tools are omitted, so they stay available regardless of the
-	 * selected extension filter.
+	 * Tool name -> extension identifiers that provide it. Built-in tools are
+	 * omitted, and agent-declared tools are not availability evidence.
 	 */
 	toolExtensionNames?: Record<string, string[]>;
 	extensions: string[];
@@ -180,8 +198,13 @@ export type ConfigAction =
 			type: "UPDATE_OPTIONS";
 			options: DiscoveredOptions;
 	  }
+	| {
+			type: "UPDATE_AGENTS";
+			agents: AgentConfigState[];
+	  }
 	| { type: "SCROLL"; direction: "up" | "down" }
 	| { type: "EXPAND" }
+	| { type: "EXPAND_WITHOUT_STALE_CHECK"; agentIndex: number }
 	| { type: "COLLAPSE" }
 	| { type: "SET_OPTION_COLUMN_FILTER"; filter: string }
 	| { type: "CLEAR_OPTION_COLUMN_FILTER" };

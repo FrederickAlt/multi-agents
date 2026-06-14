@@ -38,6 +38,8 @@ function makeActions(): KeyboardActions {
 		toggleCheckbox: vi.fn(),
 		selectDropdown: vi.fn(),
 		commitOverlay: vi.fn(),
+		confirmStaleCleanup: vi.fn(),
+		skipStaleCleanup: vi.fn(),
 		selectFocusedOption: vi.fn(),
 		rescan: vi.fn(),
 		expand: vi.fn(),
@@ -103,6 +105,46 @@ describe("Keyboard Enter/Space action routing", () => {
 		expect(actions.openOverlay).toHaveBeenCalledTimes(1);
 		expect(actions.openOverlay).toHaveBeenCalledWith(0, "display_name");
 		expect(actions.selectFocusedOption).not.toHaveBeenCalled();
+	});
+});
+
+describe("Keyboard input dispatch for confirmation overlays", () => {
+	it.each([
+		["Enter", "", { return: true }],
+		["y", "y", {}],
+		["Y", "Y", {}],
+	])("confirms stale cleanup on %s", (_name, input, key) => {
+		const actions = makeActions();
+		const exit = vi.fn();
+		const state = makeState({
+			isOverlayOpen: true,
+			overlayType: "stale-cleanup",
+		});
+
+		handleKeyboardInput(input, key, state, actions, exit);
+
+		expect(actions.confirmStaleCleanup).toHaveBeenCalledTimes(1);
+		expect(actions.skipStaleCleanup).not.toHaveBeenCalled();
+		expect(actions.overlayActivate).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["Esc", "", { escape: true }],
+		["n", "n", {}],
+		["N", "N", {}],
+	])("skips stale cleanup on %s", (_name, input, key) => {
+		const actions = makeActions();
+		const exit = vi.fn();
+		const state = makeState({
+			isOverlayOpen: true,
+			overlayType: "stale-cleanup",
+		});
+
+		handleKeyboardInput(input, key, state, actions, exit);
+
+		expect(actions.skipStaleCleanup).toHaveBeenCalledTimes(1);
+		expect(actions.confirmStaleCleanup).not.toHaveBeenCalled();
+		expect(actions.closeOverlay).not.toHaveBeenCalled();
 	});
 });
 

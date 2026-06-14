@@ -14,6 +14,8 @@ export interface KeyboardActions {
 	toggleCheckbox: (item: string) => void;
 	selectDropdown: (item: string) => void;
 	commitOverlay: () => void;
+	confirmStaleCleanup: () => void;
+	skipStaleCleanup: () => void;
 	selectFocusedOption: () => void;
 	rescan: () => void;
 	expand: () => void;
@@ -27,7 +29,7 @@ export interface KeyboardActions {
 export interface KeyboardState {
 	isOverlayOpen: boolean;
 	isExpanded: boolean;
-	overlayType: "checkbox" | "dropdown" | null;
+	overlayType: "checkbox" | "dropdown" | "stale-cleanup" | null;
 	overlayItems: string[];
 	overlayFocusedIndex: number;
 	agentIndex: number;
@@ -100,6 +102,18 @@ export function handleKeyboardInput(
 	}
 
 	if (state.isOverlayOpen) {
+		if (state.overlayType === "stale-cleanup") {
+			if (key.return || input === "y" || input === "Y") {
+				actions.confirmStaleCleanup();
+				return;
+			}
+			if (key.escape || input === "n" || input === "N") {
+				actions.skipStaleCleanup();
+				return;
+			}
+			return;
+		}
+
 		// Overlay keyboard handling (unchanged from horizontal layout)
 		if (key.escape) {
 			actions.closeOverlay();

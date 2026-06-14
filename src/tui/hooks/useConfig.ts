@@ -38,6 +38,13 @@ import {
  * - Overlay commit → selective file write-back
  * - Rescan support
  */
+const STALE_CLEANUP_FIELDS = ["tools", "extensions"] as const;
+
+function normalizeStringList(value: unknown): string[] {
+	if (value === undefined || value === null) return [];
+	return Array.isArray(value) ? value.map(String) : [String(value)];
+}
+
 export function computeInlineCheckboxSaveValue(
 	options: DiscoveredOptions,
 	agent: AgentConfigState,
@@ -80,6 +87,7 @@ export function useConfig() {
 	const initRun = useRef(false);
 	const rescanRequested = useRef(false);
 	const latestDiscoveredOptions = useRef<DiscoveredOptions | null>(null);
+	const latestDiscoveredAgents = useRef<AgentConfigState[] | null>(null);
 
 	// Initialize state when discovery completes
 	useEffect(() => {
@@ -90,6 +98,7 @@ export function useConfig() {
 			} else {
 				dispatch({ type: "INIT_COMPLETE", agents, options });
 				latestDiscoveredOptions.current = options;
+				latestDiscoveredAgents.current = agents;
 			}
 		}
 	}, [loading, error, agents, options]);
@@ -110,6 +119,7 @@ export function useConfig() {
 		if (initRun.current && rescanRequested.current && !loading && !error) {
 			rescanRequested.current = false;
 			latestDiscoveredOptions.current = options;
+			latestDiscoveredAgents.current = agents;
 			dispatch({ type: "RESCAN_COMPLETE", agents, options });
 		}
 	}, [loading, error, agents, options]);
@@ -143,6 +153,14 @@ export function useConfig() {
 		latestDiscoveredOptions.current = options;
 		dispatch({ type: "UPDATE_OPTIONS", options });
 	}, [loading, options]);
+
+	useEffect(() => {
+		if (!initRun.current || loading || rescanRequested.current) return;
+		if (latestDiscoveredAgents.current === agents) return;
+
+		latestDiscoveredAgents.current = agents;
+		dispatch({ type: "UPDATE_AGENTS", agents });
+	}, [loading, agents]);
 
 	// Focus navigation
 	const focusNextAgent = useCallback(() => {
@@ -200,6 +218,71 @@ export function useConfig() {
 	const selectDropdown = useCallback((item: string) => {
 		dispatch({ type: "SELECT_DROPDOWN", item });
 	}, []);
+
+	const skipStaleCleanup = useCallback(() => {
+		const overlay = state.overlay;
+		if (!overlay || overlay.type !== "stale-cleanup") return;
+		dispatch({ type: "EXPAND_WITHOUT_STALE_CHECK", agentIndex: overlay.agentIndex });
+	}, [state.overlay]);
+
+	const confirmStaleCleanup = useCallback(() => {
+		const overlay = state.overlay;
+		if (!overlay || overlay.type !== "stale-cleanup") return;
+
+		const agent = state.agents[overlay.agentIndex];
+		if (!agent || !agent.frontmatter) return;
+
+		dispatch({
+			type: "SAVE_COMPLETE",
+			agentIndex: overlay.agentIndex,
+			status: { type: "saving", message: "Removing stale tools/extensions...", timestamp: Date.now() },
+		});
+
+		let frontmatter = agent.frontmatter;
+		const nextStaleItems = { ...agent.staleItems };
+
+		for (const field of STALE_CLEANUP_FIELDS) {
+			const staleValues = overlay.staleItems[field];
+			if (!staleValues || staleValues.length === 0) continue;
+
+			const staleSet = new Set(staleValues.map(String));
+			const nextValue = normalizeStringList(frontmatter[field])
+				.filter((value) => !staleSet.has(value));
+			const result = writeFieldToFile(agent.filePath, field, nextValue);
+			if (!result.success) {
+				dispatch({
+					type: "SAVE_COMPLETE",
+					agentIndex: overlay.agentIndex,
+					status: {
+						type: "error",
+						message: `Save failed: ${result.error}`,
+						timestamp: Date.now(),
+					},
+				});
+				return;
+			}
+
+			frontmatter = result.frontmatter ?? { ...frontmatter, [field]: nextValue };
+			delete nextStaleItems[field];
+		}
+
+		dispatch({
+			type: "UPDATE_AGENT_FRONTMATTER",
+			agentIndex: overlay.agentIndex,
+			frontmatter,
+			staleItems: nextStaleItems,
+		});
+		dispatch({
+			type: "SAVE_COMPLETE",
+			agentIndex: overlay.agentIndex,
+			status: {
+				type: "saved",
+				message: `Saved ${agent.name}.md`,
+				timestamp: Date.now(),
+			},
+		});
+		dispatch({ type: "EXPAND_WITHOUT_STALE_CHECK", agentIndex: overlay.agentIndex });
+	}, [state.overlay, state.agents]);
 
 	const saveFieldValue = useCallback((
 		agent: AgentConfigState,
@@ -446,6 +529,7 @@ export function useConfig() {
 			dispatch({ type: "CLOSE_OVERLAY" });
 			return;
 		}
+		if (overlay.type === "stale-cleanup") return;
 
 		const agent = state.agents[overlay.agentIndex];
 		if (!agent) return;
@@ -553,6 +637,8 @@ export function useConfig() {
 		instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay,
+		confirmStaleCleanup,
+		skipStaleCleanup,
 		setOptionColumnFilter,
 		selectFocusedOption,
 		rescan,

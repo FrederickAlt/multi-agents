@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import type { OverlayState } from "../state/types.js";
 
 interface DropdownOverlayProps {
-	overlay: OverlayState;
+	overlay: Extract<OverlayState, { type: "dropdown" }>;
 	focusedIndex: number;
 }
 

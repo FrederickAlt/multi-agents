@@ -4,6 +4,7 @@ import { Box, Text, render } from "ink";
 import { describe, expect, it } from "vitest";
 import { Board } from "../../src/tui/components/Board.js";
 import { HelpFooter } from "../../src/tui/components/HelpFooter.js";
+import { StaleCleanupOverlay } from "../../src/tui/components/StaleCleanupOverlay.js";
 import { renderToText } from "../../src/tui/dev/render-to-text.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
@@ -167,6 +168,10 @@ async function renderSequenceToTerminalText(
 	{ columns, rows }: { columns: number; rows: number },
 ): Promise<string> {
 	const stdout = new TtyCaptureStream({ columns, rows });
+	const rowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+	const columnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+	Object.defineProperty(process.stdout, "rows", { value: rows, configurable: true });
+	Object.defineProperty(process.stdout, "columns", { value: columns, configurable: true });
 	const app = render(elements[0], {
 		stdout: stdout as NodeJS.WriteStream,
 		debug: false,
@@ -184,8 +189,85 @@ async function renderSequenceToTerminalText(
 	} finally {
 		app.unmount();
 		app.cleanup();
+		if (rowsDescriptor) {
+			Object.defineProperty(process.stdout, "rows", rowsDescriptor);
+		} else {
+			delete (process.stdout as { rows?: number }).rows;
+		}
+		if (columnsDescriptor) {
+			Object.defineProperty(process.stdout, "columns", columnsDescriptor);
+		} else {
+			delete (process.stdout as { columns?: number }).columns;
+		}
 	}
 }
+
+describe("StaleCleanupOverlay", () => {
+	it("renders stale cleanup confirmation prompt and missing values", async () => {
+		const text = await renderToText(
+			<Box width={80} height={12}>
+				<StaleCleanupOverlay
+					overlay={{
+						type: "stale-cleanup",
+						agentIndex: 0,
+						agentName: "explorer",
+						staleItems: {
+							tools: ["deleted_tool"],
+							extensions: ["missing-ext"],
+						},
+					}}
+				/>
+			</Box>,
+			{ columns: 80, rows: 12 },
+		);
+
+		expect(text).toContain("Stale tools/extensions found. Remove them?");
+		expect(text).toContain("agent: explorer");
+		expect(text).toContain("deleted_tool (missing)");
+		expect(text).toContain("missing-ext (missing)");
+		expect(text).toContain("Enter/y: remove");
+		expect(text).toContain("Esc/n: keep");
+	});
+
+	it("covers the board behind the centered confirmation popup", async () => {
+		const text = await renderSequenceToTerminalText(
+			[
+				<Box width={80} height={12}>
+					<Board
+						state={state({
+							agents: [
+								{
+									...agent("default"),
+									description: "default description",
+								},
+							],
+						})}
+						height={12}
+					/>
+					<StaleCleanupOverlay
+						overlay={{
+							type: "stale-cleanup",
+							agentIndex: 0,
+							agentName: "default",
+							staleItems: {
+								tools: ["deleted_tool"],
+								extensions: ["missing-ext"],
+							},
+						}}
+					/>
+				</Box>,
+			],
+			{ columns: 80, rows: 12 },
+		);
+
+		expect(text).toContain("Stale tools/extensions found. Remove them?");
+		expect(text).toContain("┏");
+		expect(text).toContain("☑ read");
+		expect(text).not.toContain("Claude");
+		const borderLine = text.split("\n").find((line) => line.includes("╔"));
+		expect(borderLine?.indexOf("╔")).toBe(13);
+	});
+});
 
 describe("renderToText", () => {
 	it("captures Ink layout as plain text", async () => {

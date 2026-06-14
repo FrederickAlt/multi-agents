@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import type { OverlayState } from "../state/types.js";
 
 interface CheckboxOverlayProps {
-	overlay: OverlayState;
+	overlay: Extract<OverlayState, { type: "checkbox" }>;
 	focusedIndex: number;
 }
 

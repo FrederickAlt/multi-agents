@@ -6,6 +6,7 @@ import { useMouse } from "./hooks/useMouse.js";
 import { Board } from "./components/Board.js";
 import { CheckboxOverlay } from "./components/CheckboxOverlay.js";
 import { DropdownOverlay } from "./components/DropdownOverlay.js";
+import { StaleCleanupOverlay } from "./components/StaleCleanupOverlay.js";
 import { HelpFooter } from "./components/HelpFooter.js";
 import { EmptyState } from "./components/EmptyState.js";
 import { getFieldName, isOptionColumnField } from "./state/option-columns.js";
@@ -53,6 +54,8 @@ export function App({ debugInfo }: AppProps = {}) {
 		instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay,
+		confirmStaleCleanup,
+		skipStaleCleanup,
 		selectFocusedOption,
 		setOptionColumnFilter,
 		rescan,
@@ -81,7 +84,7 @@ export function App({ debugInfo }: AppProps = {}) {
 			isOverlayOpen: overlay !== null,
 			isExpanded: state.expandedAgentIndex !== null,
 			overlayType: overlay?.type ?? null,
-			overlayItems: overlay?.availableItems ?? [],
+			overlayItems: overlay && overlay.type !== "stale-cleanup" ? overlay.availableItems : [],
 			overlayFocusedIndex: overlayFocusIndex,
 			agentIndex: state.focus.agentIndex,
 			fieldIndex: state.focus.fieldIndex,
@@ -100,7 +103,7 @@ export function App({ debugInfo }: AppProps = {}) {
 
 	// Wrap overlay navigation
 	const handleOverlayUp = useCallback(() => {
-		if (!overlay) return;
+		if (!overlay || overlay.type === "stale-cleanup") return;
 		const len = overlay.availableItems.length;
 		if (len > 0) {
 			setOverlayFocusIndex((prev) => (prev - 1 + len) % len);
@@ -108,7 +111,7 @@ export function App({ debugInfo }: AppProps = {}) {
 	}, [overlay]);
 
 	const handleOverlayDown = useCallback(() => {
-		if (!overlay) return;
+		if (!overlay || overlay.type === "stale-cleanup") return;
 		const len = overlay.availableItems.length;
 		if (len > 0) {
 			setOverlayFocusIndex((prev) => (prev + 1) % len);
@@ -117,6 +120,10 @@ export function App({ debugInfo }: AppProps = {}) {
 
 	const handleOverlayEnter = useCallback(() => {
 		if (!overlay) return;
+		if (overlay.type === "stale-cleanup") {
+			confirmStaleCleanup();
+			return;
+		}
 		if (overlay.type === "dropdown") {
 			const item = overlay.availableItems[overlayFocusIndex];
 			if (item) {
@@ -124,7 +131,7 @@ export function App({ debugInfo }: AppProps = {}) {
 			}
 		}
 		commitOverlay();
-	}, [overlay, overlayFocusIndex, selectDropdown, commitOverlay]);
+	}, [overlay, overlayFocusIndex, selectDropdown, commitOverlay, confirmStaleCleanup]);
 
 	// Shared actions for keyboard and mouse handlers
 	const actions = {
@@ -140,6 +147,8 @@ export function App({ debugInfo }: AppProps = {}) {
 		toggleCheckbox: instantSaveCheckbox,
 		selectDropdown,
 		commitOverlay: () => commitOverlay(),
+		confirmStaleCleanup,
+		skipStaleCleanup,
 		selectFocusedOption,
 		rescan,
 		setOptionColumnFilter,
@@ -214,6 +223,9 @@ export function App({ debugInfo }: AppProps = {}) {
 					overlay={overlay}
 					focusedIndex={overlayFocusIndex}
 				/>
+			)}
+			{overlay && overlay.type === "stale-cleanup" && (
+				<StaleCleanupOverlay overlay={overlay} />
 			)}
 
 			<DebugBanner debugInfo={debugInfo} />

@@ -12,6 +12,16 @@ import {
 import { scanAgents, detectStaleItems } from "../file-io/read-agent.js";
 import { getAgentDir } from "../pi-compat.js";
 
+const RUNTIME_RESOURCE_STALE_FIELDS = ["tools", "extensions"] as const;
+
+function clearRuntimeResourceStaleItems(agents: AgentConfigState[]): void {
+	for (const agent of agents) {
+		for (const field of RUNTIME_RESOURCE_STALE_FIELDS) {
+			delete agent.staleItems[field];
+		}
+	}
+}
+
 /**
  * Hook that scans ~/.pi/agent/ for all selectable options on mount.
  * Returns discovered options and a rescan function.
@@ -83,7 +93,8 @@ export function useOptionDiscovery(): {
 				promptParts: discoverPromptParts(agentDir),
 			};
 
-			// Detect stale items before surfacing options to the UI.
+			// Runtime discovery can add extension-provided tools/extensions shortly
+			// after fallback options render, so do not mark those fields stale yet.
 			detectStaleItems(
 				scanned,
 				allNames,
@@ -92,6 +103,7 @@ export function useOptionDiscovery(): {
 				discovered.skills,
 				discovered.promptParts,
 			);
+			clearRuntimeResourceStaleItems(scanned);
 
 			if (!isCurrentRequest()) {
 				return;
@@ -102,7 +114,19 @@ export function useOptionDiscovery(): {
 			setLoading(false);
 
 			void piRuntimeResourcesPromise.then((piRuntimeResources) => {
-				if (!isCurrentRequest() || !piRuntimeResources) return;
+				if (!isCurrentRequest()) return;
+				if (!piRuntimeResources) {
+					detectStaleItems(
+						scanned,
+						allNames,
+						discovered.tools,
+						discovered.extensions,
+						discovered.skills,
+						discovered.promptParts,
+					);
+					setAgents([...scanned]);
+					return;
+				}
 				const runtimeDiscovered = {
 					...discovered,
 					tools: piRuntimeResources.tools,
@@ -127,7 +151,16 @@ export function useOptionDiscovery(): {
 					skills: runtimeDiscovered.skills,
 				}));
 			}).catch(() => {
-				// Standalone fallback discovery is already shown.
+				if (!isCurrentRequest()) return;
+				detectStaleItems(
+					scanned,
+					allNames,
+					discovered.tools,
+					discovered.extensions,
+					discovered.skills,
+					discovered.promptParts,
+				);
+				setAgents([...scanned]);
 			});
 
 			// Continue model discovery asynchronously.

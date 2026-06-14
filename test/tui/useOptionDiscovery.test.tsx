@@ -5,7 +5,7 @@ import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import React, { act } from "react";
 import { render } from "ink";
-import type { DiscoveredModelsResult } from "../../src/tui/discovery/options.js";
+import type { DiscoveredModelsResult, PiRuntimeDiscovery } from "../../src/tui/discovery/options.js";
 import { useOptionDiscovery } from "../../src/tui/hooks/useOptionDiscovery.js";
 
 interface DeferredModelResult {
@@ -13,8 +13,16 @@ interface DeferredModelResult {
 	reject: (reason?: unknown) => void;
 }
 
+interface DeferredRuntimeResult {
+	resolve: (value: PiRuntimeDiscovery | undefined) => void;
+	reject: (reason?: unknown) => void;
+}
+
 const pendingModelDiscoveries = vi.hoisted(
 	() => [] as DeferredModelResult[],
+);
+const pendingRuntimeDiscoveries = vi.hoisted(
+	() => [] as DeferredRuntimeResult[],
 );
 
 const discoverModelsMock = vi.hoisted(() =>
@@ -25,6 +33,10 @@ const discoverModelsMock = vi.hoisted(() =>
 	}),
 );
 
+const discoverPiRuntimeResourcesMock = vi.hoisted(() =>
+	vi.fn(async () => undefined),
+);
+
 vi.mock("../../src/tui/discovery/options.js", async () => {
 	const actual = await vi.importActual<typeof import("../../src/tui/discovery/options.js")>(
 		"../../src/tui/discovery/options.js",
@@ -32,6 +44,7 @@ vi.mock("../../src/tui/discovery/options.js", async () => {
 	return {
 		...actual,
 		discoverModels: discoverModelsMock,
+		discoverPiRuntimeResources: discoverPiRuntimeResourcesMock,
 	};
 });
 
@@ -40,6 +53,8 @@ interface ProbeFrame {
 	models: string[];
 	loading: boolean;
 	error: string | null;
+	tools: string[];
+	staleTools: string[];
 }
 
 function OptionDiscoveryProbe({
@@ -57,6 +72,8 @@ function OptionDiscoveryProbe({
 		models: discovery.options.models.map((model) => model.displayName),
 		loading: discovery.loading,
 		error: discovery.error,
+		tools: discovery.options.tools,
+		staleTools: discovery.agents[0]?.staleItems.tools ?? [],
 	});
 
 	React.useEffect(() => {
@@ -78,7 +95,9 @@ describe("useOptionDiscovery", () => {
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 		pendingModelDiscoveries.length = 0;
+		pendingRuntimeDiscoveries.length = 0;
 		discoverModelsMock.mockClear();
+		discoverPiRuntimeResourcesMock.mockClear();
 	});
 
 	afterEach(() => {
@@ -88,6 +107,117 @@ describe("useOptionDiscovery", () => {
 			process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		}
 		fs.rmSync(tempAgentDir, { recursive: true, force: true });
+	});
+
+	it("detects agent-declared tools that are not discovered as stale", async () => {
+		fs.mkdirSync(path.join(tempAgentDir, "agents"), { recursive: true });
+		fs.writeFileSync(path.join(tempAgentDir, "agents", "coder.md"), [
+			"---",
+			"description: coder",
+			"tools:",
+			"  - read",
+			"  - deleted_tool",
+			"---",
+			"body",
+		].join("\n"));
+		const frames: ProbeFrame[] = [];
+		const stdout = new Writable({
+			write(_chunk, _encoding, callback) {
+				callback();
+			},
+		});
+		const flush = async () => {
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+		};
+
+		let app: ReturnType<typeof render> | null = null;
+		try {
+			app = render(
+				<OptionDiscoveryProbe
+					triggerRescan={false}
+					onFrame={(frame) => frames.push({ ...frame })}
+				/>,
+				{
+					stdout: stdout as unknown as NodeJS.WriteStream,
+					patchConsole: false,
+				},
+			);
+			await flush();
+			await flush();
+
+			const finalFrame = frames.at(-1);
+			expect(finalFrame).toBeDefined();
+			expect(finalFrame?.tools).toContain("read");
+			expect(finalFrame?.tools).not.toContain("deleted_tool");
+			expect(finalFrame?.staleTools).toEqual(["deleted_tool"]);
+		} finally {
+			app?.unmount();
+		}
+	});
+
+	it("does not mark runtime-provided tools stale while runtime discovery is pending", async () => {
+		discoverPiRuntimeResourcesMock.mockImplementationOnce(() => {
+			return new Promise<PiRuntimeDiscovery | undefined>((resolve, reject) => {
+				pendingRuntimeDiscoveries.push({ resolve, reject });
+			});
+		});
+		fs.mkdirSync(path.join(tempAgentDir, "agents"), { recursive: true });
+		fs.writeFileSync(path.join(tempAgentDir, "agents", "coder.md"), [
+			"---",
+			"description: coder",
+			"tools:",
+			"  - read",
+			"  - runtime_tool",
+			"---",
+			"body",
+		].join("\n"));
+		const frames: ProbeFrame[] = [];
+		const stdout = new Writable({
+			write(_chunk, _encoding, callback) {
+				callback();
+			},
+		});
+		const flush = async () => {
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+		};
+
+		let app: ReturnType<typeof render> | null = null;
+		try {
+			app = render(
+				<OptionDiscoveryProbe
+					triggerRescan={false}
+					onFrame={(frame) => frames.push({ ...frame })}
+				/>,
+				{
+					stdout: stdout as unknown as NodeJS.WriteStream,
+					patchConsole: false,
+				},
+			);
+			await flush();
+
+			const initialLoadedFrame = frames.find((frame) => !frame.loading);
+			expect(initialLoadedFrame).toBeDefined();
+			expect(initialLoadedFrame?.tools).not.toContain("runtime_tool");
+			expect(initialLoadedFrame?.staleTools).toEqual([]);
+
+			pendingRuntimeDiscoveries[0]?.resolve({
+				tools: ["read", "runtime_tool"],
+				toolExtensionNames: {},
+				extensions: [],
+				skills: [],
+			});
+			await flush();
+
+			const finalFrame = frames.at(-1);
+			expect(finalFrame?.tools).toContain("runtime_tool");
+			expect(finalFrame?.staleTools).toEqual([]);
+		} finally {
+			app?.unmount();
+		}
 	});
 
 	it("ignores stale model discovery results from overlapping scans", async () => {

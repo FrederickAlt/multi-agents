@@ -168,6 +168,39 @@ describe("configReducer", () => {
 		expect(next.overlay!.localSelected).toBe("gpt-5");
 	});
 
+	it("EXPAND opens stale cleanup confirmation before expanding agents with stale tools or extensions", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({
+					frontmatter: {
+						description: "test",
+						tools: ["read", "deleted_tool"],
+						extensions: ["missing-ext"],
+					},
+					staleItems: {
+						tools: ["deleted_tool"],
+						extensions: ["missing-ext"],
+					},
+				}),
+			],
+			options: makeOptions(),
+		};
+
+		const next = configReducer(state, { type: "EXPAND" });
+
+		expect(next.expandedAgentIndex).toBeNull();
+		expect(next.overlay).toMatchObject({
+			type: "stale-cleanup",
+			agentIndex: 0,
+			agentName: "test-agent",
+			staleItems: {
+				tools: ["deleted_tool"],
+				extensions: ["missing-ext"],
+			},
+		});
+	});
+
 	it("CLOSE_OVERLAY clears overlay", () => {
 		const state: ConfigState = {
 			...createInitialState(),

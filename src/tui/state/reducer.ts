@@ -99,6 +99,7 @@ export function computeCheckboxSaveValue(
 }
 
 const INITIAL_EXPANDED_FIELD_INDEX = FIELDS_ORDER.indexOf("reasoning_effort");
+const STALE_CLEANUP_FIELDS = ["tools", "extensions"] as const;
 
 /** Build initial empty state. */
 export function createInitialState(): ConfigState {
@@ -357,6 +358,50 @@ function getFieldValue(
 	if (Array.isArray(raw)) return raw.map(String);
 	if (typeof raw === "number") return raw;
 	return String(raw);
+}
+
+function getStaleCleanupItems(agent: AgentConfigState): Partial<Record<"tools" | "extensions", string[]>> {
+	const staleItems: Partial<Record<"tools" | "extensions", string[]>> = {};
+	for (const field of STALE_CLEANUP_FIELDS) {
+		const values = agent.staleItems[field] ?? [];
+		if (values.length > 0) staleItems[field] = values;
+	}
+	return staleItems;
+}
+
+function hasStaleCleanupItems(staleItems: Partial<Record<"tools" | "extensions", string[]>>): boolean {
+	return Object.values(staleItems).some((values) => (values?.length ?? 0) > 0);
+}
+
+function expandAgent(state: ConfigState, idx: number, agent: AgentConfigState): ConfigState {
+	const fieldIndex =
+		INITIAL_EXPANDED_FIELD_INDEX === -1 ? 0 : INITIAL_EXPANDED_FIELD_INDEX;
+	return {
+		...state,
+		expandedAgentIndex: idx,
+		overlay: null,
+		optionColumnFilter: "",
+		optionColumnItemOrder: null,
+		focus: {
+			agentIndex: idx,
+			fieldIndex,
+			optionItemIndex: getFocusedOptionItemIndex(
+				agent,
+				state.options,
+				fieldIndex,
+			),
+		},
+		optionColumnScrollOffset: syncOptionColumnScrollOffset(
+			0,
+			fieldIndex,
+			OPTION_COLUMN_FIELDS.length,
+			agent,
+			state.options,
+			"",
+			null,
+			idx,
+		),
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +867,31 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			};
 		}
 
+		case "UPDATE_AGENTS": {
+			const len = action.agents.length;
+			const agentIndex = clamp(state.focus.agentIndex, len);
+			const fieldIndex = clamp(state.focus.fieldIndex, FIELDS_ORDER.length);
+			const focusedAgent = action.agents[agentIndex];
+			return {
+				...state,
+				agents: action.agents,
+				expandedAgentIndex: state.expandedAgentIndex !== null && state.expandedAgentIndex < len
+					? state.expandedAgentIndex
+					: null,
+				focus: {
+					agentIndex,
+					fieldIndex,
+					optionItemIndex: getFocusedOptionItemIndex(
+						focusedAgent,
+						state.options,
+						fieldIndex,
+						undefined,
+						state.optionColumnFilter,
+					),
+				},
+			};
+		}
+
 		case "SCROLL": {
 			const len = state.agents.length;
 			if (len === 0) return state;
@@ -834,33 +904,28 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			const idx = state.focus.agentIndex;
 			const agent = state.agents[idx];
 			if (!agent || state.agents.length === 0) return state;
-			const fieldIndex =
-				INITIAL_EXPANDED_FIELD_INDEX === -1 ? 0 : INITIAL_EXPANDED_FIELD_INDEX;
-			return {
-				...state,
-				expandedAgentIndex: idx,
-				optionColumnFilter: "",
-				optionColumnItemOrder: null,
-				focus: {
-					agentIndex: idx,
-					fieldIndex,
-					optionItemIndex: getFocusedOptionItemIndex(
-						agent,
-						state.options,
-						fieldIndex,
-					),
-				},
-				optionColumnScrollOffset: syncOptionColumnScrollOffset(
-					0,
-					fieldIndex,
-					OPTION_COLUMN_FIELDS.length,
-					agent,
-					state.options,
-					"",
-					null,
-					idx,
-				),
-			};
+			const staleItems = getStaleCleanupItems(agent);
+			if (hasStaleCleanupItems(staleItems)) {
+				return {
+					...state,
+					overlay: {
+						type: "stale-cleanup",
+						agentIndex: idx,
+						agentName: agent.name,
+						staleItems,
+					},
+					optionColumnFilter: "",
+					optionColumnItemOrder: null,
+				};
+			}
+			return expandAgent(state, idx, agent);
+		}
+
+		case "EXPAND_WITHOUT_STALE_CHECK": {
+			const idx = action.agentIndex;
+			const agent = state.agents[idx];
+			if (!agent || state.agents.length === 0) return state;
+			return expandAgent(state, idx, agent);
 		}
 
 		case "COLLAPSE": {

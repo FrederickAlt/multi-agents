@@ -148,7 +148,7 @@ export interface PiRuntimeDiscovery {
  */
 export async function discoverPiRuntimeResources(
 	agentDir: string,
-	agentToolLists: string[][],
+	_agentToolLists: string[][],
 	cwd = process.cwd(),
 ): Promise<PiRuntimeDiscovery | undefined> {
 	let pi: PiCodingAgentApi;
@@ -195,9 +195,6 @@ export async function discoverPiRuntimeResources(
 	}
 
 	const toolSet = new Set(BUILTIN_TOOLS);
-	for (const tools of agentToolLists) {
-		for (const tool of tools) toolSet.add(tool);
-	}
 	const toolExtensionNames: Record<string, string[]> = {};
 	for (const tool of dynamicTools) toolSet.add(tool.name);
 
@@ -378,21 +375,14 @@ const BUILTIN_TOOLS = [
 
 /**
  * Discover available tools.
- * Combines built-in tool names with any tool names found in existing agent definitions.
+ * Fallback discovery only knows Pi's built-in tools; agent-declared values are
+ * not availability evidence because that would hide stale tool references.
  */
 export function discoverTools(
-	agentDir: string,
-	agentToolLists: string[][],
+	_agentDir: string,
+	_agentToolLists: string[][],
 ): string[] {
 	const toolSet = new Set(BUILTIN_TOOLS);
-
-	// Collect from existing agent definitions
-	for (const tools of agentToolLists) {
-		for (const t of tools) {
-			toolSet.add(t);
-		}
-	}
-
 	return [...toolSet].sort();
 }
 
