@@ -230,6 +230,7 @@ describe("StaleCleanupOverlay", () => {
 						staleItems: {
 							tools: ["deleted_tool"],
 							extensions: ["missing-ext"],
+							can_spawn: ["deleted-subagent"],
 						},
 					}}
 				/>
@@ -237,10 +238,11 @@ describe("StaleCleanupOverlay", () => {
 			{ columns: 80, rows: 12 },
 		);
 
-		expect(text).toContain("Stale tools/extensions found. Remove them?");
+		expect(text).toContain("Stale config references found. Remove them?");
 		expect(text).toContain("agent: explorer");
 		expect(text).toContain("deleted_tool (missing)");
 		expect(text).toContain("missing-ext (missing)");
+		expect(text).toContain("subagents: deleted-subagent (missing)");
 		expect(text).toContain("Enter/y: remove");
 		expect(text).toContain("Esc/n: keep");
 	});
@@ -268,6 +270,7 @@ describe("StaleCleanupOverlay", () => {
 							staleItems: {
 								tools: ["deleted_tool"],
 								extensions: ["missing-ext"],
+								can_spawn: ["deleted-subagent"],
 							},
 						}}
 					/>
@@ -276,7 +279,7 @@ describe("StaleCleanupOverlay", () => {
 			{ columns: 80, rows: 12 },
 		);
 
-		expect(text).toContain("Stale tools/extensions found. Remove them?");
+		expect(text).toContain("Stale config references found. Remove them?");
 		expect(text).toContain("┏");
 		expect(text).toContain("☑ read");
 		expect(text).not.toContain("Claude");

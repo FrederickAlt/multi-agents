@@ -38,7 +38,7 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 		modelDiscovery: { status: "ready" as const, error: null },
 		reasoningEfforts: ["low", "medium", "high", "maximum"],
 		depths: [0, 1, 2, 3, 4, 5],
-		canSpawn: [],
+		canSpawn: ["helper", "agent"],
 		skills: [],
 		promptParts: [],
 		...overrides,
@@ -92,6 +92,9 @@ describe("stale cleanup confirmation", () => {
 				"extensions:",
 				"  - ext-a",
 				"  - missing-ext",
+				"can_spawn:",
+				"  - helper",
+				"  - deleted-agent",
 				"---",
 				"body",
 			].join("\n"),
@@ -129,12 +132,14 @@ describe("stale cleanup confirmation", () => {
 				description: "test",
 				tools: ["read", "deleted_tool"],
 				extensions: ["ext-a", "missing-ext"],
+				can_spawn: ["helper", "deleted-agent"],
 			},
 			body: "body",
 			error: null,
 			staleItems: {
 				tools: ["deleted_tool"],
 				extensions: ["missing-ext"],
+				can_spawn: ["deleted-agent"],
 			},
 		};
 	}
@@ -159,9 +164,10 @@ describe("stale cleanup confirmation", () => {
 
 		expect(latest!.state.agents[0].staleItems.tools).toEqual(["deleted_tool"]);
 		expect(latest!.state.agents[0].staleItems.extensions).toEqual(["missing-ext"]);
+		expect(latest!.state.agents[0].staleItems.can_spawn).toEqual(["deleted-agent"]);
 	});
 
-	it("confirming stale cleanup removes stale tools and extensions, saves, and expands", async () => {
+	it("confirming stale cleanup removes stale tools, extensions, and can_spawn values, saves, and expands", async () => {
 		const filePath = writeAgent();
 		await renderConfig(makeStaleAgent(filePath));
 
@@ -174,11 +180,14 @@ describe("stale cleanup confirmation", () => {
 		const content = fs.readFileSync(filePath, "utf-8");
 		expect(content).toContain("  - read");
 		expect(content).toContain("  - ext-a");
+		expect(content).toContain("  - helper");
 		expect(content).not.toContain("deleted_tool");
 		expect(content).not.toContain("missing-ext");
+		expect(content).not.toContain("deleted-agent");
 		expect(latest!.state.expandedAgentIndex).toBe(0);
 		expect(latest!.state.agents[0].staleItems.tools).toBeUndefined();
 		expect(latest!.state.agents[0].staleItems.extensions).toBeUndefined();
+		expect(latest!.state.agents[0].staleItems.can_spawn).toBeUndefined();
 	});
 
 	it("declining stale cleanup leaves the file unchanged and still expands", async () => {
@@ -196,5 +205,6 @@ describe("stale cleanup confirmation", () => {
 		expect(latest!.state.expandedAgentIndex).toBe(0);
 		expect(latest!.state.agents[0].staleItems.tools).toEqual(["deleted_tool"]);
 		expect(latest!.state.agents[0].staleItems.extensions).toEqual(["missing-ext"]);
+		expect(latest!.state.agents[0].staleItems.can_spawn).toEqual(["deleted-agent"]);
 	});
 });
