@@ -12,7 +12,7 @@
     "inlineSourceMap": false,
     "moduleResolution": "Node16",
     "resolveJsonModule": true,
-    "allowImportingTsExtensions": false,
+    "allowImportingTsExtensions": true,
     "types": ["node", "vitest/globals"],
     "jsx": "react-jsx",
     "paths": {
@@ -24,7 +24,18 @@
       "@mariozechner/pi-coding-agent": ["../pi-mono/packages/coding-agent/src/index.ts"],
       "@mariozechner/pi-coding-agent/*": ["../pi-mono/packages/coding-agent/src/*"],
       "@mariozechner/pi-tui": ["../pi-mono/packages/tui/src/index.ts"],
-      "@mariozechner/pi-tui/*": ["../pi-mono/packages/tui/src/*"]
+      "@mariozechner/pi-tui/*": ["../pi-mono/packages/tui/src/*"],
+      "@earendil-works/pi-ai": ["../pi-mono/packages/ai/src/index.ts"],
+      "@earendil-works/pi-ai/oauth": ["../pi-mono/packages/ai/src/oauth.ts"],
+      "@earendil-works/pi-ai/*": ["../pi-mono/packages/ai/src/*.ts", "../pi-mono/packages/ai/src/providers/*.ts"],
+      "@earendil-works/pi-ai/dist/*": ["../pi-mono/packages/ai/src/*"],
+      "@earendil-works/pi-agent-core": ["../pi-mono/packages/agent/src/index.ts"],
+      "@earendil-works/pi-agent-core/*": ["../pi-mono/packages/agent/src/*"],
+      "@earendil-works/pi-coding-agent": ["../pi-mono/packages/coding-agent/src/index.ts"],
+      "@earendil-works/pi-coding-agent/hooks": ["../pi-mono/packages/coding-agent/src/core/hooks/index.ts"],
+      "@earendil-works/pi-coding-agent/*": ["../pi-mono/packages/coding-agent/src/*"],
+      "@earendil-works/pi-tui": ["../pi-mono/packages/tui/src/index.ts"],
+      "@earendil-works/pi-tui/*": ["../pi-mono/packages/tui/src/*"]
     }
   },
   "include": [
@@ -34,7 +45,8 @@
     "test/**/*.ts",
     "test/**/*.tsx",
     "pi-agent-config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "../pi-mono/packages/**/*.d.ts"
   ],
   "exclude": ["node_modules"]
 }

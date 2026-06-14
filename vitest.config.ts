@@ -14,6 +14,9 @@ const aiSrc = fileURLToPath(new URL(`${piMonoRoot}/packages/ai/src/index.ts`, im
 const aiOauthSrc = fileURLToPath(new URL(`${piMonoRoot}/packages/ai/src/oauth.ts`, import.meta.url));
 const agentSrc = fileURLToPath(new URL(`${piMonoRoot}/packages/agent/src/index.ts`, import.meta.url));
 const codingAgentSrc = fileURLToPath(new URL(`${piMonoRoot}/packages/coding-agent/src/index.ts`, import.meta.url));
+const codingAgentHooksSrc = fileURLToPath(
+	new URL(`${piMonoRoot}/packages/coding-agent/src/core/hooks/index.ts`, import.meta.url),
+);
 const tuiSrc = fileURLToPath(new URL(`${piMonoRoot}/packages/tui/src/index.ts`, import.meta.url));
 
 export default defineConfig({
@@ -24,11 +27,12 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: [
-			{ find: /^@mariozechner\/pi-ai\/oauth$/, replacement: aiOauthSrc },
-			{ find: /^@mariozechner\/pi-ai$/, replacement: aiSrc },
-			{ find: /^@mariozechner\/pi-agent-core$/, replacement: agentSrc },
-			{ find: /^@mariozechner\/pi-coding-agent$/, replacement: codingAgentSrc },
-			{ find: /^@mariozechner\/pi-tui$/, replacement: tuiSrc },
+			{ find: /^@(mariozechner|earendil-works)\/pi-ai\/oauth$/, replacement: aiOauthSrc },
+			{ find: /^@(mariozechner|earendil-works)\/pi-ai$/, replacement: aiSrc },
+			{ find: /^@(mariozechner|earendil-works)\/pi-agent-core$/, replacement: agentSrc },
+			{ find: /^@(mariozechner|earendil-works)\/pi-coding-agent\/hooks$/, replacement: codingAgentHooksSrc },
+			{ find: /^@(mariozechner|earendil-works)\/pi-coding-agent$/, replacement: codingAgentSrc },
+			{ find: /^@(mariozechner|earendil-works)\/pi-tui$/, replacement: tuiSrc },
 		],
 	},
 });
