@@ -8,25 +8,25 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentConfig, AgentDiagnostic } from "../subagent/agents.js";
-import { AsyncAgentNotifier } from "../subagent/async-agent-notifier.js";
-import { formatContextUsageLine, readSubagentContextUsage } from "../subagent/context-usage.js";
-import type { DebugLogger } from "../subagent/debug-logger.js";
-import { defaultRootPolicy } from "../subagent/depth-policy.js";
-import { waitForAgent as waitForAgentTool } from "../subagent/index.js";
-import type { MetadataFile, SubagentRecord } from "../subagent/metadata.js";
-import { MetadataStore } from "../subagent/metadata.js";
+import type { AgentConfig, AgentDiagnostic } from "../src/subagent/agents.js";
+import { AsyncAgentNotifier } from "../src/subagent/async-agent-notifier.js";
+import { formatContextUsageLine, readSubagentContextUsage } from "../src/subagent/context-usage.js";
+import type { DebugLogger } from "../src/subagent/debug-logger.js";
+import { defaultRootPolicy } from "../src/subagent/depth-policy.js";
+import { waitForAgent as waitForAgentTool } from "../src/subagent/index.js";
+import type { MetadataFile, SubagentRecord } from "../src/subagent/metadata.js";
+import { MetadataStore } from "../src/subagent/metadata.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
 	FINAL_RESPONSE_REQUIRED_MESSAGE,
 	getFinalTextFromMessages,
-} from "../subagent/output-extraction.js";
+} from "../src/subagent/output-extraction.js";
 import {
 	type AgentSessionFactory,
 	type ModelResolver,
 	type SessionManagerProvider,
 	SubagentSessionManager,
-} from "../subagent/session-manager.js";
+} from "../src/subagent/session-manager.js";
 import {
 	type AgentDiscoveryAdapter,
 	type AgentWaitResult,
@@ -39,7 +39,7 @@ import {
 	type TaskDetails,
 	type TaskExecuteContext,
 	type TaskExecuteParams,
-} from "../subagent/task-controller.js";
+} from "../src/subagent/task-controller.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -388,7 +388,7 @@ describe("TaskController.extractOutput", () => {
 
 describe("user-facing timeout/abort terminology", () => {
 	it("does not use kill terminology in docs or tool descriptions except the compatibility parameter name", () => {
-		const files = ["README.md", "subagent/README.md", "subagent/index.ts"];
+		const files = ["README.md", "src/subagent/README.md", "src/subagent/index.ts"];
 		const combined = files
 			.map((file) => readFileSync(join(process.cwd(), file), "utf-8"))
 			.join("\n")

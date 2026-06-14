@@ -2,14 +2,14 @@
  * Unit tests for DepthPolicy — pure spawn-decision logic.
  */
 import { describe, expect, it } from "vitest";
-import type { AgentConfig } from "../subagent/agents.js";
+import type { AgentConfig } from "../src/subagent/agents.js";
 import {
 	checkTaskAllowed,
 	childPolicy,
 	type DepthPolicyState,
 	defaultRootPolicy,
 	selectedRootPolicy,
-} from "../subagent/depth-policy.js";
+} from "../src/subagent/depth-policy.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

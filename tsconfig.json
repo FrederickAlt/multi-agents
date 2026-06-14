@@ -39,12 +39,10 @@
     }
   },
   "include": [
-    "subagent/**/*.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
     "test/**/*.ts",
     "test/**/*.tsx",
-    "pi-agent-config.ts",
     "vitest.config.ts",
     "../pi-mono/packages/**/*.d.ts"
   ],

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AgentConfig } from "../subagent/agents.js";
-import { resolveRootAgent } from "../subagent/root-agent.js";
+import type { AgentConfig } from "../src/subagent/agents.js";
+import { resolveRootAgent } from "../src/subagent/root-agent.js";
 
 function makeAgent(name: string): AgentConfig {
 	return {

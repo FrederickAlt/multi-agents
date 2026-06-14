@@ -12,10 +12,10 @@ import { join } from "node:path";
 import { DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { AgentConfig } from "../subagent/agents.js";
-import type { DebugLogger } from "../subagent/debug-logger.js";
-import type { SubagentRecord } from "../subagent/metadata.js";
-import { MetadataStore } from "../subagent/metadata.js";
+import type { AgentConfig } from "../src/subagent/agents.js";
+import type { DebugLogger } from "../src/subagent/debug-logger.js";
+import type { SubagentRecord } from "../src/subagent/metadata.js";
+import { MetadataStore } from "../src/subagent/metadata.js";
 import {
 	ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS,
 	ABORT_FINAL_SUMMARY_MESSAGE,
@@ -27,7 +27,7 @@ import {
 	type SessionManagerProvider,
 	type SessionSetupContext,
 	SubagentSessionManager,
-} from "../subagent/session-manager.js";
+} from "../src/subagent/session-manager.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

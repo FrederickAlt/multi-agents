@@ -18,7 +18,7 @@ import {
 	AgentRegistry,
 	discoverAgents,
 	formatAgentList,
-} from "../subagent/agents.js";
+} from "../src/subagent/agents.js";
 
 // ---------------------------------------------------------------------------
 // Pure functions — no I/O

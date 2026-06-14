@@ -12,7 +12,7 @@ const { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = fs;
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { seedAgentConfig } from "../subagent/seeding.js";
+import { seedAgentConfig } from "../src/subagent/seeding.js";
 
 // ---------------------------------------------------------------------------
 // seedAgentConfig — I/O-dependent tests with temp directories

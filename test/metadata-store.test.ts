@@ -17,9 +17,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync as wfs } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { DebugLogger } from "../subagent/debug-logger.js";
-import type { MetadataFile, MetadataStoreContext, SubagentRecord } from "../subagent/metadata.js";
-import { MetadataStore } from "../subagent/metadata.js";
+import type { DebugLogger } from "../src/subagent/debug-logger.js";
+import type { MetadataFile, MetadataStoreContext, SubagentRecord } from "../src/subagent/metadata.js";
+import { MetadataStore } from "../src/subagent/metadata.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

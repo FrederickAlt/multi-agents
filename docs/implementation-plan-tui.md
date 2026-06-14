@@ -2,7 +2,7 @@
 
 ## 1. File Structure
 
-All new code lives under `src/tui/` alongside the existing `subagent/` directory.
+All new code lives under `src/tui/` alongside the existing `src/subagent/` directory.
 
 ```
 src/
@@ -33,7 +33,7 @@ src/
     state/
       types.ts                   # TypeScript types for ConfigState, actions, options
       reducer.ts                 # Immutable state reducer
-  subagent/                      # Existing extension code — untouched
+  src/subagent/                      # Existing extension code — untouched
     agents.ts                    # ⚠️ PRD §10: mapToAgentConfig updated for can_spawn, prompt_parts
     markdown-definitions.ts      # ⚠️ PRD §10: remove bundled/project paths from discovery
     prompt-parts.ts              # ⚠️ PRD §10: already uses only ~/.pi/agent/ paths
@@ -656,7 +656,7 @@ Overlay positioning:
 
 Changes to the existing extension code (NOT part of the TUI, but required by the PRD):
 
-### 10.1 `subagent/agents.ts` — `mapToAgentConfig`
+### 10.1 `src/subagent/agents.ts` — `mapToAgentConfig`
 
 Current code already uses `can_spawn` and `prompt_parts` (lines 116-119 show `fm.can_spawn` and `fm.prompt_parts`). Verify:
 - `canSpawn` (camelCase) is NOT read anywhere
@@ -667,11 +667,11 @@ Changes needed:
 - Remove comma-separated string fallback from `parseCheckboxField` (PRD §10: "Checkbox fields parsed as YAML lists, not comma-separated strings")
 - Verify `canSpawn` backward compat is removed
 
-### 10.2 `subagent/markdown-definitions.ts` — `discoverMarkdownDefinitions`
+### 10.2 `src/subagent/markdown-definitions.ts` — `discoverMarkdownDefinitions`
 
 Already uses only `getAgentDir()` + `options.userSubdir`. The `findNearestProjectDir` function exists but is marked `@deprecated` and not called by `discoverMarkdownDefinitions`. Confirm it's truly unused; remove if so.
 
-### 10.3 `subagent/prompt-parts.ts` — `discoverPromptParts`
+### 10.3 `src/subagent/prompt-parts.ts` — `discoverPromptParts`
 
 Already uses only `~/.pi/agent/prompt-parts/`. No changes needed.
 
@@ -812,6 +812,6 @@ test/tui/integration.test.ts
 
 ```
 package.json                          # Add bin, dependencies
-subagent/agents.ts                    # Remove comma-separated string fallback from parseCheckboxField
-subagent/markdown-definitions.ts      # Verify/clean up deprecated findNearestProjectDir
+src/subagent/agents.ts                    # Remove comma-separated string fallback from parseCheckboxField
+src/subagent/markdown-definitions.ts      # Verify/clean up deprecated findNearestProjectDir
 ```

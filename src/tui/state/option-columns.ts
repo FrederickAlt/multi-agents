@@ -1,4 +1,4 @@
-import { isProtectedMultiAgentExtensionName } from "../../../subagent/protected-extension.js";
+import { isProtectedMultiAgentExtensionName } from "../../subagent/protected-extension.js";
 import { resolveModelDisplayName } from "../discovery/options.js";
 import type {
 	AgentConfigState,

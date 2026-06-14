@@ -15,17 +15,15 @@
     "node": ">=20.0.0"
   },
   "bin": {
-    "pi-agent-config": "./pi-agent-config.ts"
+    "pi-agent-config": "./src/tui/cli.ts"
   },
   "files": [
-    "subagent/**/*",
-    "src/tui/**/*",
-    "pi-agent-config.ts",
+    "src/**/*",
     "README.md"
   ],
   "pi": {
     "extensions": [
-      "./subagent/index.ts"
+      "./src/subagent/index.ts"
     ]
   },
   "devDependencies": {

@@ -19,7 +19,7 @@ import {
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import taskExtension from "../subagent/index.js";
+import taskExtension from "../src/subagent/index.js";
 
 const RUN_REAL_LLM_TESTS = process.env.RUN_REAL_LLM_TESTS === "1";
 

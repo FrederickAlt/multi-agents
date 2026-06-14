@@ -2,13 +2,13 @@
  * Unit tests for prompt rendering helpers.
  */
 import { describe, expect, it } from "vitest";
-import type { AgentConfig } from "../subagent/agents.js";
-import type { PromptParts, RenderContext } from "../subagent/prompt-composition.js";
+import type { AgentConfig } from "../src/subagent/agents.js";
+import type { PromptParts, RenderContext } from "../src/subagent/prompt-composition.js";
 import {
 	renderComposedAgentSystemPrompt,
 	renderPromptTemplate,
 	SUBAGENT_REPORTING_NOTICE,
-} from "../subagent/prompt-composition.js";
+} from "../src/subagent/prompt-composition.js";
 
 // ---------------------------------------------------------------------------
 // renderPromptTemplate

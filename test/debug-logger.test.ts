@@ -12,7 +12,7 @@ import {
 	makeNoopDebugLogger,
 	makeSessionDebugLogger,
 	makeSessionDebugLogPath,
-} from "../subagent/debug-logger.js";
+} from "../src/subagent/debug-logger.js";
 
 describe("debug logger", () => {
 	let tempDir: string;

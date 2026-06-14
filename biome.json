@@ -25,12 +25,10 @@
 	},
 	"files": {
 		"includes": [
-			"subagent/**/*.ts",
 			"src/**/*.ts",
 			"src/**/*.tsx",
 			"test/**/*.ts",
 			"test/**/*.tsx",
-			"pi-agent-config.ts",
 			"vitest.config.ts",
 			"!**/node_modules/**/*",
 			"!!**/node_modules"

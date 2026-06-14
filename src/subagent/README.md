@@ -125,7 +125,7 @@ Unknown variables are errors. Internal tree metadata such as parent IDs and dept
 In addition to the agent's own system prompt, rendered Agent definitions receive prompt-part fragments. Prompt parts are independent `.md` files with YAML frontmatter that get resolved separately and appended to the Agent-definition system prompt.
 
 Locations (same precedence as agents: bundled → user → project):
-- `subagent/prompt-parts/*.md` (bundled with the extension)
+- `src/subagent/prompt-parts/*.md` (bundled with the extension)
 - `~/.pi/agent/prompt-parts/*.md` (user)
 - `.pi/prompt-parts/*.md` (project, nearest walking up from CWD)
 
@@ -196,7 +196,7 @@ Sub-agent metadata is stored beside the main session in a sidecar file named `.t
 
 The extension includes an isolated debug logger for `Task`, `wait_for_agent`, and session lifecycle breadcrumbs.
 
-- **Enablement:** The single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` in `subagent/debug-logger.ts` controls logging. It is currently `true`, so sessions write debug breadcrumbs by default in this checkout. There is no Pi flag and no extension config surface.
+- **Enablement:** The single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` in `src/subagent/debug-logger.ts` controls logging. It is currently `true`, so sessions write debug breadcrumbs by default in this checkout. There is no Pi flag and no extension config surface.
 - **Publishing note:** set the constant to `false` before publishing if a build should avoid writing extra local forensic logs by default.
 - **Log destination:** when enabled, each session writes JSONL events to `.task-subagents-<sessionId>.debug.jsonl` in the main session directory (same directory as `.task-subagents-<sessionId>.json`).
 - **Logged breadcrumbs:** lightweight root/session/Task/async chain data: run IDs, record IDs, parent IDs, agent types, depths, lifecycle events, counts, lengths, and flags.

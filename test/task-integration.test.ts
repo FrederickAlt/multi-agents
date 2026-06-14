@@ -16,15 +16,15 @@ import {
 	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentConfig } from "../subagent/agents.js";
-import { childPolicy, selectedRootPolicy } from "../subagent/depth-policy.js";
-import { filterExtensionsForAgent } from "../subagent/extension-filter.js";
-import taskExtension from "../subagent/index.js";
+import type { AgentConfig } from "../src/subagent/agents.js";
+import { childPolicy, selectedRootPolicy } from "../src/subagent/depth-policy.js";
+import { filterExtensionsForAgent } from "../src/subagent/extension-filter.js";
+import taskExtension from "../src/subagent/index.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
 	FINAL_RESPONSE_REQUIRED_MESSAGE,
-} from "../subagent/output-extraction.js";
-import { configureTaskToolForRuntime } from "../subagent/task-tool-registration.js";
+} from "../src/subagent/output-extraction.js";
+import { configureTaskToolForRuntime } from "../src/subagent/task-tool-registration.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,18 +121,18 @@ const passthroughTheme = {
 };
 
 async function loadTaskExtensionWithNotifier() {
-	const actual = await vi.importActual<typeof import("../subagent/async-agent-notifier.js")>(
-		"../subagent/async-agent-notifier.js",
+	const actual = await vi.importActual<typeof import("../src/subagent/async-agent-notifier.js")>(
+		"../src/subagent/async-agent-notifier.js",
 	);
 	const asyncAgentNotifier = new actual.AsyncAgentNotifier();
 	vi.resetModules();
-	vi.doMock("../subagent/async-agent-notifier.js", () => ({
+	vi.doMock("../src/subagent/async-agent-notifier.js", () => ({
 		...actual,
 		AsyncAgentNotifier: vi.fn(function AsyncAgentNotifier() {
 			return asyncAgentNotifier;
 		}),
 	}));
-	const mod = await import("../subagent/index.js");
+	const mod = await import("../src/subagent/index.js");
 	return { taskExtension: mod.default, waitForAgentTool: mod.waitForAgent, asyncAgentNotifier };
 }
 
@@ -199,7 +199,7 @@ describe("extension loading", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		vi.doUnmock("../subagent/async-agent-notifier.js");
+		vi.doUnmock("../src/subagent/async-agent-notifier.js");
 		delete process.env.PI_CODING_AGENT_DIR;
 		delete (globalThis as any).__multi_agents_selected_main_agent;
 		if (tempDir && existsSync(tempDir)) {

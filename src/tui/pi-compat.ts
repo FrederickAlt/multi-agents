@@ -6,7 +6,7 @@ import * as path from "node:path";
  *
  * The config TUI is runnable outside Pi's extension host, where
  * @mariozechner/pi-coding-agent is not necessarily installed in this package's
- * node_modules. Keep this module dependency-free so `npx tsx pi-agent-config.ts`
+ * node_modules. Keep this module dependency-free so `npx tsx src/tui/cli.ts`
  * can start from a fresh checkout.
  */
 export function getAgentDir(): string {

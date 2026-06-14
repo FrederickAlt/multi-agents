@@ -161,13 +161,13 @@ Discovery is read-only. It reads directory listings and file content but never e
 
 ## 10. Runtime Parser Changes
 
-The existing `mapToAgentConfig` parser in `subagent/agents.ts` must be updated to exclusively use underscore-prefixed frontmatter field names:
+The existing `mapToAgentConfig` parser in `src/subagent/agents.ts` must be updated to exclusively use underscore-prefixed frontmatter field names:
 
 - `canSpawn` → `can_spawn` only; no backward-compatible read of the old name
 - New field: `prompt_parts` (YAML list)
 - Checkbox fields parsed as YAML lists, not comma-separated strings
 
-The `subagent/markdown-definitions.ts` loader and the `subagent/prompt-parts.ts` discovery module must also remove bundled and project-level paths from their discovery, using only `~/.pi/agent/` paths.
+The `src/subagent/markdown-definitions.ts` loader and the `src/subagent/prompt-parts.ts` discovery module must also remove bundled and project-level paths from their discovery, using only `~/.pi/agent/` paths.
 
 ## 11. Dependencies
 

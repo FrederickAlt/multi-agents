@@ -10,7 +10,7 @@
  * - unknown IDs in consume are no-ops
  */
 import { describe, expect, it } from "vitest";
-import { AsyncAgentNotifier } from "../subagent/async-agent-notifier.js";
+import { AsyncAgentNotifier } from "../src/subagent/async-agent-notifier.js";
 
 describe("AsyncAgentNotifier", () => {
 	describe("empty state", () => {

@@ -10,6 +10,7 @@
  *    ambiguous bare rejected with warning/fallback
  */
 import { describe, expect, it } from "vitest";
+import { PiModelResolver } from "../src/subagent/session-manager.js";
 import {
 	computeCanonicalModelRefs,
 	disambiguateModelDisplayNames,
@@ -18,7 +19,6 @@ import {
 	resolveModelDisplayName,
 } from "../src/tui/discovery/options.js";
 import type { ModelOption } from "../src/tui/state/types.js";
-import { PiModelResolver } from "../subagent/session-manager.js";
 
 // ---------------------------------------------------------------------------
 // Model registry factory for tests

@@ -7,7 +7,7 @@ Pi extension for persistent configured sub-agents via the `Task` and `wait_for_a
 Rendered Agent definition prompts are composed from two sources:
 
 1. **Agent definition body** — the markdown body of the agent's `.md` file (after YAML frontmatter).
-2. **Prompt parts** — markdown fragments from `subagent/prompt-parts/*.md` (bundled), `~/.pi/agent/prompt-parts/*.md` (user), or `.pi/prompt-parts/*.md` (project).
+2. **Prompt parts** — markdown fragments from `src/subagent/prompt-parts/*.md` (bundled), `~/.pi/agent/prompt-parts/*.md` (user), or `.pi/prompt-parts/*.md` (project).
 
 Each part is rendered independently (variable substitution applied separately) and joined with double-newline separators after the main agent prompt. This lets projects and users inject shared context (tools, guidelines, runtime info) across all rendered Agent definitions without duplicating it in each file.
 
@@ -31,7 +31,7 @@ For focused layout checks, import `renderToText` from `src/tui/dev/render-to-tex
 
 ## Default Root Agent
 
-The Root agent always resolves through a markdown Agent definition. If no session-local `/agent <name>` selection exists, the extension uses the configured `defaultRootAgent` flag, which defaults to `default`. The built-in `subagent/agents/default.md` can be overridden from `~/.pi/agent/agents/default.md` or the nearest `.pi/agents/default.md` like any other Agent definition.
+The Root agent always resolves through a markdown Agent definition. If no session-local `/agent <name>` selection exists, the extension uses the configured `defaultRootAgent` flag, which defaults to `default`. The built-in `src/subagent/agents/default.md` can be overridden from `~/.pi/agent/agents/default.md` or the nearest `.pi/agents/default.md` like any other Agent definition.
 
 A missing configured default is a hard error so configuration mistakes are visible.
 
@@ -78,7 +78,7 @@ Async completion notifications are delivered at safe root-agent run boundaries: 
 
 The extension includes a dedicated, isolated debug logger for Task/wait lifecycle paths.
 
-- **Enablement**: the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` in `subagent/debug-logger.ts` controls logging. It is currently `true` so incident breadcrumbs are written by default in this checkout. There is no Pi flag and no extension config.
+- **Enablement**: the single code-level constant `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` in `src/subagent/debug-logger.ts` controls logging. It is currently `true` so incident breadcrumbs are written by default in this checkout. There is no Pi flag and no extension config.
 - **Publishing note**: if a build should avoid extra local forensic logs, set the constant to `false` before publishing.
 - **Log file**: `.task-subagents-<sessionId>.debug.jsonl` in the session directory, one JSON object per line.
 - **What is logged**: breadcrumbs such as root/session start and shutdown, Task run IDs, sub-agent record IDs, parent IDs, agent types, depths, async/wait/abort lifecycle events, counts, lengths, and boolean state flags.
@@ -97,6 +97,6 @@ The extension includes a dedicated, isolated debug logger for Task/wait lifecycl
 Prompt-part markdown files are `.md` files with YAML frontmatter that get appended to rendered Agent definition prompts. They follow the same conventions as agent definitions: frontmatter (at minimum a `description` field) + body with `{{variables}}`.
 
 Locations (same precedence as agents: bundled → user → project):
-- `subagent/prompt-parts/*.md` (bundled with the extension)
+- `src/subagent/prompt-parts/*.md` (bundled with the extension)
 - `~/.pi/agent/prompt-parts/*.md` (user)
 - `.pi/prompt-parts/*.md` (project, nearest walking up from CWD)

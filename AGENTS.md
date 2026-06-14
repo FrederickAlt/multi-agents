@@ -8,11 +8,11 @@ Agents are configured via **agent definition files** — markdown files with YAM
 
 ```
 multi-agents/
-├── package.json              # npm package. pi.extensions points to ./subagent/index.ts
+├── package.json              # npm package. pi.extensions points to ./src/subagent/index.ts
 ├── README.md                 # Human-facing README (features, commands, config)
 ├── CONTEXT.md                # Domain vocabulary (root agent, sub-agent, depth, etc.)
 ├── vitest.config.ts          # Vitest config with path aliases into pi-mono monorepo
-├── subagent/
+├── src/subagent/
 │   ├── index.ts              # Extension entry point — Task and wait_for_agent tools, commands, lifecycle
 │   ├── agents.ts             # Agent discovery & config parsing from markdown files
 │   ├── markdown-definitions.ts # Generic markdown-definition loader (shared by agents + prompt-parts)
@@ -39,7 +39,7 @@ multi-agents/
 
 ## Core modules and where to find things
 
-### `subagent/index.ts` — Extension entry point
+### `src/subagent/index.ts` — Extension entry point
 
 Registers the `Task` and `wait_for_agent` tools plus the `/agent` and `/dump-prompt` commands. Handles the full sub-agent lifecycle:
 
@@ -54,7 +54,7 @@ Registers the `Task` and `wait_for_agent` tools plus the `/agent` and `/dump-pro
 
 Key types: `SubagentRecord`, `MetadataFile`, `TaskDetails`, `RuntimeContext`. Import implementation types from their owning modules rather than from the extension entry point.
 
-### `subagent/markdown-definitions.ts` — Generic markdown-definition loader
+### `src/subagent/markdown-definitions.ts` — Generic markdown-definition loader
 
 Owns the shared logic for discovering markdown definition files from bundled, user, and project directories. Used by both agents.ts and prompt-parts.ts.
 
@@ -64,13 +64,13 @@ Owns the shared logic for discovering markdown definition files from bundled, us
 
 Types: `RawMarkdownDefinition`, `MarkdownDiagnostic`, `MarkdownDiscoveryOptions`, `MarkdownDefinitionSource`.
 
-### `subagent/root-agent.ts` — Root agent resolution
+### `src/subagent/root-agent.ts` — Root agent resolution
 
 Resolves the effective Root Agent definition from the session-local `/agent` selection or the configured `defaultRootAgent` fallback (default: `default`). A missing configured default is a hard error instead of falling back to raw Pi behavior.
 
 Key functions: `resolveRootAgent(options)`. Key constants: `DEFAULT_ROOT_AGENT_NAME`.
 
-### `subagent/prompt-composition.ts` — Shared Agent-definition prompt composition
+### `src/subagent/prompt-composition.ts` — Shared Agent-definition prompt composition
 
 Owns the stable prompt-rendering interface used by both Root agents and Task sub-agents. It replaces `{{variables}}` in agent markdown with live context (tools, guidelines, cwd, date, context files, skills, etc.), rejects unknown variables, applies skill filtering, renders prompt-part fragments independently, and intentionally ignores Pi raw/base and append-system prompt material.
 
@@ -78,12 +78,12 @@ Agent definition symmetry in this project means prompt-composition symmetry. The
 
 Key types: `RenderContext`, `PromptParts`. Key functions: `renderTemplateString`, `renderPromptTemplate`, `renderSubagentSystemPrompt`, `renderComposedAgentSystemPrompt`, `buildTemplateValues`.
 
-### `subagent/prompt-parts.ts` — Prompt-part discovery
+### `src/subagent/prompt-parts.ts` — Prompt-part discovery
 
 Discovers prompt-part fragment files that get appended to rendered Agent definition prompts at render time. Calls `discoverMarkdownDefinitions` internally.
 
 Discovery paths:
-1. **Bundled** — `subagent/prompt-parts/*.md` (shipped with the extension)
+1. **Bundled** — `src/subagent/prompt-parts/*.md` (shipped with the extension)
 2. **User** — `~/.pi/agent/prompt-parts/*.md`
 3. **Project** — nearest `.pi/prompt-parts/*.md` walking up from CWD
 
@@ -91,11 +91,11 @@ Discovery paths:
 
 Types: `PromptPartConfig`, `PromptPartDiscoveryResult`.
 
-### `subagent/agents.ts` — Agent discovery and configuration
+### `src/subagent/agents.ts` — Agent discovery and configuration
 
 Discovers agent definitions from three sources (in priority order, later overrides earlier):
 
-1. **Bundled** — `subagent/agents/*.md` (shipped with the extension)
+1. **Bundled** — `src/subagent/agents/*.md` (shipped with the extension)
 2. **User** — `~/.pi/agent/agents/*.md`
 3. **Project** — nearest `.pi/agents/*.md` walking up from CWD
 
@@ -121,7 +121,7 @@ Provides `renderToText(element, { columns, rows })`, which renders Ink component
 
 The related `npm run tui:dump` script runs `src/tui/dev/render-scenarios.tsx` and prints several fixed `Board` scenarios. This is the quickest way to see whether agent config columns are jumping, wrapping, or scrolling unexpectedly. When manually testing config writes or the live TUI, use `pi-agent-config --debug` (or `--debug-dir <path>`) so changes are written to a dummy config path instead of real prompt files.
 
-### `subagent/agents/*.md` — Built-in agent definitions
+### `src/subagent/agents/*.md` — Built-in agent definitions
 
 | Agent | Model | Tools | Depth | can_spawn | Purpose |
 |-------|-------|-------|-------|-----------|---------|
@@ -158,7 +158,7 @@ npm run tui:dump    # Render deterministic TUI scenarios as terminal text
 
 Tests require a sibling Pi checkout because `vitest.config.ts` aliases Pi packages from `../pi-mono` or `../../pi-mono`. In CI, `earendil-works/pi` is checked out as `pi-mono`.
 
-Prompt markdown files are user-owned. Do not format or lint `subagent/agents/*.md` or `subagent/prompt-parts/*.md`; they are intentionally excluded from Biome.
+Prompt markdown files are user-owned. Do not format or lint `src/subagent/agents/*.md` or `src/subagent/prompt-parts/*.md`; they are intentionally excluded from Biome.
 
 ## Key design decisions
 
@@ -214,7 +214,7 @@ Sub-agent `AgentSession` objects are disposed after each `Task` call. The on-dis
 
 The extension includes an isolated debug logger for tracing Task and async wait/kill flow.
 
-- Enablement: local constant in `subagent/debug-logger.ts`, `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` (currently `true` in this checkout).
+- Enablement: local constant in `src/subagent/debug-logger.ts`, `MULTI_AGENTS_DEBUG_LOGGING_ENABLED` (currently `true` in this checkout).
 - Logs: `.task-subagents-<sessionId>.debug.jsonl` in the root session directory when enabled.
 - Redaction: sensitive keys (`authorization`, `bearer`, `cookie`, `password`, `secret`, `secret_key`, `token`, `apikey`, `api_key`, `access_token`, `refresh_token`) are redacted; values are truncated for bounded size.
 
@@ -228,9 +228,9 @@ The extension includes an isolated debug logger for tracing Task and async wait/
 ## Working on this project
 
 1. The project lives inside a `pi_extensions` directory, with `pi-mono` at `../../pi-mono/` (referenced in vitest.config.ts aliases).
-2. Agent markdown files are the primary configuration mechanism. To add a new agent type, create a `.md` file in `subagent/agents/` (bundled), `~/.pi/agent/agents/` (user), or `.pi/agents/` (project).
-3. Prompt-part markdown files can be added to `subagent/prompt-parts/` (bundled), `~/.pi/agent/prompt-parts/` (user), or `.pi/prompt-parts/` (project).
+2. Agent markdown files are the primary configuration mechanism. To add a new agent type, create a `.md` file in `src/subagent/agents/` (bundled), `~/.pi/agent/agents/` (user), or `.pi/agents/` (project).
+3. Prompt-part markdown files can be added to `src/subagent/prompt-parts/` (bundled), `~/.pi/agent/prompt-parts/` (user), or `.pi/prompt-parts/` (project).
 4. The generic markdown loader (`markdown-definitions.ts`) is shared by both agent and prompt-part discovery. Adding a new kind of markdown definition should reuse this loader.
-5. The extension registers itself via `package.json` → `pi.extensions: ["./subagent/index.ts"]`.
+5. The extension registers itself via `package.json` → `pi.extensions: ["./src/subagent/index.ts"]`.
 6. When modifying prompt templates, ensure `REQUIRED_TEMPLATE_VARS` in `prompt-composition.ts` stays in sync with the variables used in agent and prompt-part markdown.
-7. **CRITICAL: Never modify agent/prompt-part body content.** Only the user writes prompts. You may edit YAML frontmatter fields (`description`, `tools`, `model`, `depth`, `can_spawn`, `prompt_parts`, `reasoning_effort`, `extensions`) in `subagent/agents/*.md` and `subagent/prompt-parts/*.md`, but the markdown body below the `---` separator is strictly off-limits without explicit user instruction.
+7. **CRITICAL: Never modify agent/prompt-part body content.** Only the user writes prompts. You may edit YAML frontmatter fields (`description`, `tools`, `model`, `depth`, `can_spawn`, `prompt_parts`, `reasoning_effort`, `extensions`) in `src/subagent/agents/*.md` and `src/subagent/prompt-parts/*.md`, but the markdown body below the `---` separator is strictly off-limits without explicit user instruction.

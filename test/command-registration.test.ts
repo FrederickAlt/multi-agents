@@ -11,11 +11,11 @@ import { fileURLToPath } from "node:url";
 import { getModel } from "@mariozechner/pi-ai";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import taskExtension from "../subagent/index.js";
+import taskExtension from "../src/subagent/index.js";
 
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const AGENTS_MD_PATH = join(PROJECT_ROOT, "AGENTS.md");
-const SUBAGENT_README_PATH = join(PROJECT_ROOT, "subagent", "README.md");
+const SUBAGENT_README_PATH = join(PROJECT_ROOT, "src", "subagent", "README.md");
 
 function makeDir(p: string) {
 	mkdirSync(p, { recursive: true });
@@ -47,7 +47,7 @@ function uniqueCommands(content: string): string[] {
 function documentedExtensionCommands(): string[] {
 	const agentsMdCommands = extractAgentsMdCommands(readText(AGENTS_MD_PATH));
 	const readmeCommands = extractSubagentReadmeCommands(readText(SUBAGENT_README_PATH));
-	expect(agentsMdCommands, "AGENTS.md and subagent/README.md should document the same extension commands").toEqual(
+	expect(agentsMdCommands, "AGENTS.md and src/subagent/README.md should document the same extension commands").toEqual(
 		readmeCommands,
 	);
 	return agentsMdCommands;
@@ -124,7 +124,7 @@ describe("command registration docs contract", () => {
 		expect([...registered.keys()].sort()).toEqual(documented);
 	});
 
-	it("documents async Task usage in subagent/README.md", () => {
+	it("documents async Task usage in src/subagent/README.md", () => {
 		const content = readText(SUBAGENT_README_PATH);
 
 		expect(content).toContain("wait_for_agent");

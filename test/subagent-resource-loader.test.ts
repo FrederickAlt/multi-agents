@@ -98,7 +98,7 @@ Default Root Agent
 			};
 		});
 
-		const { default: taskExtension } = await import("../subagent/index.js");
+		const { default: taskExtension } = await import("../src/subagent/index.js");
 		const tools: any[] = [];
 		const flags = new Map<string, string | boolean | undefined>();
 		const handlers = new Map<string, any>();
@@ -190,7 +190,7 @@ Explicit context:
 			};
 		});
 
-		const { default: taskExtension } = await import("../subagent/index.js");
+		const { default: taskExtension } = await import("../src/subagent/index.js");
 		const tools: any[] = [];
 		const flags = new Map<string, string | boolean | undefined>();
 		const handlers = new Map<string, any>();

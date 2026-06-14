@@ -1,3 +1,5 @@
+#!/usr/bin/env -S npx tsx
+
 /**
  * CLI module for pi-agent-config.
  * Imports and renders the App component via Ink.
