@@ -90,7 +90,6 @@ export function computeCheckboxSaveValue(localSelection: string[], availableItem
 }
 
 const INITIAL_EXPANDED_FIELD_INDEX = FIELDS_ORDER.indexOf("reasoning_effort");
-const STALE_CLEANUP_FIELDS = ["tools", "extensions"] as const;
 
 /** Build initial empty state. */
 export function createInitialState(): ConfigState {
@@ -305,17 +304,18 @@ function getFieldValue(agent: AgentConfigState, fieldName: string): string[] | s
 	return String(raw);
 }
 
-function getStaleCleanupItems(agent: AgentConfigState): Partial<Record<"tools" | "extensions", string[]>> {
-	const staleItems: Partial<Record<"tools" | "extensions", string[]>> = {};
-	for (const field of STALE_CLEANUP_FIELDS) {
-		const values = agent.staleItems[field] ?? [];
-		if (values.length > 0) staleItems[field] = values;
+function getStaleCleanupItems(agent: AgentConfigState): Record<string, string[]> {
+	const staleItems: Record<string, string[]> = {};
+	for (const [fieldName, values] of Object.entries(agent.staleItems)) {
+		if (values.length > 0) {
+			staleItems[fieldName] = values;
+		}
 	}
 	return staleItems;
 }
 
-function hasStaleCleanupItems(staleItems: Partial<Record<"tools" | "extensions", string[]>>): boolean {
-	return Object.values(staleItems).some((values) => (values?.length ?? 0) > 0);
+function hasStaleCleanupItems(staleItems: Record<string, string[]>): boolean {
+	return Object.values(staleItems).some((values) => values.length > 0);
 }
 
 function expandAgent(state: ConfigState, idx: number, agent: AgentConfigState): ConfigState {

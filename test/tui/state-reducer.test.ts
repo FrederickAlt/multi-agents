@@ -175,7 +175,7 @@ describe("configReducer", () => {
 		expect(selectableOverlay(next.overlay).localSelected).toBe("gpt-5");
 	});
 
-	it("EXPAND opens stale cleanup confirmation before expanding agents with stale tools or extensions", () => {
+	it("EXPAND opens stale cleanup confirmation before expanding agents with stale option fields", () => {
 		const state: ConfigState = {
 			...createInitialState(),
 			agents: [
@@ -184,10 +184,12 @@ describe("configReducer", () => {
 						description: "test",
 						tools: ["read", "deleted_tool"],
 						extensions: ["missing-ext"],
+						can_spawn: ["agent-a", "deleted-agent"],
 					},
 					staleItems: {
 						tools: ["deleted_tool"],
 						extensions: ["missing-ext"],
+						can_spawn: ["deleted-agent"],
 					},
 				}),
 			],
@@ -204,6 +206,37 @@ describe("configReducer", () => {
 			staleItems: {
 				tools: ["deleted_tool"],
 				extensions: ["missing-ext"],
+				can_spawn: ["deleted-agent"],
+			},
+		});
+	});
+
+	it("EXPAND opens stale cleanup confirmation for non-tool stale fields", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({
+					frontmatter: {
+						description: "test",
+						can_spawn: ["agent-a", "deleted-agent"],
+					},
+					staleItems: {
+						can_spawn: ["deleted-agent"],
+					},
+				}),
+			],
+			options: makeOptions(),
+		};
+
+		const next = configReducer(state, { type: "EXPAND" });
+
+		expect(next.expandedAgentIndex).toBeNull();
+		expect(next.overlay).toMatchObject({
+			type: "stale-cleanup",
+			agentIndex: 0,
+			agentName: "test-agent",
+			staleItems: {
+				can_spawn: ["deleted-agent"],
 			},
 		});
 	});

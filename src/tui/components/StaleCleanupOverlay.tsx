@@ -6,12 +6,17 @@ interface StaleCleanupOverlayProps {
 }
 
 export function StaleCleanupOverlay({ overlay }: StaleCleanupOverlayProps) {
-	const tools = overlay.staleItems.tools ?? [];
-	const extensions = overlay.staleItems.extensions ?? [];
 	const terminalWidth = Math.max(1, process.stdout.columns ?? 80);
 	const terminalHeight = Math.max(1, process.stdout.rows ?? 24);
 	const popupWidth = Math.min(54, terminalWidth);
-	const popupHeight = Math.min(tools.length + extensions.length + 7, 20, terminalHeight);
+	const staleRows = Object.entries(overlay.staleItems).flatMap(([fieldName, items]) => {
+		const label = fieldName === "can_spawn" ? "subagents" : fieldName;
+		return items.map((item) => ({
+			key: `${fieldName}:${item}`,
+			text: `${label}: ${item} (missing)`,
+		}));
+	});
+	const popupHeight = Math.min(staleRows.length + 7, 20, terminalHeight);
 	const contentWidth = Math.max(0, popupWidth - 2);
 	const padLine = (value: string) => {
 		const paddedValue = ` ${value}`;
@@ -20,10 +25,9 @@ export function StaleCleanupOverlay({ overlay }: StaleCleanupOverlayProps) {
 			: paddedValue.padEnd(contentWidth, " ");
 	};
 	const rows = [
-		{ key: "title", text: "Stale tools/extensions found. Remove them?" },
+		{ key: "title", text: "Stale config references found. Remove them?" },
 		{ key: "agent", text: `agent: ${overlay.agentName}` },
-		...tools.map((item) => ({ key: `tool:${item}`, text: `tools: ${item} (missing)` })),
-		...extensions.map((item) => ({ key: `extension:${item}`, text: `extensions: ${item} (missing)` })),
+		...staleRows,
 		{ key: "spacer", text: "" },
 		{ key: "help", text: "Enter/y: remove  Esc/n: keep" },
 	];

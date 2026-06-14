@@ -49,7 +49,7 @@ export type OverlayState =
 			type: "stale-cleanup";
 			agentIndex: number;
 			agentName: string;
-			staleItems: Partial<Record<"tools" | "extensions", string[]>>;
+			staleItems: Record<string, string[]>;
 	  };
 
 export interface ModelDiscoveryState {

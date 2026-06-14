@@ -34,8 +34,6 @@ import { useOptionDiscovery } from "./useOptionDiscovery.js";
  * - Overlay commit → selective file write-back
  * - Rescan support
  */
-const STALE_CLEANUP_FIELDS = ["tools", "extensions"] as const;
-
 function normalizeStringList(value: unknown): string[] {
 	if (value === undefined || value === null) return [];
 	return Array.isArray(value) ? value.map(String) : [String(value)];
@@ -213,15 +211,14 @@ export function useConfig() {
 		dispatch({
 			type: "SAVE_COMPLETE",
 			agentIndex: overlay.agentIndex,
-			status: { type: "saving", message: "Removing stale tools/extensions...", timestamp: Date.now() },
+			status: { type: "saving", message: "Removing stale config references...", timestamp: Date.now() },
 		});
 
 		let frontmatter = agent.frontmatter;
 		const nextStaleItems = { ...agent.staleItems };
 
-		for (const field of STALE_CLEANUP_FIELDS) {
-			const staleValues = overlay.staleItems[field];
-			if (!staleValues || staleValues.length === 0) continue;
+		for (const [field, staleValues] of Object.entries(overlay.staleItems)) {
+			if (staleValues.length === 0) continue;
 
 			const staleSet = new Set(staleValues.map(String));
 			const nextValue = normalizeStringList(frontmatter[field]).filter((value) => !staleSet.has(value));
