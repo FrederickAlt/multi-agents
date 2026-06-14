@@ -164,6 +164,14 @@ function emulateTerminal(raw: string, rows: number, columns: number): string {
 		.trimEnd();
 }
 
+async function waitForCapturedOutput(stdout: TtyCaptureStream, previousLength = 0): Promise<void> {
+	const deadline = Date.now() + 1000;
+	while (Date.now() < deadline) {
+		if (stdout.toString().length > previousLength) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+}
+
 async function renderSequenceToTerminalText(
 	elements: React.ReactNode[],
 	{ columns, rows }: { columns: number; rows: number },
@@ -181,10 +189,11 @@ async function renderSequenceToTerminalText(
 	});
 
 	try {
-		await new Promise((resolve) => setTimeout(resolve, 30));
+		await waitForCapturedOutput(stdout);
 		for (const element of elements.slice(1)) {
+			const previousLength = stdout.toString().length;
 			app.rerender(element);
-			await new Promise((resolve) => setTimeout(resolve, 30));
+			await waitForCapturedOutput(stdout, previousLength);
 		}
 		return emulateTerminal(stdout.toString(), rows, columns);
 	} finally {
