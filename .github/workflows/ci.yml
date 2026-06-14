@@ -30,7 +30,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: multi-agents/package-lock.json
+          cache-dependency-path: |
+            multi-agents/package-lock.json
+            pi-mono/package-lock.json
+
+      - name: Install Pi dependencies
+        working-directory: pi-mono
+        run: npm ci
 
       - name: Install dependencies
         working-directory: multi-agents

@@ -1,18 +1,27 @@
 #!/bin/sh
+set -eu
 
-STAGED_FILES=$(git diff --cached --name-only)
+STAGED_FILES=$(mktemp)
+UNSTAGED_FILES=$(mktemp)
+PARTIALLY_STAGED_FILES=$(mktemp)
+trap 'rm -f "$STAGED_FILES" "$UNSTAGED_FILES" "$PARTIALLY_STAGED_FILES"' EXIT
 
-echo "Running formatting, linting, and type checking..."
-npm run check
-if [ $? -ne 0 ]; then
-  echo "Checks failed. Please fix the errors before committing."
+git diff --cached --name-only -z | sort -z > "$STAGED_FILES"
+git diff --name-only -z | sort -z > "$UNSTAGED_FILES"
+comm -z -12 "$STAGED_FILES" "$UNSTAGED_FILES" > "$PARTIALLY_STAGED_FILES"
+
+if [ -s "$PARTIALLY_STAGED_FILES" ]; then
+  echo "Pre-commit check uses write-mode formatting and would restage whole files."
+  echo "Commit or stash unstaged changes in these partially staged files first:"
+  tr '\0' '\n' < "$PARTIALLY_STAGED_FILES" | sed 's/^/  /'
   exit 1
 fi
 
-for file in $STAGED_FILES; do
-  if [ -f "$file" ]; then
-    git add "$file"
-  fi
-done
+echo "Running formatting, linting, and type checking..."
+npm run check
+
+if [ -s "$STAGED_FILES" ]; then
+  xargs -0 git add -- < "$STAGED_FILES"
+fi
 
 echo "All pre-commit checks passed!"
