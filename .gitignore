@@ -17,3 +17,7 @@ node_modules/
 .zshrc
 .skylos
 .codegraph/
+
+# Build/package artifacts
+dist/
+*.tgz
