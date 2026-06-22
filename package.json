@@ -4,22 +4,25 @@
   "description": "Pi extension for persistent configured sub-agents via the Task tool",
   "type": "module",
   "scripts": {
+    "build": "node ./scripts/build.mjs",
     "check": "biome check --write --error-on-warnings . && tsgo --noEmit",
     "test": "vitest --run",
     "test:watch": "vitest",
     "test:llm": "RUN_REAL_LLM_TESTS=1 vitest --run test/task-llm.test.ts",
     "tui:dump": "tsx src/tui/dev/render-scenarios.tsx",
-    "prepare": "husky"
+    "prepare": "husky",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "bin": {
-    "pi-agent-config": "./src/tui/cli.ts",
-    "pi-agents": "./src/launcher/cli.ts"
+    "pi-agent-config": "./dist/tui/cli.js",
+    "pi-agents": "./dist/launcher/cli.js"
   },
   "files": [
-    "src/**/*",
+    "dist/**/*",
     "README.md"
   ],
   "devDependencies": {
@@ -29,12 +32,18 @@
     "@typescript/native-preview": "7.0.0-dev.20260120.1",
     "husky": "^9.1.7",
     "tsx": "^4.19.3",
-    "typebox": "^1.1.38",
     "typescript": "^5.9.2",
     "vitest": "^4.1.5"
   },
   "dependencies": {
     "ink": "^5.2.1",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "typebox": "^1.1.38"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "^0.73.0",
+    "@mariozechner/pi-agent-core": "^0.73.0",
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "@mariozechner/pi-tui": "^0.73.0"
   }
 }
