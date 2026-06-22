@@ -1,6 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { computeInlineCheckboxSaveValue } from "../../src/tui/hooks/useConfig.js";
+import { render } from "ink";
+import { act } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { computeInlineCheckboxSaveValue, useConfig } from "../../src/tui/hooks/useConfig.js";
 import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
+
+const writeFieldToFileMock = vi.hoisted(() => vi.fn());
+const useOptionDiscoveryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../src/tui/file-io/write-agent.js", () => ({
+	writeFieldToFile: writeFieldToFileMock,
+}));
+
+vi.mock("../../src/tui/hooks/useOptionDiscovery.js", () => ({
+	useOptionDiscovery: useOptionDiscoveryMock,
+}));
 
 function makeAgent(overrides: Partial<AgentConfigState> = {}): AgentConfigState {
 	return {
@@ -29,6 +42,12 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 		promptParts: [],
 		...overrides,
 	};
+}
+
+function flush(): Promise<void> {
+	return act(async () => {
+		await Promise.resolve();
+	});
 }
 
 describe("computeInlineCheckboxSaveValue", () => {
@@ -76,5 +95,58 @@ describe("computeInlineCheckboxSaveValue", () => {
 		const result = computeInlineCheckboxSaveValue(options, agent, "can_spawn", "agent-b");
 
 		expect(result).toEqual(["agent-a"]);
+	});
+});
+
+describe("useConfig", () => {
+	it("preserves implicit extension overlay save as undefined", async () => {
+		writeFieldToFileMock.mockReset();
+		writeFieldToFileMock.mockReturnValue({ success: true });
+
+		useOptionDiscoveryMock.mockReturnValue({
+			options: makeOptions({
+				extensions: ["summarize"],
+				extensionAliases: {
+					summarize: ["/tmp/extensions/summarize/dist/index.ts", "dist", "index.ts", "summarize"],
+				},
+			}),
+			agents: [makeAgent({ frontmatter: { description: "A test agent" } })],
+			loading: false,
+			error: null,
+			rescan: async () => undefined,
+		});
+
+		const apiRef = { current: undefined as ReturnType<typeof useConfig> | undefined };
+		const Probe = () => {
+			const api = useConfig();
+			apiRef.current = api;
+			return null;
+		};
+
+		const app = render(<Probe />, { patchConsole: false });
+		await flush();
+
+		await act(async () => {
+			apiRef.current?.openOverlay(0, "extensions");
+		});
+		await flush();
+
+		// Toggle off and back on to move implicit->explicit-empty->implicit.
+		await act(async () => {
+			apiRef.current?.instantSaveCheckbox("summarize");
+		});
+		await flush();
+		await act(async () => {
+			apiRef.current?.instantSaveCheckbox("summarize");
+		});
+		await flush();
+
+		app.unmount();
+
+		expect(writeFieldToFileMock).toHaveBeenCalledTimes(2);
+		expect(writeFieldToFileMock.mock.calls[0]?.[1]).toBe("extensions");
+		expect(writeFieldToFileMock.mock.calls[0]?.[2]).toEqual([]);
+		expect(writeFieldToFileMock.mock.calls[1]?.[1]).toBe("extensions");
+		expect(writeFieldToFileMock.mock.calls[1]?.[2]).toBeUndefined();
 	});
 });

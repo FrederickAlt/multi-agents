@@ -1,3 +1,4 @@
+import { aliasesMatchSelector } from "../../subagent/extension-filter.js";
 import { isProtectedMultiAgentExtensionName } from "../../subagent/protected-extension.js";
 import { resolveModelDisplayName } from "../discovery/options.js";
 import type {
@@ -37,6 +38,97 @@ function addUnique(values: string[], value: string): void {
 	if (!values.includes(value)) {
 		values.push(value);
 	}
+}
+const GENERIC_EXTENSION_ALIAS_BLACKLIST = new Set([
+	"dist",
+	"src",
+	"index",
+	"index.ts",
+	"index.js",
+	"index.mjs",
+	"index.cjs",
+	"srcs",
+	"lib",
+	"build",
+]);
+
+function isWrapperFriendlyExtensionAlias(alias: string): boolean {
+	const normalized = alias.trim();
+	return (
+		normalized.length > 0 && !normalized.includes("/") && !normalized.includes("\\") && !normalized.startsWith("<")
+	);
+}
+
+function isLikelyGenericExtensionAlias(alias: string): boolean {
+	const normalized = alias.trim().toLowerCase();
+	if (!normalized) return false;
+	if (GENERIC_EXTENSION_ALIAS_BLACKLIST.has(normalized)) return true;
+	if (/^index\.[a-z0-9]+$/i.test(normalized)) return true;
+	return false;
+}
+
+function pickAliasForExtensionStorage(
+	extensionName: string,
+	aliases: string[],
+	availableExtensions: string[] = [],
+): string {
+	const uniqueAliases = [
+		...new Set(aliases.map((alias) => alias.trim()).filter((alias) => isWrapperFriendlyExtensionAlias(alias))),
+	];
+
+	if (
+		extensionName &&
+		isWrapperFriendlyExtensionAlias(extensionName) &&
+		!isLikelyGenericExtensionAlias(extensionName) &&
+		(availableExtensions.length === 0 || availableExtensions.includes(extensionName))
+	) {
+		return extensionName;
+	}
+
+	for (const alias of uniqueAliases) {
+		if (!isLikelyGenericExtensionAlias(alias)) {
+			return alias;
+		}
+	}
+
+	return uniqueAliases[0] ?? extensionName ?? "";
+}
+
+function getExtensionStorageValue(
+	extensionAliases: Record<string, string[]> | undefined,
+	rawValue: string,
+	availableExtensions: string[] = [],
+): string {
+	if (!extensionAliases) return rawValue;
+	const direct = extensionAliases[rawValue];
+	if (direct) return pickAliasForExtensionStorage(rawValue, direct, availableExtensions);
+
+	for (const [extensionName, aliases] of Object.entries(extensionAliases)) {
+		if (aliasesMatchSelector(rawValue, aliases)) {
+			return pickAliasForExtensionStorage(extensionName, aliases, availableExtensions);
+		}
+	}
+	return rawValue;
+}
+
+function mapExtensionStorageValueToOptionValue(options: DiscoveredOptions, rawValue: string): string {
+	if (!options.extensionAliases) return rawValue;
+	if (options.extensionAliases[rawValue]) return rawValue;
+	for (const [extensionName, aliases] of Object.entries(options.extensionAliases)) {
+		if (aliasesMatchSelector(rawValue, aliases)) {
+			return extensionName;
+		}
+	}
+	return rawValue;
+}
+
+export function normalizeOptionCheckboxSaveValues(
+	options: DiscoveredOptions,
+	fieldName: OptionColumnFieldName,
+	values: string[],
+): string[] {
+	if (fieldName !== "extensions") return [...values];
+	return values.map((value) => getExtensionStorageValue(options.extensionAliases, String(value), options.extensions));
 }
 
 export function getAgentDepth(agent: AgentConfigState | undefined): number {
@@ -241,9 +333,14 @@ export function getOptionColumnSelectedValues(
 			return selectedValues.filter((value) => extensionToolIsEnabled(options, agent, value));
 		}
 		if (fieldName === "extensions") {
-			for (const extensionName of protectedAvailableExtensions(options)) {
-				addUnique(selectedValues, extensionName);
+			const mappedSelectedValues: string[] = [];
+			for (const value of selectedValues) {
+				addUnique(mappedSelectedValues, mapExtensionStorageValueToOptionValue(options, String(value)));
 			}
+			for (const extensionName of protectedAvailableExtensions(options)) {
+				addUnique(mappedSelectedValues, extensionName);
+			}
+			return mappedSelectedValues;
 		}
 		return selectedValues;
 	}

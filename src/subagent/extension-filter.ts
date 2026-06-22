@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import type { AgentConfig } from "./agents.js";
 import { matchesProtectedMultiAgentExtension } from "./protected-extension.js";
@@ -15,6 +15,8 @@ interface ExtensionCandidate {
 		baseDir?: string;
 	};
 }
+
+const packageJsonNameCache = new Map<string, string | undefined>();
 
 export interface ExtensionSelection {
 	paths: string[];
@@ -71,7 +73,39 @@ function addCandidateAliasPath(aliases: Set<string>, candidatePath: string | und
 	aliases.add(canonicalizePath(candidatePath));
 }
 
-export function extensionAliasSet(candidate: ExtensionCandidate): Set<string> {
+function readPackageJsonNameFromBaseDir(baseDir: string | undefined): string | undefined {
+	if (!baseDir) return undefined;
+	const normalizedBaseDir = canonicalizePath(baseDir);
+	if (packageJsonNameCache.has(normalizedBaseDir)) {
+		return packageJsonNameCache.get(normalizedBaseDir);
+	}
+
+	try {
+		const packageJsonPath = path.join(baseDir, "package.json");
+		if (!existsSync(packageJsonPath)) {
+			packageJsonNameCache.set(normalizedBaseDir, undefined);
+			return undefined;
+		}
+		const packageJsonContents = readFileSync(packageJsonPath, "utf8");
+		const parsed = JSON.parse(packageJsonContents);
+		const packageName = typeof parsed?.name === "string" ? parsed.name.trim() : undefined;
+		packageJsonNameCache.set(normalizedBaseDir, packageName || undefined);
+		return packageName || undefined;
+	} catch {
+		packageJsonNameCache.set(normalizedBaseDir, undefined);
+		return undefined;
+	}
+}
+
+function addPackageJsonNameAlias(aliases: Set<string>, baseDir: string | undefined): void {
+	addCandidateAlias(aliases, readPackageJsonNameFromBaseDir(baseDir));
+}
+
+export function extensionAliasSet(
+	candidate: ExtensionCandidate,
+	options: { includePackageNames?: boolean } = {},
+): Set<string> {
+	const { includePackageNames = true } = options;
 	const aliases = new Set<string>();
 	addCandidateAlias(aliases, candidate.path);
 	addCandidateAlias(aliases, candidate.resolvedPath);
@@ -96,6 +130,9 @@ export function extensionAliasSet(candidate: ExtensionCandidate): Set<string> {
 	if (candidate.metadata?.baseDir) {
 		addCandidateAlias(aliases, candidate.metadata.baseDir);
 		addCandidateAlias(aliases, path.basename(candidate.metadata.baseDir));
+		if (includePackageNames) {
+			addPackageJsonNameAlias(aliases, candidate.metadata.baseDir);
+		}
 		const relativePath = path.relative(candidate.metadata.baseDir, candidate.path ?? "");
 		if (relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
 			const cleaned = relativePath.replace(/\\/g, "/");
@@ -108,6 +145,9 @@ export function extensionAliasSet(candidate: ExtensionCandidate): Set<string> {
 	if (candidate.sourceInfo?.baseDir) {
 		addCandidateAlias(aliases, candidate.sourceInfo.baseDir);
 		addCandidateAlias(aliases, path.basename(candidate.sourceInfo.baseDir));
+		if (includePackageNames) {
+			addPackageJsonNameAlias(aliases, candidate.sourceInfo.baseDir);
+		}
 		const relativePath = path.relative(candidate.sourceInfo.baseDir, candidate.path ?? "");
 		if (relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
 			const cleaned = relativePath.replace(/\\/g, "/");
@@ -122,14 +162,54 @@ export function extensionAliasSet(candidate: ExtensionCandidate): Set<string> {
 	return aliases;
 }
 
-export function candidateMatchesSelector(candidate: ExtensionCandidate, selector: string): boolean {
+export function aliasesMatchSelector(selector: string, aliases: Iterable<string>): boolean {
 	const normalizedSelector = normalizeComparisonPath(selector);
 	if (!normalizedSelector) return false;
-	return [...extensionAliasSet(candidate)].some((alias) => alias.includes(normalizedSelector));
+	for (const alias of aliases) {
+		const normalizedAlias = normalizeComparisonPath(alias);
+		if (normalizedAlias.includes(normalizedSelector)) return true;
+	}
+	return false;
+}
+
+export function candidateMatchesSelector(candidate: ExtensionCandidate, selector: string): boolean {
+	return aliasesMatchSelector(selector, extensionAliasSet(candidate));
+}
+
+function extensionProtectedAliasSet(candidate: ExtensionCandidate): Set<string> {
+	const aliases = new Set<string>();
+	addCandidateAlias(aliases, candidate.path);
+	addCandidateAlias(aliases, candidate.resolvedPath);
+	addCandidateAlias(aliases, candidate.sourceInfo?.source);
+	addCandidateAlias(aliases, candidate.metadata?.source);
+	addCandidateAlias(aliases, candidate.sourceInfo?.baseDir);
+	addCandidateAlias(aliases, candidate.metadata?.baseDir);
+	if (candidate.sourceInfo?.baseDir) {
+		addCandidateAlias(aliases, path.basename(candidate.sourceInfo.baseDir));
+		if (candidate.path) {
+			const relativePath = path.relative(candidate.sourceInfo.baseDir, candidate.path);
+			if (relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+				addCandidateAlias(aliases, `${path.basename(candidate.sourceInfo.baseDir)}/${relativePath}`);
+			}
+		}
+	}
+	if (candidate.metadata?.baseDir) {
+		addCandidateAlias(aliases, path.basename(candidate.metadata.baseDir));
+		if (candidate.path) {
+			const relativePath = path.relative(candidate.metadata.baseDir, candidate.path);
+			if (relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+				addCandidateAlias(aliases, `${path.basename(candidate.metadata.baseDir)}/${relativePath}`);
+			}
+		}
+	}
+	addCandidateAliasPath(aliases, candidate.path);
+	addCandidateAliasPath(aliases, candidate.resolvedPath);
+	aliases.delete("");
+	return aliases;
 }
 
 function isProtectedMultiAgentExtension(candidate: ExtensionCandidate): boolean {
-	return [...extensionAliasSet(candidate)].some(matchesProtectedMultiAgentExtension);
+	return [...extensionProtectedAliasSet(candidate)].some(matchesProtectedMultiAgentExtension);
 }
 
 export function resolveExtensionsForAgent(agent: AgentConfig, candidates: ExtensionCandidate[]): ExtensionSelection {

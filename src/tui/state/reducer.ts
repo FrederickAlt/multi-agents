@@ -99,6 +99,7 @@ export function createInitialState(): ConfigState {
 			tools: [],
 			toolExtensionNames: {},
 			extensions: [],
+			extensionAliases: {},
 			models: [],
 			defaultModel: "",
 			modelDiscovery: {

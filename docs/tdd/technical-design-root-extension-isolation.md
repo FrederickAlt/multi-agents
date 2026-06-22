@@ -191,7 +191,7 @@ During startup `--resume` bootstrap, explicit user `-e/--extension` overrides ar
 
 Agent frontmatter `extensions:` entries are user-friendly selectors over the same extension candidates Pi would discover. They are not required to be opaque exact IDs.
 
-The wrapper resolves extension candidates the same way Pi does, without loading modules, then matches each selector against candidate metadata such as configured source, concrete path, canonical path, package base directory, package-relative resource path, and display-oriented path/name aliases.
+The wrapper resolves extension candidates the same way Pi does, without loading modules, then matches each selector against candidate metadata such as configured source, concrete path, canonical path, package base directory, package.json `name` from that directory (when present), package-relative resource path, and display-oriented path/name aliases.
 
 Selector outcomes:
 

@@ -171,6 +171,29 @@ describe("detectStaleItems", () => {
 		expect(agents[0].staleItems).toEqual({});
 	});
 
+	it("does not mark extension values stale when selector matches an alias", () => {
+		const agents: AgentConfigState[] = [
+			{
+				name: "test",
+				description: "desc",
+				filePath: "/tmp/test.md",
+				frontmatter: {
+					description: "desc",
+					extensions: ["pi-tool-summarize-replacement"],
+				},
+				body: "",
+				error: null,
+				staleItems: {},
+			},
+		];
+
+		detectStaleItems(agents, [], [], ["summarize"], [], [], {
+			summarize: ["/tmp/summarize/index.ts", "pi-tool-summarize-replacement", "summarize"],
+		});
+
+		expect(agents[0].staleItems).toEqual({});
+	});
+
 	it("handles null frontmatter (parse error)", () => {
 		const agents: AgentConfigState[] = [
 			{

@@ -22,6 +22,14 @@ function clearRuntimeResourceStaleItems(agents: AgentConfigState[]): void {
 	}
 }
 
+function buildExtensionAliasMap(discoveredExtensions: string[]): Record<string, string[]> {
+	const extensionAliases: Record<string, string[]> = {};
+	for (const extensionName of discoveredExtensions) {
+		extensionAliases[extensionName] = [extensionName];
+	}
+	return extensionAliases;
+}
+
 /**
  * Hook that scans ~/.pi/agent/ for all selectable options on mount.
  * Returns discovered options and a rescan function.
@@ -40,6 +48,7 @@ export function useOptionDiscovery(): {
 		tools: [],
 		toolExtensionNames: {},
 		extensions: [],
+		extensionAliases: {},
 		models: [],
 		defaultModel: "",
 		modelDiscovery: {
@@ -75,10 +84,12 @@ export function useOptionDiscovery(): {
 				});
 
 			const piRuntimeResourcesPromise = discoverPiRuntimeResources(agentDir, toolLists);
+			const discoveredExtensions = discoverExtensions(agentDir);
 			const discovered: DiscoveredOptions = {
 				tools: discoverTools(agentDir, toolLists),
 				toolExtensionNames: {},
-				extensions: discoverExtensions(agentDir),
+				extensions: discoveredExtensions,
+				extensionAliases: buildExtensionAliasMap(discoveredExtensions),
 				models: [],
 				defaultModel: "",
 				modelDiscovery: {
@@ -101,6 +112,7 @@ export function useOptionDiscovery(): {
 				discovered.extensions,
 				discovered.skills,
 				discovered.promptParts,
+				discovered.extensionAliases,
 			);
 			clearRuntimeResourceStaleItems(scanned);
 
@@ -123,6 +135,7 @@ export function useOptionDiscovery(): {
 							discovered.extensions,
 							discovered.skills,
 							discovered.promptParts,
+							discovered.extensionAliases,
 						);
 						setAgents([...scanned]);
 						return;
@@ -132,6 +145,7 @@ export function useOptionDiscovery(): {
 						tools: piRuntimeResources.tools,
 						toolExtensionNames: piRuntimeResources.toolExtensionNames,
 						extensions: piRuntimeResources.extensions,
+						extensionAliases: piRuntimeResources.extensionAliases ?? discovered.extensionAliases,
 						skills: piRuntimeResources.skills,
 					};
 					detectStaleItems(
@@ -141,6 +155,7 @@ export function useOptionDiscovery(): {
 						runtimeDiscovered.extensions,
 						runtimeDiscovered.skills,
 						runtimeDiscovered.promptParts,
+						runtimeDiscovered.extensionAliases,
 					);
 					setAgents([...scanned]);
 					setOptions((prev) => ({
@@ -148,6 +163,7 @@ export function useOptionDiscovery(): {
 						tools: runtimeDiscovered.tools,
 						toolExtensionNames: runtimeDiscovered.toolExtensionNames,
 						extensions: runtimeDiscovered.extensions,
+						extensionAliases: runtimeDiscovered.extensionAliases,
 						skills: runtimeDiscovered.skills,
 					}));
 				})
@@ -160,6 +176,7 @@ export function useOptionDiscovery(): {
 						discovered.extensions,
 						discovered.skills,
 						discovered.promptParts,
+						discovered.extensionAliases,
 					);
 					setAgents([...scanned]);
 				});

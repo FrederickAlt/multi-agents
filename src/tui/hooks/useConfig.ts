@@ -14,6 +14,7 @@ import {
 	isOptionColumnItemDisabled,
 	MODEL_OPTION_DEGRADED_STATUS,
 	MODEL_OPTION_LOADING_ITEM,
+	normalizeOptionCheckboxSaveValues,
 } from "../state/option-columns.js";
 import {
 	applyToggle,
@@ -221,7 +222,12 @@ export function useConfig() {
 			if (staleValues.length === 0) continue;
 
 			const staleSet = new Set(staleValues.map(String));
-			const nextValue = normalizeStringList(frontmatter[field]).filter((value) => !staleSet.has(value));
+			const rawNextValue = normalizeStringList(frontmatter[field]).filter((value) => !staleSet.has(value));
+			const nextValue = normalizeOptionCheckboxSaveValues(
+				state.options,
+				field as OptionColumnFieldName,
+				rawNextValue,
+			);
 			const result = writeFieldToFile(agent.filePath, field, nextValue);
 			if (!result.success) {
 				dispatch({
@@ -256,7 +262,7 @@ export function useConfig() {
 			},
 		});
 		dispatch({ type: "EXPAND_WITHOUT_STALE_CHECK", agentIndex: overlay.agentIndex });
-	}, [state.overlay, state.agents]);
+	}, [state.overlay, state.agents, state.options]);
 
 	const saveFieldValue = useCallback(
 		(
@@ -333,7 +339,11 @@ export function useConfig() {
 			);
 
 			// Determine save value using tri-state logic
-			const newValue = computeCheckboxSaveValue(newSelection, overlay.availableItems);
+			const rawValue = computeCheckboxSaveValue(newSelection, overlay.availableItems);
+			const newValue =
+				overlay.fieldName === "extensions" && rawValue !== undefined
+					? normalizeOptionCheckboxSaveValues(state.options, overlay.fieldName, rawValue)
+					: rawValue;
 
 			// Save to file immediately
 			dispatch({
@@ -379,7 +389,7 @@ export function useConfig() {
 				});
 			}
 		},
-		[state.overlay, state.agents, toggleCheckbox],
+		[state.overlay, state.agents, state.options, toggleCheckbox],
 	);
 
 	const selectFocusedOption = useCallback(() => {
@@ -406,7 +416,9 @@ export function useConfig() {
 		}
 
 		if (isCheckboxOptionColumnField(fieldName)) {
-			const nextValue = computeInlineCheckboxSaveValue(state.options, agent, fieldName, item);
+			const rawValue = computeInlineCheckboxSaveValue(state.options, agent, fieldName, item);
+			const nextValue =
+				rawValue === undefined ? undefined : normalizeOptionCheckboxSaveValues(state.options, fieldName, rawValue);
 			saveFieldValue(agent, state.focus.agentIndex, fieldName, nextValue);
 			return;
 		}

@@ -1820,6 +1820,30 @@ describe("extension loading", () => {
 		expect(result.extensions.map((extension: any) => extension.path)).toEqual([target]);
 	});
 
+	it("matches package-name selectors from extension metadata baseDir package.json", () => {
+		const packageBase = join(tempDir, "extensions", "summarize");
+		const target = join(packageBase, "dist", "index.ts");
+		writeFile(target, "export default function () {}\n");
+		writeFile(join(packageBase, "package.json"), '{"name":"pi-tool-summarize-replacement"}\n');
+
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["pi-tool-summarize-replacement"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{
+					path: target,
+					resolvedPath: target,
+					sourceInfo: {
+						baseDir: packageBase,
+					},
+				},
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([target]);
+	});
+
 	it("preserves protected multi-agent extensions when path segment is exact", () => {
 		const protectedPath = join(tempDir, "extensions", "persistent-task-subagents", "build", "runner.ts");
 		const nonProtectedPath = join(tempDir, "extensions", "not-multi-agents", "evil.ts");
@@ -1871,6 +1895,30 @@ describe("extension loading", () => {
 			sourceInfoProtectedExtension,
 			metadataProtectedExtension,
 		]);
+	});
+
+	it("does not preserve extension when only package.json name is protected", () => {
+		const packageBaseDir = join(tempDir, "extensions", "package-basedir");
+		const resultPath = join(tempDir, "extensions", "package-name-alias.ts");
+		makeDir(packageBaseDir);
+		writeFile(join(packageBaseDir, "package.json"), '{"name":"persistent-task-subagents"}\n');
+		writeFile(resultPath, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{
+					path: resultPath,
+					resolvedPath: resultPath,
+					sourceInfo: {
+						baseDir: packageBaseDir,
+					},
+				},
+			],
+		});
+
+		expect(result.extensions).toEqual([]);
 	});
 
 	it("does not preserve extensions where protected names appear as substrings", () => {
