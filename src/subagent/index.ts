@@ -23,6 +23,7 @@ import { defaultRootPolicy, selectedRootPolicy } from "./depth-policy.js";
 import { filterExtensionsForAgent } from "./extension-filter.js";
 import {
 	ensureMultiAgentsLauncherContext,
+	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
 	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
 	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
 } from "./launcher-contract.js";
@@ -446,6 +447,40 @@ export default function (pi: ExtensionAPI) {
 		store = activeStore;
 		rootLogger.info("root_session_start", { sessionDir: ctx.sessionManager.getSessionDir() });
 		activeStore.load();
+
+		if (process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] === "1") {
+			const requestFile = process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV];
+			if (requestFile?.trim()) {
+				let selectedSessionPath: string | undefined;
+				try {
+					selectedSessionPath = ctx.sessionManager.getSessionFile();
+					if (!selectedSessionPath) {
+						throw new Error("No selected session found.");
+					}
+					writeResumeSessionRestartRequest(requestFile, selectedSessionPath);
+				} catch {
+					clearRestartRequest(requestFile);
+					showMessage(
+						ctx,
+						"Failed to save the selected session resume request. Staying in the current session.",
+						"error",
+					);
+					return;
+				}
+
+				showMessage(ctx, "Restarting Pi with selected session in a fresh process.", "info");
+				requestPiShutdown(ctx, requestFile, {
+					onFailure: () => {
+						showMessage(
+							ctx,
+							`Failed to prepare resume-session restart for "${selectedSessionPath}". Staying in the current session.`,
+							"error",
+						);
+					},
+				});
+			}
+			return;
+		}
 
 		const hasSessionSelection = Boolean(getLatestSelectedRootAgentForSession(ctx));
 		let rootAgent: AgentConfig;

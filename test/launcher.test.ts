@@ -11,6 +11,7 @@ vi.mock("node:child_process", () => ({
 import * as mockedChildProcess from "node:child_process";
 import { buildLauncherArgs, launchPi, MULTI_AGENTS_EXTENSION_ENTRY } from "../src/launcher/pi-agents.js";
 import {
+	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
 	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV_VALUE,
@@ -559,58 +560,29 @@ describe("pi-agents launcher command generation", () => {
 		});
 	});
 
-	it("resolves --resume via picker before launch using local plus all sessions", async () => {
+	it("passes --resume to bootstrap launch and does not preselect a session", async () => {
 		await withTempSessionsDir(async (root, sessionDir) => {
-			const latest = createSessionFile(
-				sessionDir,
-				"latest",
-				[],
-				"/tmp/project",
-				new Date("2024-02-02T00:00:00.000Z"),
-			);
-			const fallback = createSessionFile(
-				sessionDir,
-				"fallback",
-				[],
-				"/tmp/project",
-				new Date("2024-01-01T00:00:00.000Z"),
-			);
-			const globalSessionDir = join(process.env.PI_CODING_AGENT_DIR ?? "", "sessions", "global");
-			mkdirSync(globalSessionDir, { recursive: true });
-			const globalSession = createSessionFile(
-				globalSessionDir,
-				"global",
-				[],
-				"/tmp/other",
-				new Date("2024-03-03T00:00:00.000Z"),
-			);
-			let observed: Array<{ path: string; id: string }> = [];
-			const result = await buildLauncherArgs(["--resume", "--session-dir", sessionDir], {
-				cwd: root,
-				resumePicker: (sessions) => {
-					observed = sessions.map((session) => ({ path: session.path, id: session.id }));
-					return sessions.find((session) => session.path === globalSession)?.path;
-				},
+			const rootConfigExtension = join(root, "extensions", "configured.ts");
+			writeExtensionFile(rootConfigExtension);
+			createSettingsFile(join(launcherAgentDir, "settings.json"), {
+				extensions: [rootConfigExtension],
 			});
-			const sessionIdx = result.args.indexOf("--session");
-			expect(sessionIdx).toBeGreaterThan(-1);
-			expect(result.args[sessionIdx + 1]).toBe(globalSession);
-			expect(result.args).not.toContain("--resume");
-			expect(result.sessionPathUsed).toBe(globalSession);
-			expect(result.sessionPathUsed).not.toBe(latest);
-			expect(observed.map((entry) => entry.path)).toEqual(expect.arrayContaining([latest, fallback, globalSession]));
-			expect(new Set(observed.map((entry) => entry.path)).size).toBe(observed.length);
-		});
-	});
+			const userForcedExtension = join(root, "ext", "forced.ts");
+			writeExtensionFile(userForcedExtension);
 
-	it("does not auto-select --resume without a picker", async () => {
-		await withTempSessionsDir(async (root, sessionDir) => {
-			createSessionFile(sessionDir, "latest", [], "/tmp/project", new Date("2024-02-02T00:00:00.000Z"));
-			const result = await buildLauncherArgs(["--resume", "--session-dir", sessionDir], { cwd: root });
-			expect(result.sessionPathUsed).toBeUndefined();
-			expect(result.skipLaunch).toBe(true);
+			const result = await buildLauncherArgs(
+				["--resume", "--extension", userForcedExtension, "--session-dir", sessionDir],
+				{
+					cwd: root,
+				},
+			);
+			const extensions = collectExtensionValues(result.args);
+			expect(result.args).toContain("--resume");
 			expect(result.args).not.toContain("--session");
-			expect(result.args).toContain("--session-dir");
+			expect(result.sessionPathUsed).toBeUndefined();
+			expect(extensions).toContain(MULTI_AGENTS_EXTENSION_ENTRY);
+			expect(extensions).not.toContain(rootConfigExtension);
+			expect(extensions).not.toContain(userForcedExtension);
 		});
 	});
 
@@ -874,56 +846,52 @@ describe("pi-agents launcher command generation", () => {
 		}
 	});
 
-	it("does not auto-select for --resume without injected picker in non-interactive CLI path", async () => {
+	it("starts a bootstrap pi for --resume without wrapper picker interception", async () => {
 		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
 		spawnSyncMock.mockReset();
-		const originalStdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-		const originalStdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
-		Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
 
 		const root = mkdtempSync(join(tmpdir(), "pi-agents-launch-"));
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const userForcedExtension = join(workDir, "user-forced.ts");
+		const configuredExtension = join(workDir, "configured.ts");
+		writeExtensionFile(userForcedExtension);
+		writeExtensionFile(configuredExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [configuredExtension],
+		});
 		const sessionDir = join(root, "sessions");
 		mkdirSync(sessionDir, { recursive: true });
 		createSessionFile(sessionDir, "recent", [], "/tmp/project");
 
+		const spawnResult = {
+			status: 0,
+			signal: null,
+			stdout: null,
+			stderr: null,
+			output: [],
+			pid: 123,
+		} as any;
+		spawnSyncMock.mockImplementationOnce(() => spawnResult);
 		try {
-			const launchResult = await launchPi(["--resume", "--session-dir", sessionDir], {
-				cwd: root,
-			});
+			const launchResult = await launchPi(
+				["--resume", "--extension", userForcedExtension, "--session-dir", sessionDir],
+				{
+					cwd: root,
+				},
+			);
 			expect(launchResult).toBe(0);
-			expect(spawnSyncMock).not.toHaveBeenCalled();
-		} finally {
-			if (originalStdinTty) {
-				Object.defineProperty(process.stdin, "isTTY", originalStdinTty);
-			} else {
-				delete (process.stdin as { isTTY?: boolean }).isTTY;
-			}
-			if (originalStdoutTty) {
-				Object.defineProperty(process.stdout, "isTTY", originalStdoutTty);
-			} else {
-				delete (process.stdout as { isTTY?: boolean }).isTTY;
-			}
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	it("does not spawn Pi when --resume picker is cancelled", async () => {
-		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
-		spawnSyncMock.mockReset();
-
-		const root = mkdtempSync(join(tmpdir(), "pi-agents-launch-"));
-		const sessionDir = join(root, "sessions");
-		mkdirSync(sessionDir, { recursive: true });
-		try {
-			const launchResult = await launchPi(["--resume", "--session-dir", sessionDir], {
-				cwd: root,
-				resumePicker: () => null,
-			});
-			expect(launchResult).toBe(0);
-			expect(spawnSyncMock).not.toHaveBeenCalled();
+			expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+			const firstCallArgs = spawnSyncMock.mock.calls[0][1] as string[];
+			const firstCallEnv = spawnSyncMock.mock.calls[0][2] as { env?: Record<string, string | undefined> };
+			expect(firstCallArgs).toContain("--resume");
+			expect(firstCallArgs).not.toContain("--session");
+			expect(collectExtensionValues(firstCallArgs)).toEqual([MULTI_AGENTS_EXTENSION_ENTRY]);
+			expect(firstCallEnv?.env?.[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV]).toBe("1");
+			expect(collectExtensionValues(firstCallArgs).includes(configuredExtension)).toBe(false);
+			expect(collectExtensionValues(firstCallArgs).includes(userForcedExtension)).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
+			rmSync(workDir, { recursive: true, force: true });
 		}
 	});
 
@@ -1036,8 +1004,10 @@ describe("pi-agents launcher command generation", () => {
 		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
 		const defaultExtension = join(workDir, "extensions", "default.ts");
 		const plannerExtension = join(workDir, "extensions", "planner.ts");
+		const userForcedExtension = join(workDir, "extensions", "forced.ts");
 		writeExtensionFile(defaultExtension);
 		writeExtensionFile(plannerExtension);
+		writeExtensionFile(userForcedExtension);
 		createSettingsFile(join(launcherAgentDir, "settings.json"), {
 			extensions: [defaultExtension, plannerExtension],
 		});
@@ -1083,16 +1053,19 @@ describe("pi-agents launcher command generation", () => {
 		spawnSyncMock.mockImplementationOnce(() => spawnResult);
 
 		try {
-			const result = await launchPi(["--provider", "openai", "--session-dir", workDir], {
+			const result = await launchPi(["--resume", "--extension", userForcedExtension, "--session-dir", workDir], {
 				cwd: root,
 				restartRequestFile: restartFile,
 			});
 
 			expect(result).toBe(0);
 			expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+			const firstCallArgs = spawnSyncMock.mock.calls[0][1] as string[];
+			expect(collectExtensionValues(firstCallArgs)).toEqual([MULTI_AGENTS_EXTENSION_ENTRY]);
 			const secondArgs = spawnSyncMock.mock.calls[1][1] as string[];
 			const secondExtensions = collectExtensionValues(secondArgs);
 			expect(secondExtensions).toContain(plannerExtension);
+			expect(secondExtensions).toContain(userForcedExtension);
 			expect(secondExtensions).not.toContain(defaultExtension);
 			expect(secondArgs).toContain("--session");
 			expect(secondArgs[secondArgs.indexOf("--session") + 1]).toBe(selectedSessionPath);
@@ -1288,7 +1261,7 @@ describe("pi-agents launcher command generation", () => {
 
 		await withTempSessionsDir(async (sessionRoot, sessionDir) => {
 			const restartFile = join(sessionRoot, "root-restart.json");
-			const sourceSessionPath = createSessionFile(sessionDir, "source", [
+			const _sourceSessionPath = createSessionFile(sessionDir, "source", [
 				{
 					type: "custom",
 					customType: "selected-root-agent",
@@ -1324,7 +1297,6 @@ describe("pi-agents launcher command generation", () => {
 			const result = await launchPi(launchArgs, {
 				cwd: sessionRoot,
 				restartRequestFile: restartFile,
-				resumePicker: contextFlag === "--resume" ? () => sourceSessionPath : undefined,
 			});
 
 			expect(result).toBe(0);

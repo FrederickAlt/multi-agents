@@ -6,18 +6,15 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	DefaultPackageManager,
-	initTheme,
 	type ResolvedResource,
-	type SessionInfo,
 	SessionManager,
-	SessionSelectorComponent,
 	SettingsManager,
 } from "@mariozechner/pi-coding-agent";
-import { getKeybindings, ProcessTerminal, setKeybindings, TUI } from "@mariozechner/pi-tui";
 
 import { type AgentConfig, discoverAgents } from "../subagent/agents.js";
 import { type ExtensionSelection, resolveExtensionsForAgent } from "../subagent/extension-filter.js";
 import {
+	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
 	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV_VALUE,
@@ -33,14 +30,6 @@ interface BuildLaunchResult {
 	env: NodeJS.ProcessEnv;
 	sessionPathUsed?: string;
 	restartFile?: string;
-	skipLaunch?: boolean;
-}
-
-interface SessionIndexEntry {
-	id: string;
-	path: string;
-	cwd: string;
-	modified: number;
 }
 
 interface ParsedLauncherArgState {
@@ -58,28 +47,14 @@ interface ParsedLauncherArgState {
 	args: string[];
 }
 
-export type ResumePicker = (
-	sessions: SessionIndexEntry[],
-) => string | null | undefined | Promise<string | null | undefined>;
-
 export interface LauncherOptions {
 	extensionPath?: string;
 	cwd?: string;
 	piCommand?: string;
 	restartRequestFile?: string;
-	resumePicker?: ResumePicker;
 	// Optional test seams: allow dependency injection for extension resolution.
 	discoverAgentsForLauncher?: () => { agents: AgentConfig[] };
 	resolveExtensionCandidates?: (options: { cwd: string; agentDir: string }) => Promise<ResolvedResource[]>;
-}
-
-function sessionInfoToCandidate(info: SessionInfo): SessionIndexEntry {
-	return {
-		id: info.id,
-		path: info.path,
-		cwd: info.cwd,
-		modified: info.modified.getTime(),
-	};
 }
 
 interface RestartRequest {
@@ -317,23 +292,24 @@ async function resolveSessionArg(
 	return { type: "not_found", arg };
 }
 
-async function listResumeSessionCandidates(cwd: string, localSessionDir: string): Promise<SessionIndexEntry[]> {
-	const [localSessions, allSessions] = await Promise.all([
-		SessionManager.list(cwd, localSessionDir),
-		SessionManager.listAll(),
-	]);
-	const candidates = [...localSessions, ...allSessions].map(sessionInfoToCandidate);
-	const deduped: SessionIndexEntry[] = [];
-	const seen = new Set<string>();
-	for (const candidate of candidates) {
-		if (seen.has(candidate.path)) continue;
-		seen.add(candidate.path);
-		deduped.push(candidate);
+function isResumeBootstrapMode(parsed: ParsedLauncherArgState): boolean {
+	return parsed.resumeSession;
+}
+
+function stripUserProvidedExtensions(args: string[]): string[] {
+	const filtered: string[] = [];
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--extension" || arg === "-e") {
+			i += 1;
+			continue;
+		}
+		if (arg.startsWith("--extension=")) {
+			continue;
+		}
+		filtered.push(arg);
 	}
-	return deduped.sort((a, b) => {
-		if (a.modified !== b.modified) return b.modified - a.modified;
-		return a.path.localeCompare(b.path);
-	});
+	return filtered;
 }
 
 async function getMostRecentSessionPath(localSessionDir: string, cwd: string): Promise<string | undefined> {
@@ -353,60 +329,6 @@ function pickSessionRootAgent(sessionPath: string, sessionDir: string): string |
 		data?: unknown;
 	}>;
 	return getSelectedRootAgentFromSessionEntries(entries);
-}
-
-function initializeResumePickerUi(): void {
-	// SessionSelectorComponent assumes global theme + keybindings are initialized.
-	if (typeof initTheme === "function") {
-		initTheme();
-	}
-	if (typeof setKeybindings === "function" && typeof getKeybindings === "function") {
-		setKeybindings(getKeybindings());
-	}
-}
-
-function promptResumeSelection(cwd: string, localSessionDir: string): Promise<string | null> {
-	if (!process.stdin.isTTY || !process.stdout.isTTY) {
-		return Promise.resolve(null);
-	}
-	initializeResumePickerUi();
-
-	return new Promise((resolve) => {
-		const ui = new TUI(new ProcessTerminal());
-		let resolved = false;
-		const finish = (selectedPath: string | null) => {
-			if (resolved) {
-				return;
-			}
-			resolved = true;
-			try {
-				ui.stop();
-			} finally {
-				resolve(selectedPath);
-			}
-		};
-
-		try {
-			const selector = new SessionSelectorComponent(
-				(onProgress) => SessionManager.list(cwd, localSessionDir, onProgress),
-				(onProgress) => SessionManager.listAll(onProgress),
-				(selectedPath) => finish(selectedPath),
-				() => finish(null),
-				() => {
-					finish(null);
-					process.exit(0);
-				},
-				() => ui.requestRender(),
-				{ showRenameHint: false },
-			);
-
-			ui.addChild(selector);
-			ui.setFocus(selector.getSessionList());
-			ui.start();
-		} catch {
-			finish(null);
-		}
-	});
 }
 
 function stripExplicitAgentArgs(args: string[]): string[] {
@@ -593,9 +515,9 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 	const configuredSessionDir = parsed.sessionDir ?? process.env[ENV_SESSION_DIR];
 	const localSessionDir = resolveSessionDir(configuredSessionDir, cwd);
 
-	let selectedSessionPath: string | undefined;
-	let skipLaunch = false;
+	const isBootstrapResume = isResumeBootstrapMode(parsed);
 
+	let selectedSessionPath: string | undefined;
 	if (!parsed.noSession) {
 		assertNoResumeConflicts(parsed);
 		if (parsed.forkArg) {
@@ -613,14 +535,6 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 				throw new Error(`No session found matching '${resolved.arg}'`);
 			}
 			selectedSessionPath = resolved.path;
-		} else if (parsed.resumeSession) {
-			const sessions = await listResumeSessionCandidates(cwd, localSessionDir);
-			const selected = options.resumePicker ? await Promise.resolve(options.resumePicker(sessions)) : undefined;
-			if (!selected) {
-				skipLaunch = true;
-			} else {
-				selectedSessionPath = selected;
-			}
 		} else if (parsed.continueSession) {
 			selectedSessionPath = await getMostRecentSessionPath(localSessionDir, cwd);
 		}
@@ -630,6 +544,15 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 		? pickSessionRootAgent(selectedSessionPath, localSessionDir)
 		: undefined;
 	let args = [...parsed.args];
+	if (parsed.resumeSession) {
+		const hasResumeArg = args.includes("--resume") || args.includes("-r");
+		if (!hasResumeArg) {
+			args.unshift("--resume");
+		}
+	}
+	if (isBootstrapResume) {
+		args = stripUserProvidedExtensions(args);
+	}
 	if (selectedSessionPath) {
 		args = ensureArg(args, "--session", selectedSessionPath);
 		if (selectedSessionRootAgent) {
@@ -647,20 +570,21 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 		selectedSessionRootAgent,
 		agents: resolver.discoverAgents().agents,
 	});
-	const extensionCandidates = await resolver.resolveExtensionCandidates({ cwd, agentDir });
-	const selection = resolveLauncherExtensions(rootAgent, extensionCandidates);
-	for (const warning of selection.warnings) {
-		console.warn(warning);
-	}
-
 	const hasNoExtensions = args.includes("--no-extensions") || args.includes("-ne");
 	if (!hasNoExtensions) {
 		args.unshift("--no-extensions");
 	}
 
-	for (const selectedExtension of selection.paths) {
-		if (!hasExplicitExtensionArg(args, selectedExtension, cwd)) {
-			args.push("--extension", selectedExtension);
+	if (!isBootstrapResume) {
+		const extensionCandidates = await resolver.resolveExtensionCandidates({ cwd, agentDir });
+		const selection = resolveLauncherExtensions(rootAgent, extensionCandidates);
+		for (const warning of selection.warnings) {
+			console.warn(warning);
+		}
+		for (const selectedExtension of selection.paths) {
+			if (!hasExplicitExtensionArg(args, selectedExtension, cwd)) {
+				args.push("--extension", selectedExtension);
+			}
 		}
 	}
 
@@ -671,8 +595,12 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 	const launchRootAgent = rootAgent.name;
 	const childEnv: NodeJS.ProcessEnv = { ...process.env };
 	delete childEnv[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+	delete childEnv[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
 	childEnv[MULTI_AGENTS_LAUNCHER_ENV] = MULTI_AGENTS_LAUNCHER_ENV_VALUE;
 	childEnv[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV] = restartRequestFile;
+	if (isBootstrapResume) {
+		childEnv[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = "1";
+	}
 	if (!selectedSessionPath) {
 		childEnv[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = launchRootAgent;
 	}
@@ -683,32 +611,11 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 		env: childEnv,
 		restartFile: restartRequestFile,
 		sessionPathUsed: selectedSessionPath,
-		skipLaunch,
 	};
 }
 
 export async function launchPi(args: string[], options: LauncherOptions = {}): Promise<number> {
-	const cwd = options.cwd ?? process.cwd();
-	const parsed = parseLauncherArgs(args);
 	const restartRequestFile = options.restartRequestFile ?? createRestartRequestFilePath();
-	let effectiveResumePicker: ResumePicker | undefined;
-	if (
-		parsed.resumeSession &&
-		!parsed.noSession &&
-		!parsed.sessionArgFlag &&
-		!parsed.forkArgFlag &&
-		!parsed.continueSession &&
-		!options.resumePicker
-	) {
-		const configuredSessionDir = parsed.sessionDir ?? process.env[ENV_SESSION_DIR];
-		const localSessionDir = resolveSessionDir(configuredSessionDir, cwd);
-		const sessions = await listResumeSessionCandidates(cwd, localSessionDir);
-		if (sessions.length === 0) {
-			effectiveResumePicker = () => null;
-		} else {
-			effectiveResumePicker = () => promptResumeSelection(cwd, localSessionDir);
-		}
-	}
 
 	let launchArgs = args;
 	clearRestartRequestFile(restartRequestFile);
@@ -718,12 +625,7 @@ export async function launchPi(args: string[], options: LauncherOptions = {}): P
 		const config = await buildLauncherArgs(launchArgs, {
 			...options,
 			restartRequestFile,
-			resumePicker: options.resumePicker ?? effectiveResumePicker,
 		});
-		effectiveResumePicker = undefined;
-		if (config.skipLaunch) {
-			return 0;
-		}
 
 		// Ensure that stale restart requests from previous runs do not get
 		// accidentally consumed by this launch cycle.
@@ -756,6 +658,6 @@ export async function launchPi(args: string[], options: LauncherOptions = {}): P
 			console.warn("pi-agents: exceeded maximum number of Root-agent restarts. Aborting.");
 			return 1;
 		}
-		launchArgs = rewriteArgsForRestart(args, restartRequest);
+		launchArgs = rewriteArgsForRestart(launchArgs, restartRequest);
 	}
 }

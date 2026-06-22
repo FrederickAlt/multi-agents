@@ -20,7 +20,10 @@ import type { AgentConfig } from "../src/subagent/agents.js";
 import { childPolicy, selectedRootPolicy } from "../src/subagent/depth-policy.js";
 import { filterExtensionsForAgent } from "../src/subagent/extension-filter.js";
 import taskExtension from "../src/subagent/index.js";
-import { MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV } from "../src/subagent/launcher-contract.js";
+import {
+	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
+	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
+} from "../src/subagent/launcher-contract.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
 	FINAL_RESPONSE_REQUIRED_MESSAGE,
@@ -1028,6 +1031,85 @@ describe("extension loading", () => {
 		expect(content).toBe(`{"version":1,"type":"resume-session","sessionPath":"${selectedSessionPath}"}`);
 		expect(shutdownCalls).toBe(1);
 		expect(notices.some((notice) => notice.includes("Restarting Pi with selected session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("requests a resume-session restart during bootstrap session_start", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "bootstrap-resume-session-start.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		const originalBootstrapEnv = process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = "1";
+		const selectedSessionPath = join(tempDir, "selected-session.jsonl");
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		vi.spyOn(sessionManager, "getSessionFile").mockReturnValue(selectedSessionPath);
+		const ctx = {
+			cwd: tempDir,
+			sessionManager,
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+
+		try {
+			await handlers.get("session_start")({ type: "session_start", reason: "startup" }, ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+			if (originalBootstrapEnv === undefined) {
+				delete process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+			} else {
+				process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = originalBootstrapEnv;
+			}
+		}
+
+		expect(readFileSync(restartRequestFile, "utf-8").trim()).toBe(
+			`{"version":1,"type":"resume-session","sessionPath":"${selectedSessionPath}"}`,
+		);
+		expect(shutdownCalls).toBe(1);
+		expect(notices.some((notice) => notice.includes("Restarting Pi with selected session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("stays in bootstrap session_start when resume-session restart request cannot be prepared", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "none", "bootstrap-resume-unwritable.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		const originalBootstrapEnv = process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = "1";
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		vi.spyOn(sessionManager, "getSessionFile").mockReturnValue(join(tempDir, "selected-session.jsonl"));
+		const ctx = {
+			cwd: tempDir,
+			sessionManager,
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+		await handlers.get("session_start")({ type: "session_start", reason: "startup" }, ctx as any);
+		restoreRestartRequestEnv(originalRestartEnv);
+		if (originalBootstrapEnv === undefined) {
+			delete process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+		} else {
+			process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = originalBootstrapEnv;
+		}
+
+		expect(shutdownCalls).toBe(0);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to save the selected session resume request"))).toBe(
+			true,
+		);
 		expect((pi as any)._appendedEntries).toHaveLength(0);
 	});
 
