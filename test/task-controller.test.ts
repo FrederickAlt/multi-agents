@@ -576,6 +576,34 @@ describe("TaskController.execute", () => {
 		expect(details.output).toBe("Task completed successfully!");
 	});
 
+	it("returns extension-selector warnings through Task result warnings path", async () => {
+		mockSession.messages = [
+			{ role: "user", content: "Do something" },
+			{ role: "assistant", content: [{ type: "text", text: "Task completed successfully!" }] },
+		];
+		const extensionWarnings = [
+			`No extension candidates matched selector "missing".`,
+			`Selector "shared" matched 2 extensions; loading all matches.`,
+		];
+		const result = await controller.execute(
+			makeParams(),
+			makeContext({
+				createResourceLoaderFactory: vi.fn(async (_agent, _childRuntime, onWarnings) => {
+					onWarnings?.(extensionWarnings);
+					return mockResourceLoader;
+				}),
+			}),
+		);
+		const details = result.details as TaskDetails;
+		expect(details.warnings).toEqual(extensionWarnings);
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Warnings:");
+		for (const warning of extensionWarnings) {
+			expect(text).toContain(`- ${warning}`);
+			expect(details.warnings).toContain(warning);
+		}
+	});
+
 	it("reports blocking context usage when available", async () => {
 		mockSession.getContextUsage = vi.fn(() => ({ tokens: 68234, contextWindow: 100000, percent: 68.234 }));
 		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "Task completed successfully!" }] }];

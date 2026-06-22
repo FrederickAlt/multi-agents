@@ -294,7 +294,7 @@ export default function (pi: ExtensionAPI) {
 			modelResolver: new PiModelResolver(ctx.modelRegistry),
 			fallbackModel: ctx.model,
 			modelRegistry: ctx.modelRegistry,
-			createResourceLoaderFactory: async (agent, childRuntime) => {
+			createResourceLoaderFactory: async (agent, childRuntime, onWarnings) => {
 				const effectiveCwd = params.cwd || ctx.cwd;
 				const agentDir = getAgentDir();
 				const contextFiles = loadProjectContextFiles({ cwd: effectiveCwd, agentDir });
@@ -303,7 +303,15 @@ export default function (pi: ExtensionAPI) {
 					agentDir,
 					noContextFiles: true,
 					appendSystemPromptOverride: () => [],
-					extensionsOverride: filterExtensionsForAgent(agent, selfPath),
+					extensionsOverride: filterExtensionsForAgent(agent, selfPath, {
+						onWarnings: (warnings) => {
+							runtime.logger?.warn("task_extension_filter", {
+								agent: agent.name,
+								warnings,
+							});
+							onWarnings?.(warnings);
+						},
+					}),
 					extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime, effectiveCwd, contextFiles)],
 					systemPromptOverride: () => agent.systemPrompt,
 				});

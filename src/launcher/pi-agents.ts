@@ -2,12 +2,13 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { DefaultPackageManager, type ResolvedResource, SettingsManager } from "@mariozechner/pi-coding-agent";
 
 import { type AgentConfig, discoverAgents } from "../subagent/agents.js";
+import { type ExtensionSelection, resolveExtensionsForAgent } from "../subagent/extension-filter.js";
 import { MULTI_AGENTS_LAUNCHER_ENV, MULTI_AGENTS_LAUNCHER_ENV_VALUE } from "../subagent/launcher-contract.js";
 import { getSelectedRootAgentFromSessionEntries, resolveRootAgent } from "../subagent/root-agent.js";
 
@@ -41,11 +42,6 @@ interface ParsedLauncherArgState {
 	explicitAgent?: string;
 	defaultRootAgent?: string;
 	args: string[];
-}
-
-interface ExtensionSelection {
-	paths: string[];
-	warnings: string[];
 }
 
 export type ResumePicker = (sessions: SessionIndexEntry[]) => string | null | undefined;
@@ -107,62 +103,6 @@ function getAgentDir(): string {
 	return resolve(homedir(), ".pi", "agent");
 }
 
-function normalizeComparisonPath(value: string): string {
-	const normalized = value.replace(/\\/g, "/").trim();
-	return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function canonicalizePath(value: string): string {
-	if (!value) return "";
-	try {
-		const real = isAbsolute(value) ? value : resolve(process.cwd(), value);
-		return process.platform === "win32" ? real.toLowerCase() : real;
-	} catch {
-		return process.platform === "win32" ? value.toLowerCase() : value;
-	}
-}
-
-function extensionAliasSet(candidate: ResolvedResource): Set<string> {
-	const aliases = new Set<string>();
-	const add = (candidatePath: string | undefined) => {
-		if (!candidatePath) return;
-		aliases.add(normalizeComparisonPath(candidatePath));
-	};
-
-	add(candidate.path);
-	add(candidate.metadata.baseDir ?? "");
-	add(candidate.metadata.source ?? "");
-	add(canonicalizePath(candidate.path));
-	add(basename(candidate.path));
-
-	if (candidate.metadata.source) {
-		add(basename(candidate.metadata.source));
-	}
-	if (candidate.metadata.baseDir) {
-		const baseName = basename(candidate.metadata.baseDir);
-		if (baseName) add(baseName);
-		const rel = relative(candidate.metadata.baseDir, candidate.path);
-		if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
-			const cleanedRel = rel.replace(/\\/g, "/");
-			if (cleanedRel) {
-				add(cleanedRel);
-				add(`${baseName}/${cleanedRel}`);
-			}
-		}
-	}
-
-	if (aliases.has("")) aliases.delete("");
-	return aliases;
-}
-
-function candidateMatchesSelector(candidate: ResolvedResource, selector: string): boolean {
-	const normalizedSelector = normalizeComparisonPath(selector);
-	if (!normalizedSelector) {
-		return false;
-	}
-	return [...extensionAliasSet(candidate)].some((alias) => alias.includes(normalizedSelector));
-}
-
 async function resolveExtensionCandidates(cwd: string, agentDir: string): Promise<ResolvedResource[]> {
 	const settingsManager = SettingsManager.create(cwd, agentDir);
 	const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
@@ -184,41 +124,7 @@ function resolveLauncherRootAgent(params: {
 }
 
 function resolveLauncherExtensions(rootAgent: AgentConfig, candidates: ResolvedResource[]): ExtensionSelection {
-	if (rootAgent.extensions === undefined) {
-		return {
-			paths: candidates.map((candidate) => candidate.path),
-			warnings: [],
-		};
-	}
-
-	if (rootAgent.extensions.length === 0) {
-		return { paths: [], warnings: [] };
-	}
-
-	const warnings: string[] = [];
-	const seen = new Set<string>();
-	const paths: string[] = [];
-
-	for (const selector of rootAgent.extensions) {
-		const normalizedSelector = selector?.trim();
-		if (!normalizedSelector) continue;
-		const matches = candidates.filter((candidate) => candidateMatchesSelector(candidate, normalizedSelector));
-		if (matches.length === 0) {
-			warnings.push(`No extension candidates matched selector "${normalizedSelector}".`);
-			continue;
-		}
-		if (matches.length > 1) {
-			warnings.push(`Selector "${normalizedSelector}" matched ${matches.length} extensions; loading all matches.`);
-		}
-		for (const match of matches) {
-			if (!seen.has(match.path)) {
-				seen.add(match.path);
-				paths.push(match.path);
-			}
-		}
-	}
-
-	return { paths, warnings };
+	return resolveExtensionsForAgent(rootAgent, candidates);
 }
 
 function safeSessionDirFromCwd(cwd: string): string {

@@ -1287,4 +1287,174 @@ describe("extension loading", () => {
 
 		expect(result.extensions.map((extension: any) => extension.path)).toEqual([linkedSelfPath, "<inline:1>"]);
 	});
+
+	it("filters task subagent extensions with no-match selector outcome", () => {
+		const selfPath = join(tempDir, "self-extension.ts");
+		const candidate = join(tempDir, "candidate.ts");
+		writeFile(candidate, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing-extension"] }),
+			selfPath,
+		)({
+			extensions: [{ path: candidate, resolvedPath: candidate }],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([]);
+	});
+
+	it("loads exactly one task extension when a selector has one match", () => {
+		const selected = join(tempDir, "extensions", "load-me.ts");
+		const skipped = join(tempDir, "extensions", "skip-me.ts");
+		writeFile(selected, "export default function () {}\n");
+		writeFile(skipped, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["load-me"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: selected, resolvedPath: selected },
+				{ path: skipped, resolvedPath: skipped },
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([selected]);
+	});
+
+	it("loads all matching task subagent extensions for ambiguous selectors", () => {
+		const sharedA = join(tempDir, "extensions", "shared", "a.ts");
+		const sharedB = join(tempDir, "extensions", "shared", "b.ts");
+		writeFile(sharedA, "export default function () {}\n");
+		writeFile(sharedB, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["extensions/shared"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: sharedA, resolvedPath: sharedA },
+				{ path: sharedB, resolvedPath: sharedB },
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([sharedA, sharedB]);
+	});
+
+	it("supports task extension selectors with path-like values", () => {
+		const target = join(tempDir, "extensions", "path", "layered", "target.ts");
+		writeFile(target, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["path/layered/target.ts"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [{ path: target, resolvedPath: target }],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([target]);
+	});
+
+	it("preserves protected multi-agent extensions when path segment is exact", () => {
+		const protectedPath = join(tempDir, "extensions", "persistent-task-subagents", "build", "runner.ts");
+		const nonProtectedPath = join(tempDir, "extensions", "not-multi-agents", "evil.ts");
+		writeFile(protectedPath, "export default function () {}\n");
+		writeFile(nonProtectedPath, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: protectedPath, resolvedPath: protectedPath },
+				{ path: nonProtectedPath, resolvedPath: nonProtectedPath },
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([protectedPath]);
+	});
+
+	it("preserves protected identity when source metadata has exact protected segment", () => {
+		const sourceInfoProtectedExtension = join(tempDir, "extensions", "sourceinfo-helper.ts");
+		const metadataProtectedExtension = join(tempDir, "extensions", "metadata-helper.ts");
+		const sourceInfoBasedirProtected = "/tmp/persistent-task-subagents/sourceInfo/build";
+		const metadataBasedirProtected = "/var/lib/multi-agents/metadata";
+		writeFile(sourceInfoProtectedExtension, "export default function () {}\n");
+		writeFile(metadataProtectedExtension, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{
+					path: sourceInfoProtectedExtension,
+					resolvedPath: sourceInfoProtectedExtension,
+					sourceInfo: {
+						baseDir: sourceInfoBasedirProtected,
+					},
+				},
+				{
+					path: metadataProtectedExtension,
+					resolvedPath: metadataProtectedExtension,
+					metadata: {
+						baseDir: metadataBasedirProtected,
+					},
+				},
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([
+			sourceInfoProtectedExtension,
+			metadataProtectedExtension,
+		]);
+	});
+
+	it("does not preserve extensions where protected names appear as substrings", () => {
+		const notSegmentProtectedPath = join(tempDir, "extensions", "not-multi-agents", "evil.ts");
+		const pluginLikePath = join(tempDir, "extensions", "my-persistent-task-subagents-plugin", "helper.ts");
+		const sourceInfoSubstringProtectedPath = join(tempDir, "extensions", "sourceinfo-substring.ts");
+		const metadataSubstringProtectedPath = join(tempDir, "extensions", "metadata-substring.ts");
+		writeFile(notSegmentProtectedPath, "export default function () {}\n");
+		writeFile(pluginLikePath, "export default function () {}\n");
+		writeFile(sourceInfoSubstringProtectedPath, "export default function () {}\n");
+		writeFile(metadataSubstringProtectedPath, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: notSegmentProtectedPath, resolvedPath: notSegmentProtectedPath },
+				{ path: pluginLikePath, resolvedPath: pluginLikePath },
+				{
+					path: sourceInfoSubstringProtectedPath,
+					resolvedPath: sourceInfoSubstringProtectedPath,
+					sourceInfo: {
+						baseDir: "/tmp/not-multi-agents/source",
+					},
+				},
+				{
+					path: metadataSubstringProtectedPath,
+					resolvedPath: metadataSubstringProtectedPath,
+					metadata: {
+						baseDir: "/var/lib/my-persistent-task-subagents-plugin",
+					},
+				},
+			],
+		});
+
+		expect(result.extensions).toEqual([]);
+	});
+
+	it("forwards task extension selector warnings through onWarnings", () => {
+		const candidate = join(tempDir, "extensions", "candidate.ts");
+		writeFile(candidate, "export default function () {}\n");
+		const warnings: string[] = [];
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["does-not-exist"] }),
+			join(tempDir, "self-extension.ts"),
+			{
+				onWarnings: (entries) => warnings.push(...entries),
+			},
+		)({
+			extensions: [{ path: candidate, resolvedPath: candidate }],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([]);
+		expect(warnings).toEqual([`No extension candidates matched selector "does-not-exist".`]);
+	});
 });
