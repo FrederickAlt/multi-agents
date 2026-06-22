@@ -92,44 +92,34 @@ function clearRestartRequest(path: string): void {
 	}
 }
 
-function requestPiShutdown(
+type ShutdownResult = { cancelled?: boolean; failed?: boolean };
+
+async function requestPiShutdown(
 	ctx: {
 		newSession?: () => Promise<{ cancelled?: boolean } | undefined> | ({ cancelled?: boolean } | undefined);
 	},
 	restartRequestFile?: string,
 	options: { onCancelled?: () => void; onFailure?: () => void } = {},
-) {
-	let shutdownResult: { cancelled?: boolean } | undefined;
+): Promise<ShutdownResult | undefined> {
 	try {
-		shutdownResult = ctx.newSession?.();
+		const shutdownResult = await ctx.newSession?.();
+		const cancelFlag = !!(shutdownResult && typeof shutdownResult === "object" && shutdownResult.cancelled);
+		if (cancelFlag) {
+			if (restartRequestFile) {
+				clearRestartRequest(restartRequestFile);
+			}
+			options.onCancelled?.();
+			return { cancelled: true };
+		}
+		process.exit(0);
+		return { cancelled: false };
 	} catch {
 		if (restartRequestFile) {
 			clearRestartRequest(restartRequestFile);
 		}
 		options.onFailure?.();
-		return Promise.resolve({ cancelled: false, failed: true });
+		return { cancelled: false, failed: true };
 	}
-
-	return Promise.resolve(shutdownResult)
-		.then((result) => {
-			const cancelFlag = result && typeof result === "object" && "cancelled" in result ? result.cancelled : false;
-			if (cancelFlag) {
-				if (restartRequestFile) {
-					clearRestartRequest(restartRequestFile);
-				}
-				options.onCancelled?.();
-				return { cancelled: true };
-			}
-			process.exit(0);
-			return { cancelled: false };
-		})
-		.catch(() => {
-			if (restartRequestFile) {
-				clearRestartRequest(restartRequestFile);
-			}
-			options.onFailure?.();
-			return { cancelled: false, failed: true };
-		});
 }
 
 // Module-level session manager singleton so both Task and wait_for_agent
