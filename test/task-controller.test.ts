@@ -436,9 +436,16 @@ describe("TaskController.execute", () => {
 		metadataStore.load();
 
 		mockSessionManagerProvider = {
-			openOrCreate: vi.fn(() => ({
-				getSessionFile: () => join(tempDir, "sub-test.jsonl"),
-			})),
+			openOrCreate: vi.fn(() => {
+				const entries: any[] = [];
+				return {
+					getSessionFile: () => join(tempDir, "sub-test.jsonl"),
+					getEntries: () => entries,
+					appendCustomEntry: (customType: string, data: unknown) => {
+						entries.push({ type: "custom", customType, data });
+					},
+				};
+			}),
 		};
 
 		disposeSpy = vi.fn();
@@ -588,7 +595,7 @@ describe("TaskController.execute", () => {
 		const result = await controller.execute(
 			makeParams(),
 			makeContext({
-				createResourceLoaderFactory: vi.fn(async (_agent, _childRuntime, onWarnings) => {
+				createResourceLoaderFactory: vi.fn(async (_agent, _childRuntime, _effectiveCwd, onWarnings) => {
 					onWarnings?.(extensionWarnings);
 					return mockResourceLoader;
 				}),
@@ -1238,10 +1245,47 @@ describe("TaskController.execute", () => {
 
 		const customCwd = join(tempDir, "custom");
 		mkdirSync(customCwd, { recursive: true });
+		const createResourceLoaderFactory = vi.fn().mockResolvedValue(mockResourceLoader);
 
-		const result = await controller.execute(makeParams({ cwd: customCwd }), makeContext());
+		const result = await controller.execute(
+			makeParams({ cwd: customCwd }),
+			makeContext({ createResourceLoaderFactory }),
+		);
 
 		expect(result.details.error).toBeUndefined();
+		expect(createResourceLoaderFactory).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.any(Object),
+			customCwd,
+			expect.any(Function),
+		);
+		expect(mockAgentSessionFactory.create.mock.calls[0][0].cwd).toBe(customCwd);
+		const id = (result.details as TaskDetails).id!;
+		expect(metadataStore.findRecord(id)?.cwd).toBe(customCwd);
+	});
+
+	it("resumes a sub-agent with its recorded cwd even when parent cwd differs", async () => {
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
+		const customCwd = join(tempDir, "custom");
+		const otherParentCwd = join(tempDir, "other-parent");
+		mkdirSync(customCwd, { recursive: true });
+		mkdirSync(otherParentCwd, { recursive: true });
+
+		const first = await controller.execute(makeParams({ cwd: customCwd }), makeContext());
+		const id = (first.details as TaskDetails).id!;
+		const resumeFactory = vi.fn().mockResolvedValue(mockResourceLoader);
+
+		await controller.execute(
+			makeParams({ resume: id }),
+			makeContext({ cwd: otherParentCwd, createResourceLoaderFactory: resumeFactory }),
+		);
+
+		expect(resumeFactory).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.any(Object),
+			customCwd,
+			expect.any(Function),
+		);
 	});
 
 	// ---- Abort signal ----

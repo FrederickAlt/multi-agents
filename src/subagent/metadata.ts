@@ -67,6 +67,8 @@ export interface SubagentRecord {
 	humanName: string;
 	displayName: string;
 	agentType: string;
+	/** Effective working directory used by this sub-agent session. */
+	cwd?: string;
 	sessionFile: string;
 	parentAgentId?: string;
 	depth: number;

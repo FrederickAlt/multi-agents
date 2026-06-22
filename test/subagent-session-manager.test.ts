@@ -16,6 +16,7 @@ import type { AgentConfig } from "../src/subagent/agents.js";
 import type { DebugLogger } from "../src/subagent/debug-logger.js";
 import type { SubagentRecord } from "../src/subagent/metadata.js";
 import { MetadataStore } from "../src/subagent/metadata.js";
+import { SELECTED_ROOT_AGENT_ENTRY_KEY, SELECTED_ROOT_AGENT_ENTRY_TYPE } from "../src/subagent/root-agent.js";
 import {
 	ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS,
 	ABORT_FINAL_SUMMARY_MESSAGE,
@@ -24,6 +25,7 @@ import {
 	type ManagedAgentSession,
 	type ModelResolver,
 	PiAgentSessionFactory,
+	PiSessionManagerProvider,
 	type SessionManagerProvider,
 	type SessionSetupContext,
 	SubagentSessionManager,
@@ -90,8 +92,13 @@ function makeMockSession(tools?: string[]): MockSessionCallbacks & ManagedAgentS
 }
 
 function makeMockPiSessionManager(sessionFile: string) {
+	const entries: any[] = [];
 	return {
 		getSessionFile: () => sessionFile,
+		getEntries: () => entries,
+		appendCustomEntry: (customType: string, data: unknown) => {
+			entries.push({ type: "custom", customType, data });
+		},
 	};
 }
 
@@ -243,13 +250,56 @@ describe("SubagentSessionManager", () => {
 			// Resource loader was created
 			expect(defaultCreateResourceLoader).toHaveBeenCalledWith(agent);
 
-			// Session manager provider was called — record.sessionFile is "" for new records
-			expect(mockSessionManagerProvider.openOrCreate).toHaveBeenCalledWith("", tempDir, tempDir);
+			// Session manager provider was called without the parent sessionDir so
+			// Pi derives the sub-agent session bucket from the sub-agent cwd.
+			expect(mockSessionManagerProvider.openOrCreate).toHaveBeenCalledWith("", undefined, tempDir);
 
 			// Agent session factory received the right args
 			const createArg = mockAgentSessionFactory.create.mock.calls[0][0];
 			expect(createArg.resourceLoader).toBeDefined();
 			expect(createArg.sessionManager).toBeDefined();
+		});
+
+		it("stores new sessions in the sub-agent cwd bucket that native resume lists", async () => {
+			const agentHome = join(tempDir, "agent-home");
+			const parentCwd = join(tempDir, "parent-worktree");
+			const childCwd = join(tempDir, "child-worktree");
+			mkdirSync(agentHome, { recursive: true });
+			mkdirSync(parentCwd, { recursive: true });
+			mkdirSync(childCwd, { recursive: true });
+
+			const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+			process.env.PI_CODING_AGENT_DIR = agentHome;
+			try {
+				const realProvider = new PiSessionManagerProvider();
+				let createdManager: SessionManager | undefined;
+				const provider: SessionManagerProvider = {
+					openOrCreate: vi.fn((sessionFile, sessionDir, cwd) => {
+						createdManager = realProvider.openOrCreate(sessionFile, sessionDir, cwd);
+						return createdManager;
+					}),
+				};
+				const sm = new SubagentSessionManager(provider, mockAgentSessionFactory, undefined);
+				const record = makeRecord("cwd-bucket");
+
+				await sm.getOrCreateSession(record, makeAgent("coder"), [], {
+					...defaultSetupContext,
+					cwd: childCwd,
+				});
+
+				expect(provider.openOrCreate).toHaveBeenCalledWith("", undefined, childCwd);
+				expect(record.cwd).toBe(childCwd);
+				expect(createdManager?.getSessionDir()).not.toBe(metadataStore.ctx.sessionDir);
+
+				createdManager!.appendMessage({ role: "assistant", content: "visible to native resume" } as any);
+				const childSessions = await SessionManager.list(childCwd);
+				const parentSessions = await SessionManager.list(parentCwd);
+				expect(childSessions.some((session) => session.path === createdManager!.getSessionFile())).toBe(true);
+				expect(parentSessions.some((session) => session.path === createdManager!.getSessionFile())).toBe(false);
+			} finally {
+				if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+				else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+			}
 		});
 
 		it("calls modelResolver.resolve with agent.model and fallbackModel", async () => {
@@ -292,7 +342,7 @@ describe("SubagentSessionManager", () => {
 			expect(warnings).not.toContain(expect.stringContaining("bash"));
 		});
 
-		it("persists sessionFile to metadata via upsertRecord", async () => {
+		it("persists sessionFile and cwd to metadata via upsertRecord", async () => {
 			const sm = createManager();
 			const record = makeRecord("persist-sf");
 			expect(record.sessionFile).toBe("");
@@ -303,6 +353,21 @@ describe("SubagentSessionManager", () => {
 			// Metadata store should have it
 			const stored = metadataStore.findRecord(record.id);
 			expect(stored?.sessionFile).toBe(join(tempDir, "sub-test.jsonl"));
+			expect(stored?.cwd).toBe(tempDir);
+		});
+
+		it("stamps the sub-agent persona into the session for launcher resume", async () => {
+			const piSessionManager = makeMockPiSessionManager(join(tempDir, "sub-test.jsonl"));
+			mockSessionManagerProvider.openOrCreate = vi.fn(() => piSessionManager as unknown as SessionManager);
+			const sm = createManager();
+
+			await sm.getOrCreateSession(makeRecord("persona-stamp"), makeAgent("coder"), [], defaultSetupContext);
+
+			expect(piSessionManager.getEntries()).toContainEqual({
+				type: "custom",
+				customType: SELECTED_ROOT_AGENT_ENTRY_TYPE,
+				data: { [SELECTED_ROOT_AGENT_ENTRY_KEY]: "coder" },
+			});
 		});
 
 		it("agent_end event updates record.updatedAt via metadata store", async () => {

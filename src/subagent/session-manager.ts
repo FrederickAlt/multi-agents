@@ -23,6 +23,11 @@ export type ResolvedModel = Pick<Model<any>, "id" | "provider"> & Partial<Model<
 
 import type { AgentConfig } from "./agents.js";
 import { readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
+import {
+	getSelectedRootAgentFromSessionEntries,
+	SELECTED_ROOT_AGENT_ENTRY_KEY,
+	SELECTED_ROOT_AGENT_ENTRY_TYPE,
+} from "./root-agent.js";
 import { type DebugLogger, makeNoopDebugLogger } from "./debug-logger.js";
 import type { SubagentRecord, TerminalOutcome } from "./metadata.js";
 import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
@@ -65,7 +70,7 @@ export interface ManagedAgentSession {
  * Adapter for opening or creating a Pi session manager file on disk.
  */
 export interface SessionManagerProvider {
-	openOrCreate(sessionFile: string, sessionDir: string, cwd: string): SessionManager;
+	openOrCreate(sessionFile: string, sessionDir: string | undefined, cwd: string): SessionManager;
 }
 
 /**
@@ -100,8 +105,8 @@ export interface ModelResolver {
 // ---------------------------------------------------------------------------
 
 export class PiSessionManagerProvider implements SessionManagerProvider {
-	openOrCreate(sessionFile: string, sessionDir: string, cwd: string): SessionManager {
-		return fs.existsSync(sessionFile)
+	openOrCreate(sessionFile: string, sessionDir: string | undefined, cwd: string): SessionManager {
+		return sessionFile && fs.existsSync(sessionFile)
 			? SessionManager.open(sessionFile, sessionDir, cwd)
 			: SessionManager.create(cwd, sessionDir);
 	}
@@ -334,15 +339,27 @@ export class SubagentSessionManager {
 			throw error;
 		}
 
-		// 2. Open or create Pi session manager
-		const sessionDir = metadataStore.ctx.sessionDir;
+		// 2. Open or create Pi session manager. Sub-agent sessions intentionally
+		// use Pi's default cwd-derived session directory instead of inheriting the
+		// parent Root session directory, so native /resume groups them under their
+		// own working tree.
+		const sessionDir = undefined;
 		sessionLogger.debug("session_manager_open", { sessionDir, existingFile: !!record.sessionFile });
 		const piSessionManager = this.sessionManagerProvider.openOrCreate(record.sessionFile, sessionDir, cwd);
 
-		// 3. Persist session file back to the record
+		// 3. Persist session file/cwd back to the record and stamp the session with
+		// the sub-agent persona so launcher-mediated native resume can restart it
+		// with the same Agent definition.
+		record.cwd = cwd;
 		record.sessionFile = piSessionManager.getSessionFile() ?? record.sessionFile;
+		const selectedRootAgent = getSelectedRootAgentFromSessionEntries(piSessionManager.getEntries() as any[]);
+		if (selectedRootAgent !== agent.name) {
+			piSessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+				[SELECTED_ROOT_AGENT_ENTRY_KEY]: agent.name,
+			});
+		}
 		metadataStore.upsertRecord(record);
-		sessionLogger.debug("session_file_persisted", { sessionFile: record.sessionFile });
+		sessionLogger.debug("session_file_persisted", { sessionFile: record.sessionFile, cwdLength: cwd.length });
 
 		// 4. Resolve model
 		const model = modelResolver.resolve(agent.model, fallbackModel, warnings);

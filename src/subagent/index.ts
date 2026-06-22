@@ -360,8 +360,7 @@ export default function (pi: ExtensionAPI) {
 			modelResolver: new PiModelResolver(ctx.modelRegistry),
 			fallbackModel: ctx.model,
 			modelRegistry: ctx.modelRegistry,
-			createResourceLoaderFactory: async (agent, childRuntime, onWarnings) => {
-				const effectiveCwd = params.cwd || ctx.cwd;
+			createResourceLoaderFactory: async (agent, childRuntime, effectiveCwd, onWarnings) => {
 				const agentDir = getAgentDir();
 				const contextFiles = loadProjectContextFiles({ cwd: effectiveCwd, agentDir });
 				const loader = new DefaultResourceLoader({

@@ -175,6 +175,7 @@ export interface TaskExecuteContext {
 	createResourceLoaderFactory: (
 		agent: AgentConfig,
 		childRuntime: RuntimeContext,
+		effectiveCwd: string,
 		onWarnings?: (warnings: string[]) => void,
 	) => Promise<DefaultResourceLoader>;
 	/** Optional streaming update callback (used for progress emission). */
@@ -264,6 +265,20 @@ function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined
 
 function isPendingToolDiagnostic(text: string | undefined): boolean {
 	return /^Last transcript activity: assistant was executing tool\b/.test(text ?? "");
+}
+
+function readSessionHeaderCwd(sessionFile: string | undefined): string | undefined {
+	if (!sessionFile) return undefined;
+	try {
+		const firstLine = readFileSync(sessionFile, "utf-8").split("\n")[0];
+		if (!firstLine?.trim()) return undefined;
+		const header = JSON.parse(firstLine) as { type?: unknown; cwd?: unknown };
+		return header.type === "session" && typeof header.cwd === "string" && header.cwd.trim()
+			? header.cwd
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -618,7 +633,7 @@ export class TaskController {
 	 * returned as structured error results — this method never throws.
 	 */
 	async execute(params: TaskExecuteParams, context: TaskExecuteContext): Promise<TaskResult> {
-		const effectiveCwd = params.cwd || context.cwd;
+		const requestedCwd = params.cwd || context.cwd;
 		const {
 			runtime,
 			agentDiscovery,
@@ -643,7 +658,7 @@ export class TaskController {
 			subagentType: params.subagent_type,
 			resumed: Boolean(params.resume),
 			blocking: params.blocking !== false,
-			cwdLength: effectiveCwd.length,
+			cwdLength: requestedCwd.length,
 		});
 		runLogger.info("task_run_start", {
 			promptLength: params.prompt.length,
@@ -715,6 +730,9 @@ export class TaskController {
 		});
 		const { agent } = resolved;
 		let record = resolved.record;
+		const effectiveCwd = record
+			? record.cwd || readSessionHeaderCwd(record.sessionFile) || requestedCwd
+			: requestedCwd;
 
 		// c. Check task permission via DepthPolicy
 		const taskCheck = checkTaskAllowed(runtime.depthPolicy, agent.name);
@@ -740,6 +758,8 @@ export class TaskController {
 			});
 			try {
 				record = await metadataStore.allocateRecord(agent.name, runtime.parentAgentId, runtime.treeDepth + 1);
+				record.cwd = effectiveCwd;
+				metadataStore.upsertRecord(record);
 				runLogger.info("task_record_allocated", {
 					recordId: record?.id,
 					displayName: record?.displayName,
@@ -822,7 +842,7 @@ export class TaskController {
 				};
 				let resourceLoader: DefaultResourceLoader;
 				try {
-					resourceLoader = await createResourceLoaderFactory(agent, childRuntime, reportWarnings);
+					resourceLoader = await createResourceLoaderFactory(agent, childRuntime, effectiveCwd, reportWarnings);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					return {
