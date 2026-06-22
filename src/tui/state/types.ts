@@ -69,6 +69,7 @@ export interface DiscoveredOptions {
 	 */
 	toolExtensionNames?: Record<string, string[]>;
 	extensions: string[];
+	extensionAliases?: Record<string, string[]>;
 	models: ModelOption[];
 	/**
 	 * Display name of the runtime default model (first available with auth).

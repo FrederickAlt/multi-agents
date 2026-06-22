@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AgentConfig } from "../src/subagent/agents.js";
-import { resolveRootAgent } from "../src/subagent/root-agent.js";
+import {
+	getSelectedRootAgentFromSessionEntries,
+	resolveRootAgent,
+	SELECTED_ROOT_AGENT_ENTRY_KEY,
+	SELECTED_ROOT_AGENT_ENTRY_TYPE,
+} from "../src/subagent/root-agent.js";
 
 function makeAgent(name: string): AgentConfig {
 	return {
@@ -50,5 +55,40 @@ describe("resolveRootAgent", () => {
 				defaultRootAgent: "missing",
 			}),
 		).toThrow('Default Root agent "missing" was not found');
+	});
+
+	it("reads the latest selected-root-agent custom entry from session entries", () => {
+		const entries = [
+			{ type: "session", customType: undefined as string | undefined },
+			{
+				type: "custom",
+				customType: SELECTED_ROOT_AGENT_ENTRY_TYPE,
+				data: { [SELECTED_ROOT_AGENT_ENTRY_KEY]: "planner" },
+			},
+			{ type: "custom", customType: "other", data: { [SELECTED_ROOT_AGENT_ENTRY_KEY]: "customroot" } },
+			{
+				type: "custom",
+				customType: SELECTED_ROOT_AGENT_ENTRY_TYPE,
+				data: { [SELECTED_ROOT_AGENT_ENTRY_KEY]: "reviewer" },
+			},
+		];
+		expect(getSelectedRootAgentFromSessionEntries(entries)).toBe("reviewer");
+	});
+
+	it("ignores malformed selected-root-agent custom entries", () => {
+		expect(
+			getSelectedRootAgentFromSessionEntries([
+				{
+					type: "custom",
+					customType: SELECTED_ROOT_AGENT_ENTRY_TYPE,
+					data: 42,
+				},
+				{
+					type: "custom",
+					customType: SELECTED_ROOT_AGENT_ENTRY_TYPE,
+					data: { selectedRootAgent: "  " },
+				},
+			]),
+		).toBeUndefined();
 	});
 });

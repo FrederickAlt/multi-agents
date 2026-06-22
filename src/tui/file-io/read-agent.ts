@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { aliasesMatchSelector } from "../../subagent/extension-filter.js";
 import { parseFrontmatter } from "../pi-compat.js";
 import type { AgentConfigState } from "../state/types.js";
 
@@ -97,6 +98,7 @@ export function detectStaleItems(
 	availableExtensions: string[],
 	availableSkills: string[],
 	availablePromptParts: string[],
+	extensionAliases?: Record<string, string[]>,
 ): void {
 	const agentNameSet = new Set(allAgentNames);
 	const toolsSet = new Set(availableTools);
@@ -111,17 +113,30 @@ export function detectStaleItems(
 		agent.staleItems = {};
 
 		checkStale(fm.tools, toolsSet, agent, "tools");
-		checkStale(fm.extensions, extSet, agent, "extensions");
+		checkStale(fm.extensions, extSet, agent, "extensions", extensionAliases);
 		checkStale(fm.can_spawn, agentNameSet, agent, "can_spawn");
 		checkStale(fm.skills, skillsSet, agent, "skills");
 		checkStale(fm.prompt_parts, ppSet, agent, "prompt_parts");
 	}
 }
 
-function checkStale(raw: unknown, valid: Set<string>, agent: AgentConfigState, fieldName: string): void {
+function checkStale(
+	raw: unknown,
+	valid: Set<string>,
+	agent: AgentConfigState,
+	fieldName: string,
+	extensionAliases?: Record<string, string[]>,
+): void {
 	if (raw === undefined || raw === null) return;
 	const items = Array.isArray(raw) ? raw.map(String) : [String(raw)];
-	const stale = items.filter((item) => item && !valid.has(item));
+	const stale = items.filter((item) => {
+		if (!item) return false;
+		if (valid.has(item)) return false;
+		if (fieldName === "extensions" && extensionAliases) {
+			return !Object.values(extensionAliases).some((aliases) => aliasesMatchSelector(item, aliases));
+		}
+		return true;
+	});
 	if (stale.length > 0) {
 		agent.staleItems[fieldName] = stale;
 	}

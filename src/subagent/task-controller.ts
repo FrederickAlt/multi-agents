@@ -172,7 +172,11 @@ export interface TaskExecuteContext {
 	modelResolver: ModelResolver;
 	fallbackModel?: ResolvedModel;
 	modelRegistry?: any;
-	createResourceLoaderFactory: (agent: AgentConfig, childRuntime: RuntimeContext) => Promise<DefaultResourceLoader>;
+	createResourceLoaderFactory: (
+		agent: AgentConfig,
+		childRuntime: RuntimeContext,
+		onWarnings?: (warnings: string[]) => void,
+	) => Promise<DefaultResourceLoader>;
 	/** Optional streaming update callback (used for progress emission). */
 	onUpdate?: (partial: TaskResult) => void;
 	/**
@@ -812,9 +816,13 @@ export class TaskController {
 				};
 
 				// Obtain the resource loader via the injected factory
+				const reportWarnings = (entries: string[]) => {
+					if (!entries || entries.length === 0) return;
+					warnings.push(...entries);
+				};
 				let resourceLoader: DefaultResourceLoader;
 				try {
-					resourceLoader = await createResourceLoaderFactory(agent, childRuntime);
+					resourceLoader = await createResourceLoaderFactory(agent, childRuntime, reportWarnings);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					return {

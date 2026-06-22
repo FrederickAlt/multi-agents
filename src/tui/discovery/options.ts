@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { extensionAliasSet } from "../../subagent/extension-filter.js";
 import type { ModelOption } from "../state/types.js";
 
 type LoadedPiExtension = {
@@ -12,6 +13,10 @@ type LoadedPiExtension = {
 		source?: string;
 		origin?: string;
 		scope?: string;
+		baseDir?: string;
+	};
+	metadata?: {
+		source?: string;
 		baseDir?: string;
 	};
 	tools?: Map<string, unknown>;
@@ -111,6 +116,22 @@ function getExtensionNameCandidates(extension: {
 	return candidates;
 }
 
+export type ExtensionAliasMap = Record<string, string[]>;
+
+function addUniqueNameToAliasSet(
+	aliasesByExtension: ExtensionAliasMap,
+	extensionName: string | undefined,
+	aliases: string[],
+) {
+	if (!extensionName) return;
+	if (aliases.length === 0) return;
+	const merged = aliasesByExtension[extensionName] ?? [];
+	for (const alias of aliases) {
+		addUniqueName(merged, alias);
+	}
+	aliasesByExtension[extensionName] = merged;
+}
+
 function displayNameFromExtension(extension: {
 	path?: string;
 	resolvedPath?: string;
@@ -137,6 +158,7 @@ export interface PiRuntimeDiscovery {
 	tools: string[];
 	toolExtensionNames: Record<string, string[]>;
 	extensions: string[];
+	extensionAliases?: ExtensionAliasMap;
 	skills: string[];
 }
 
@@ -199,12 +221,22 @@ export async function discoverPiRuntimeResources(
 	for (const tool of dynamicTools) toolSet.add(tool.name);
 
 	const extensionSet = new Set<string>();
+	const extensionAliases: ExtensionAliasMap = {};
 	const extensions = loader.getExtensions().extensions ?? [];
 	const sourceToExtensionCandidates = new Map<string, string[]>();
 	for (const extension of extensions) {
 		const extensionName = displayNameFromExtension(extension);
 		if (extensionName) extensionSet.add(extensionName);
 		const candidates = getExtensionNameCandidates(extension);
+		const aliasCandidates = [
+			...extensionAliasSet({
+				path: extension.path,
+				resolvedPath: extension.resolvedPath,
+				sourceInfo: extension.sourceInfo,
+				metadata: extension.metadata,
+			}),
+		];
+		addUniqueNameToAliasSet(extensionAliases, extensionName, aliasCandidates);
 		const source = extension.sourceInfo?.source;
 		if (source) sourceToExtensionCandidates.set(source, candidates);
 		if (extension.path) sourceToExtensionCandidates.set(extension.path, candidates);
@@ -233,6 +265,7 @@ export async function discoverPiRuntimeResources(
 		tools: [...toolSet].sort(),
 		toolExtensionNames,
 		extensions: [...extensionSet].sort(),
+		extensionAliases,
 		skills: [...skillSet].sort(),
 	};
 }

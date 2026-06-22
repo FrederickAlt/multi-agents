@@ -7,7 +7,7 @@
  * Coverage:
  * - Sidecar path calculation
  * - Load / save with fallback for missing or corrupt files
- * - Selected Root agent persistence
+ * - Record persistence for sub-agent metadata
  * - Concurrent Task allocation (record ID + human name under lock)
  * - Timestamp persistence (touchRecord, upsertRecord)
  * - Cleanup of Sub-agent session files
@@ -124,38 +124,57 @@ describe("MetadataStore", () => {
 			expect(meta2.records[0].id).toBe("abcd1234");
 		});
 
+		it("drops legacy selectedMainAgent from loaded sidecar files", () => {
+			const ctx = makeCtx(tempDir, "legacy");
+			const store = new MetadataStore(ctx);
+			wfs(
+				store.path,
+				JSON.stringify({ version: 1, mainSessionId: "legacy", records: [], selectedMainAgent: "planner" }),
+				"utf-8",
+			);
+
+			const loaded = store.load();
+			expect((loaded as { selectedMainAgent?: unknown }).selectedMainAgent).toBeUndefined();
+			store.save();
+
+			const reread = JSON.parse(readFileSync(store.path, "utf-8")) as { [key: string]: unknown };
+			expect(reread.selectedMainAgent).toBeUndefined();
+		});
+
 		it("returns cached metadata on repeated calls without re-reading", () => {
 			const store = new MetadataStore(makeCtx(tempDir, "cached"));
 			const meta1 = store.load();
-			meta1.selectedMainAgent = "scout";
+			meta1.records.push(makeRecord("agent-1"));
 
 			// Modify on disk behind the store's back
 			wfs(
 				store.path,
-				JSON.stringify({ version: 1, mainSessionId: "cached", records: [], selectedMainAgent: "worker" }),
+				JSON.stringify({ version: 1, mainSessionId: "cached", records: [makeRecord("worker")] }),
 				"utf-8",
 			);
 
-			// load() should still return cached copy (without selectedMainAgent)
+			// load() should still return cached copy
 			const meta2 = store.load();
-			expect(meta2.selectedMainAgent).toBe("scout");
+			expect(meta2.records).toHaveLength(1);
+			expect(meta2.records[0].id).toBe("agent-1");
 		});
 
 		it("reload() ignores cache and re-reads from disk", () => {
 			const store = new MetadataStore(makeCtx(tempDir, "reload-test"));
 			const meta1 = store.load();
-			meta1.selectedMainAgent = "scout";
+			meta1.records.push(makeRecord("agent-1"));
 
 			// Modify on disk
 			wfs(
 				store.path,
-				JSON.stringify({ version: 1, mainSessionId: "reload-test", records: [], selectedMainAgent: "worker" }),
+				JSON.stringify({ version: 1, mainSessionId: "reload-test", records: [makeRecord("worker")] }),
 				"utf-8",
 			);
 
 			// reload() should re-read from disk
 			const meta2 = store.reload();
-			expect(meta2.selectedMainAgent).toBe("worker");
+			expect(meta2.records).toHaveLength(1);
+			expect(meta2.records[0].id).toBe("worker");
 		});
 
 		it("falls back to clean file for corrupt JSON", () => {
@@ -188,9 +207,10 @@ describe("MetadataStore", () => {
 	describe("save", () => {
 		it("writes pretty-printed JSON", () => {
 			const store = new MetadataStore(makeCtx(tempDir, "pretty"));
-			store.selectedMainAgent = "planner";
+			store.records.push(makeRecord("planner"));
+			store.save();
 			const raw = readFileSync(store.path, "utf-8");
-			expect(raw).toContain('"selectedMainAgent"');
+			expect(raw).toContain('"records"');
 			expect(raw).toContain('"planner"');
 			expect(raw).toContain("\n  ");
 		});
@@ -267,16 +287,15 @@ describe("MetadataStore", () => {
 
 		it("clears in-memory cache after cleanup", () => {
 			const store = new MetadataStore(makeCtx(tempDir, "cache-clear"));
-			store.load();
-			store.selectedMainAgent = "reviewer";
+			const record = makeRecord("reviewer");
+			store.load().records.push(record);
+			store.save();
 			store.cleanup();
 
 			// After cleanup, load should return a fresh empty file
 			const meta = store.load();
-			expect(meta.selectedMainAgent).toBeUndefined();
 			expect(meta.records).toEqual([]);
 		});
-
 		it("survives when a sub-session file referenced in records doesn't exist", () => {
 			const store = new MetadataStore(makeCtx(tempDir, "missing-subs"));
 			const meta = store.load();
@@ -288,52 +307,6 @@ describe("MetadataStore", () => {
 
 			expect(() => store.cleanup()).not.toThrow();
 			expect(existsSync(store.path)).toBe(false);
-		});
-	});
-
-	// ---- SelectedMainAgent ----
-
-	describe("selectedMainAgent", () => {
-		it("defaults to undefined", () => {
-			const store = new MetadataStore(makeCtx(tempDir, "default-agent"));
-			expect(store.selectedMainAgent).toBeUndefined();
-		});
-
-		it("persists the selected agent across store instances", () => {
-			const store1 = new MetadataStore(makeCtx(tempDir, "agent-persist"));
-			store1.selectedMainAgent = "scout";
-			expect(store1.selectedMainAgent).toBe("scout");
-
-			const store2 = new MetadataStore(makeCtx(tempDir, "agent-persist"));
-			expect(store2.selectedMainAgent).toBe("scout");
-		});
-
-		it("can be set to undefined to clear selection", () => {
-			const store = new MetadataStore(makeCtx(tempDir, "clear-agent"));
-			store.selectedMainAgent = "planner";
-			expect(store.selectedMainAgent).toBe("planner");
-
-			store.selectedMainAgent = undefined;
-			expect(store.selectedMainAgent).toBeUndefined();
-		});
-
-		it("auto-saves without needing an explicit save() call", () => {
-			const store = new MetadataStore(makeCtx(tempDir, "auto-save"));
-			store.selectedMainAgent = "worker";
-
-			// Read the file directly
-			const raw = JSON.parse(readFileSync(store.path, "utf-8")) as MetadataFile;
-			expect(raw.selectedMainAgent).toBe("worker");
-		});
-
-		it("replaces previous value when set multiple times", () => {
-			const store = new MetadataStore(makeCtx(tempDir, "replace-agent"));
-			store.selectedMainAgent = "scout";
-			store.selectedMainAgent = "planner";
-			expect(store.selectedMainAgent).toBe("planner");
-
-			const store2 = new MetadataStore(makeCtx(tempDir, "replace-agent"));
-			expect(store2.selectedMainAgent).toBe("planner");
 		});
 	});
 
@@ -584,10 +557,12 @@ describe("MetadataStore", () => {
 				getSessionFile: () => join(tempDir, "sm-working.jsonl"),
 			};
 			const store = MetadataStore.fromSessionManager(sm);
-			store.selectedMainAgent = "scout";
+			store.records.push(makeRecord("scout"));
+			store.save();
 
 			const store2 = MetadataStore.fromSessionManager(sm);
-			expect(store2.selectedMainAgent).toBe("scout");
+			expect(store2.records).toHaveLength(1);
+			expect(store2.records[0].id).toBe("scout");
 		});
 
 		it("handles undefined sessionFile gracefully", () => {
@@ -599,7 +574,8 @@ describe("MetadataStore", () => {
 			const store = MetadataStore.fromSessionManager(sm);
 			expect(store.ctx.sessionFile).toBeUndefined();
 			// Should not throw on save
-			store.selectedMainAgent = "reviewer";
+			store.records.push(makeRecord("reviewer"));
+			store.save();
 			expect(existsSync(store.path)).toBe(true);
 		});
 	});

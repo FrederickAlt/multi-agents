@@ -15,17 +15,13 @@
     "node": ">=20.0.0"
   },
   "bin": {
-    "pi-agent-config": "./src/tui/cli.ts"
+    "pi-agent-config": "./src/tui/cli.ts",
+    "pi-agents": "./src/launcher/cli.ts"
   },
   "files": [
     "src/**/*",
     "README.md"
   ],
-  "pi": {
-    "extensions": [
-      "./src/subagent/index.ts"
-    ]
-  },
   "devDependencies": {
     "@biomejs/biome": "2.3.5",
     "@types/node": "^22.10.5",

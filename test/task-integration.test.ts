@@ -4,7 +4,7 @@
  * Tests extension loading, tool registration, command handlers.
  * LLM-dependent tests require API_KEY from env.
  */
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync as wfs } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
@@ -21,9 +21,14 @@ import { childPolicy, selectedRootPolicy } from "../src/subagent/depth-policy.js
 import { filterExtensionsForAgent } from "../src/subagent/extension-filter.js";
 import taskExtension from "../src/subagent/index.js";
 import {
+	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
+	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
+} from "../src/subagent/launcher-contract.js";
+import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
 	FINAL_RESPONSE_REQUIRED_MESSAGE,
 } from "../src/subagent/output-extraction.js";
+import { SELECTED_ROOT_AGENT_ENTRY_KEY, SELECTED_ROOT_AGENT_ENTRY_TYPE } from "../src/subagent/root-agent.js";
 import { configureTaskToolForRuntime } from "../src/subagent/task-tool-registration.js";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +37,14 @@ import { configureTaskToolForRuntime } from "../src/subagent/task-tool-registrat
 
 function makeDir(p: string) {
 	mkdirSync(p, { recursive: true });
+}
+
+function restoreRestartRequestEnv(previousValue: string | undefined): void {
+	if (previousValue === undefined) {
+		delete process.env.PI_MULTI_AGENTS_RESTART_FILE;
+	} else {
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = previousValue;
+	}
 }
 
 function writeFile(p: string, content: string) {
@@ -47,6 +60,7 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 	const sentMessages: Array<{ message: any; options?: any }> = [];
 	const nextTurnMessages: any[] = [];
 	const followUpMessages: any[] = [];
+	const appendedEntries: Array<{ customType: string; data?: any }> = [];
 	let activeTools = [...(options.activeTools ?? ["read", "bash", "edit", "write"])];
 	const pi = {
 		on: (event: string, handler: any) => handlers.set(event, handler),
@@ -54,6 +68,9 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 			registeredTools.push(tool);
 		},
 		registerCommand: (name: string, command: any) => commands.set(name, command),
+		appendEntry: (customType: string, data?: any) => {
+			appendedEntries.push({ customType, data });
+		},
 		sendMessage: (message: any, options?: any) => {
 			sentMessages.push({ message, options });
 			if (options?.deliverAs === "nextTurn") nextTurnMessages.push(message);
@@ -74,6 +91,7 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 			return [text, ...queued.map((message) => String(message.content ?? ""))].join("\n\n");
 		},
 		_getActiveTools: () => [...activeTools],
+		_appendedEntries: appendedEntries,
 	} as any;
 	return { pi, handlers, commands, flags };
 }
@@ -83,6 +101,7 @@ function makeSessionManager(dir: string, sessionId: string) {
 		getSessionDir: () => dir,
 		getSessionId: () => sessionId,
 		getSessionFile: () => join(dir, `${sessionId}.jsonl`),
+		getEntries: () => [],
 	};
 }
 
@@ -490,6 +509,123 @@ describe("extension loading", () => {
 		expect(result?.systemPrompt).toContain("- read: Read file contents");
 	});
 
+	it("appends selected-root-agent custom entry during session_start", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		await handlers.get("session_start")({ type: "session_start", reason: "startup" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+
+		const selectedEntries = (pi as any)._appendedEntries.filter(
+			(entry: { customType: string; data: unknown }) => entry.customType === SELECTED_ROOT_AGENT_ENTRY_TYPE,
+		);
+		expect(selectedEntries).toHaveLength(1);
+		expect(selectedEntries[0]?.data).toMatchObject({ [SELECTED_ROOT_AGENT_ENTRY_KEY]: "default" });
+	});
+
+	it("appends selected-root-agent custom entry on reload when no valid existing selection exists", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		await handlers.get("session_start")({ type: "session_start", reason: "reload" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+
+		const selectedEntries = (pi as any)._appendedEntries.filter(
+			(entry: { customType: string; data: unknown }) => entry.customType === SELECTED_ROOT_AGENT_ENTRY_TYPE,
+		);
+		expect(selectedEntries).toHaveLength(1);
+		expect(selectedEntries[0]?.data).toMatchObject({ [SELECTED_ROOT_AGENT_ENTRY_KEY]: "default" });
+	});
+
+	it("does not append duplicate selected-root-agent custom entry when session already has matching selection", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const baseSessionManager = SessionManager.create(tempDir, tempDir);
+		const sessionManager = {
+			getSessionDir: () => baseSessionManager.getSessionDir(),
+			getSessionId: () => baseSessionManager.getSessionId(),
+			getSessionFile: () => baseSessionManager.getSessionFile(),
+			getEntries: () =>
+				(pi as any)._appendedEntries.map((entry: { customType: string; data: unknown }) => ({
+					type: "custom",
+					customType: entry.customType,
+					data: entry.data,
+					id: "dummy",
+					parentId: null,
+					timestamp: "",
+				})),
+		};
+
+		await handlers.get("session_start")({ type: "session_start", reason: "startup" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+		expect((pi as any)._appendedEntries).toHaveLength(1);
+
+		await handlers.get("session_start")({ type: "session_start", reason: "reload" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+
+		expect((pi as any)._appendedEntries).toHaveLength(1);
+	});
+
+	it("uses the latest selected-root-agent custom entry from session JSONL", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+			[SELECTED_ROOT_AGENT_ENTRY_KEY]: "explorer",
+		});
+		sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+			[SELECTED_ROOT_AGENT_ENTRY_KEY]: "planner",
+		});
+
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
+
+		expect(result?.systemPrompt).toContain("software architect and planning specialist");
+	});
+
+	it("prefers existing session selection over the launch --agent flag", async () => {
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("agent", "planner");
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+			[SELECTED_ROOT_AGENT_ENTRY_KEY]: "explorer",
+		});
+
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
+
+		expect(result?.systemPrompt).toContain("Explorer agent");
+		expect(result?.systemPrompt).not.toContain("software architect and planning specialist");
+	});
+
 	it("does not preserve hidden Pi prompt material for Root Agent definitions", async () => {
 		writeFile(
 			join(agentDiscoveryDir, "agents", "default.md"),
@@ -541,6 +677,60 @@ describe("extension loading", () => {
 
 		expect(result?.systemPrompt).toContain("Custom Root Marker");
 		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
+	});
+
+	it("uses launcher-provided root agent from environment when no session selection exists", async () => {
+		const previous = process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+		process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = "planner";
+		try {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+
+			const sessionManager = makeSessionManager(tempDir, "env-root-agent-session");
+			const result = await handlers.get("before_agent_start")(
+				{
+					systemPrompt: "Pi base prompt",
+					systemPromptOptions: { cwd: tempDir },
+				},
+				{ cwd: tempDir, sessionManager },
+			);
+			expect(result?.systemPrompt).toContain("software architect and planning specialist");
+		} finally {
+			if (previous === undefined) {
+				delete process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+			} else {
+				process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = previous;
+			}
+		}
+	});
+
+	it("keeps existing session-root selection authoritative over launcher-provided root agent", async () => {
+		const previous = process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+		process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = "reviewer";
+		try {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+
+			const sessionManager = SessionManager.create(tempDir, tempDir);
+			sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+				[SELECTED_ROOT_AGENT_ENTRY_KEY]: "planner",
+			});
+
+			const result = await handlers.get("before_agent_start")(
+				{
+					systemPrompt: "Pi base prompt",
+					systemPromptOptions: { cwd: tempDir },
+				},
+				{ cwd: tempDir, sessionManager },
+			);
+			expect(result?.systemPrompt).toContain("software architect and planning specialist");
+		} finally {
+			if (previous === undefined) {
+				delete process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+			} else {
+				process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = previous;
+			}
+		}
 	});
 
 	it("throws a visible error when the configured default Root agent is missing", async () => {
@@ -626,30 +816,431 @@ describe("extension loading", () => {
 		}
 	});
 
-	it("/agent applies a session-local Root selection without mutating the configured default", async () => {
-		const { pi, handlers, commands, flags } = createFakeExtensionApi();
+	it("rejects explicit /agent without launcher restart-file context", async () => {
+		const { pi, commands } = createFakeExtensionApi();
+		taskExtension(pi);
+		const previousRequestPath = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		delete process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		let newSessionCalls = 0;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+		try {
+			await commands.get("agent").handler("planner", ctx as any);
+		} finally {
+			restoreRestartRequestEnv(previousRequestPath);
+		}
+
+		expect(newSessionCalls).toBe(0);
+		expect(shutdownCalls).toBe(0);
+		expect(notices.some((notice) => notice.includes("launcher restart file is missing"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("validates /agent name and requests a launcher-driven root restart", async () => {
+		const { pi, commands } = createFakeExtensionApi();
 		taskExtension(pi);
 
-		const sessionManager = makeSessionManager(tempDir, "selected-root-session");
+		const restartRequestFile = join(tempDir, "root-restart.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let newSessionCalls = 0;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+
+		try {
+			await commands.get("agent").handler("planner", ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+		}
+
+		const content = readFileSync(restartRequestFile, "utf-8").trim();
+		expect(content).toBe('{"version":1,"requestedRootAgent":"planner"}');
+		expect(newSessionCalls).toBe(0);
+		expect(shutdownCalls).toBe(1);
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toContain('Root agent "planner" in a fresh session');
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("clears pending restart request when /agent shutdown throws", async () => {
+		const { pi, commands } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "root-restart-failed.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let newSessionCalls = 0;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+			shutdown: () => {
+				shutdownCalls += 1;
+				throw new Error("shutdown transition failure");
+			},
+		};
+
+		try {
+			await commands.get("agent").handler("planner", ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+		}
+
+		expect(newSessionCalls).toBe(0);
+		expect(shutdownCalls).toBe(1);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to prepare Root-agent session restart"))).toBe(true);
+		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("falls back to process.exit when shutdown API is unavailable", async () => {
+		const { pi, commands } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "root-restart-fallback.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		const originalExit = process.exit;
+		let exitCalls = 0;
+		(process as any).exit = ((..._args: unknown[]) => {
+			exitCalls += 1;
+		}) as any;
+		let newSessionCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+		} as any;
+		try {
+			await commands.get("agent").handler("planner", ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+			process.exit = originalExit;
+		}
+
+		expect(newSessionCalls).toBe(0);
+		expect(exitCalls).toBe(1);
+		const content = readFileSync(restartRequestFile, "utf-8").trim();
+		expect(content).toBe('{"version":1,"requestedRootAgent":"planner"}');
+		expect(notices.some((notice) => notice.includes('Root agent "planner" in a fresh session.'))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("clears pending restart request when /agent shutdown throws synchronously", async () => {
+		const { pi, commands } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "root-restart-throws-sync.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let newSessionCalls = 0;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+			shutdown: () => {
+				shutdownCalls += 1;
+				throw new Error("shutdown transition immediate failure");
+			},
+		};
+		try {
+			await commands.get("agent").handler("planner", ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+		}
+
+		expect(newSessionCalls).toBe(0);
+		expect(shutdownCalls).toBe(1);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to prepare Root-agent session restart"))).toBe(true);
+		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("intercepts resume session switching and requests a resume-session launcher restart", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "resume-restart.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const selectedSessionPath = join(tempDir, "selected-session.jsonl");
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+		try {
+			const result = await handlers.get("session_before_switch")(
+				{ type: "session_before_switch", reason: "resume", targetSessionFile: selectedSessionPath },
+				ctx as any,
+			);
+			expect(result).toEqual({ cancel: true });
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+		}
+
+		const content = readFileSync(restartRequestFile, "utf-8").trim();
+		expect(content).toBe(`{"version":1,"type":"resume-session","sessionPath":"${selectedSessionPath}"}`);
+		expect(shutdownCalls).toBe(1);
+		expect(notices.some((notice) => notice.includes("Restarting Pi with selected session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("requests a resume-session restart during bootstrap session_start", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "bootstrap-resume-session-start.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		const originalBootstrapEnv = process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = "1";
+		const selectedSessionPath = join(tempDir, "selected-session.jsonl");
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		vi.spyOn(sessionManager, "getSessionFile").mockReturnValue(selectedSessionPath);
 		const ctx = {
 			cwd: tempDir,
 			sessionManager,
-			ui: { notify: () => {} },
-			newSession: async () => ({ cancelled: true }),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
 		};
 
-		await commands.get("agent").handler("planner", ctx);
-		const result = await handlers.get("before_agent_start")(
-			{
-				systemPrompt: "Pi base prompt",
-				systemPromptOptions: { cwd: tempDir },
-			},
-			ctx,
-		);
+		try {
+			await handlers.get("session_start")({ type: "session_start", reason: "startup" }, ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+			if (originalBootstrapEnv === undefined) {
+				delete process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+			} else {
+				process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = originalBootstrapEnv;
+			}
+		}
 
-		expect(flags.get("defaultRootAgent")).toBe("default");
-		expect(result?.systemPrompt).toContain("software architect and planning specialist");
-		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
+		expect(readFileSync(restartRequestFile, "utf-8").trim()).toBe(
+			`{"version":1,"type":"resume-session","sessionPath":"${selectedSessionPath}"}`,
+		);
+		expect(shutdownCalls).toBe(1);
+		expect(notices.some((notice) => notice.includes("Restarting Pi with selected session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("stays in bootstrap session_start when resume-session restart request cannot be prepared", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "none", "bootstrap-resume-unwritable.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		const originalBootstrapEnv = process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = "1";
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		vi.spyOn(sessionManager, "getSessionFile").mockReturnValue(join(tempDir, "selected-session.jsonl"));
+		const ctx = {
+			cwd: tempDir,
+			sessionManager,
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+		await handlers.get("session_start")({ type: "session_start", reason: "startup" }, ctx as any);
+		restoreRestartRequestEnv(originalRestartEnv);
+		if (originalBootstrapEnv === undefined) {
+			delete process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
+		} else {
+			process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = originalBootstrapEnv;
+		}
+
+		expect(shutdownCalls).toBe(0);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to save the selected session resume request"))).toBe(
+			true,
+		);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("does not intercept non-resume or unknown-target session switch events", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "resume-ignore.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+
+		const missingTargetResult = await handlers.get("session_before_switch")(
+			{ type: "session_before_switch", reason: "resume" },
+			ctx as any,
+		);
+		const otherReasonResult = await handlers.get("session_before_switch")(
+			{ type: "session_before_switch", reason: "new", targetSessionFile: join(tempDir, "other-session.jsonl") },
+			ctx as any,
+		);
+		restoreRestartRequestEnv(originalRestartEnv);
+
+		expect(missingTargetResult).toBeUndefined();
+		expect(otherReasonResult).toBeUndefined();
+		expect(shutdownCalls).toBe(0);
+		expect(notices).toHaveLength(0);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("clears pending resume-session restart request when shutdown throws", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "resume-shutdown-fail.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+				throw new Error("shutdown failed");
+			},
+		};
+		const selectedSessionPath = join(tempDir, "resume-session.jsonl");
+		const result = await handlers.get("session_before_switch")(
+			{ type: "session_before_switch", reason: "resume", targetSessionFile: selectedSessionPath },
+			ctx as any,
+		);
+		restoreRestartRequestEnv(originalRestartEnv);
+
+		expect(result).toEqual({ cancel: true });
+		expect(shutdownCalls).toBe(1);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to prepare resume-session restart"))).toBe(true);
+		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
+	});
+
+	it("stays in session when resume restart request file cannot be written", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "nowhere", "resume-unwritable.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		const notices: string[] = [];
+		let shutdownCalls = 0;
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+		const result = await handlers.get("session_before_switch")(
+			{
+				type: "session_before_switch",
+				reason: "resume",
+				targetSessionFile: join(tempDir, "selected-session.jsonl"),
+			},
+			ctx as any,
+		);
+		restoreRestartRequestEnv(originalRestartEnv);
+
+		expect(result).toEqual({ cancel: true });
+		expect(shutdownCalls).toBe(0);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to save the requested resume-session restart"))).toBe(
+			true,
+		);
+	});
+
+	it("rejects unknown /agent names without writing a restart request", async () => {
+		const { pi, commands } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "root-restart-unknown.json");
+		const previousRequestPath = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let newSessionCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				throw new Error("unexpected restart");
+			},
+		};
+		await expect(commands.get("agent").handler("does-not-exist", ctx as any)).resolves.toBeUndefined();
+		restoreRestartRequestEnv(previousRequestPath);
+
+		expect(newSessionCalls).toBe(0);
+		expect(() => readFileSync(restartRequestFile, "utf-8")).toThrow();
+		expect(notices.some((notice) => notice.includes("Unknown agent"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
 	});
 
 	// ------------------------------------------------------------------
@@ -1164,5 +1755,223 @@ describe("extension loading", () => {
 		});
 
 		expect(result.extensions.map((extension: any) => extension.path)).toEqual([linkedSelfPath, "<inline:1>"]);
+	});
+
+	it("filters task subagent extensions with no-match selector outcome", () => {
+		const selfPath = join(tempDir, "self-extension.ts");
+		const candidate = join(tempDir, "candidate.ts");
+		writeFile(candidate, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing-extension"] }),
+			selfPath,
+		)({
+			extensions: [{ path: candidate, resolvedPath: candidate }],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([]);
+	});
+
+	it("loads exactly one task extension when a selector has one match", () => {
+		const selected = join(tempDir, "extensions", "load-me.ts");
+		const skipped = join(tempDir, "extensions", "skip-me.ts");
+		writeFile(selected, "export default function () {}\n");
+		writeFile(skipped, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["load-me"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: selected, resolvedPath: selected },
+				{ path: skipped, resolvedPath: skipped },
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([selected]);
+	});
+
+	it("loads all matching task subagent extensions for ambiguous selectors", () => {
+		const sharedA = join(tempDir, "extensions", "shared", "a.ts");
+		const sharedB = join(tempDir, "extensions", "shared", "b.ts");
+		writeFile(sharedA, "export default function () {}\n");
+		writeFile(sharedB, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["extensions/shared"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: sharedA, resolvedPath: sharedA },
+				{ path: sharedB, resolvedPath: sharedB },
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([sharedA, sharedB]);
+	});
+
+	it("supports task extension selectors with path-like values", () => {
+		const target = join(tempDir, "extensions", "path", "layered", "target.ts");
+		writeFile(target, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["path/layered/target.ts"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [{ path: target, resolvedPath: target }],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([target]);
+	});
+
+	it("matches package-name selectors from extension metadata baseDir package.json", () => {
+		const packageBase = join(tempDir, "extensions", "summarize");
+		const target = join(packageBase, "dist", "index.ts");
+		writeFile(target, "export default function () {}\n");
+		writeFile(join(packageBase, "package.json"), '{"name":"pi-tool-summarize-replacement"}\n');
+
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["pi-tool-summarize-replacement"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{
+					path: target,
+					resolvedPath: target,
+					sourceInfo: {
+						baseDir: packageBase,
+					},
+				},
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([target]);
+	});
+
+	it("preserves protected multi-agent extensions when path segment is exact", () => {
+		const protectedPath = join(tempDir, "extensions", "persistent-task-subagents", "build", "runner.ts");
+		const nonProtectedPath = join(tempDir, "extensions", "not-multi-agents", "evil.ts");
+		writeFile(protectedPath, "export default function () {}\n");
+		writeFile(nonProtectedPath, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: protectedPath, resolvedPath: protectedPath },
+				{ path: nonProtectedPath, resolvedPath: nonProtectedPath },
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([protectedPath]);
+	});
+
+	it("preserves protected identity when source metadata has exact protected segment", () => {
+		const sourceInfoProtectedExtension = join(tempDir, "extensions", "sourceinfo-helper.ts");
+		const metadataProtectedExtension = join(tempDir, "extensions", "metadata-helper.ts");
+		const sourceInfoBasedirProtected = "/tmp/persistent-task-subagents/sourceInfo/build";
+		const metadataBasedirProtected = "/var/lib/multi-agents/metadata";
+		writeFile(sourceInfoProtectedExtension, "export default function () {}\n");
+		writeFile(metadataProtectedExtension, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{
+					path: sourceInfoProtectedExtension,
+					resolvedPath: sourceInfoProtectedExtension,
+					sourceInfo: {
+						baseDir: sourceInfoBasedirProtected,
+					},
+				},
+				{
+					path: metadataProtectedExtension,
+					resolvedPath: metadataProtectedExtension,
+					metadata: {
+						baseDir: metadataBasedirProtected,
+					},
+				},
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([
+			sourceInfoProtectedExtension,
+			metadataProtectedExtension,
+		]);
+	});
+
+	it("does not preserve extension when only package.json name is protected", () => {
+		const packageBaseDir = join(tempDir, "extensions", "package-basedir");
+		const resultPath = join(tempDir, "extensions", "package-name-alias.ts");
+		makeDir(packageBaseDir);
+		writeFile(join(packageBaseDir, "package.json"), '{"name":"persistent-task-subagents"}\n');
+		writeFile(resultPath, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{
+					path: resultPath,
+					resolvedPath: resultPath,
+					sourceInfo: {
+						baseDir: packageBaseDir,
+					},
+				},
+			],
+		});
+
+		expect(result.extensions).toEqual([]);
+	});
+
+	it("does not preserve extensions where protected names appear as substrings", () => {
+		const notSegmentProtectedPath = join(tempDir, "extensions", "not-multi-agents", "evil.ts");
+		const pluginLikePath = join(tempDir, "extensions", "my-persistent-task-subagents-plugin", "helper.ts");
+		const sourceInfoSubstringProtectedPath = join(tempDir, "extensions", "sourceinfo-substring.ts");
+		const metadataSubstringProtectedPath = join(tempDir, "extensions", "metadata-substring.ts");
+		writeFile(notSegmentProtectedPath, "export default function () {}\n");
+		writeFile(pluginLikePath, "export default function () {}\n");
+		writeFile(sourceInfoSubstringProtectedPath, "export default function () {}\n");
+		writeFile(metadataSubstringProtectedPath, "export default function () {}\n");
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["missing"] }),
+			join(tempDir, "self-extension.ts"),
+		)({
+			extensions: [
+				{ path: notSegmentProtectedPath, resolvedPath: notSegmentProtectedPath },
+				{ path: pluginLikePath, resolvedPath: pluginLikePath },
+				{
+					path: sourceInfoSubstringProtectedPath,
+					resolvedPath: sourceInfoSubstringProtectedPath,
+					sourceInfo: {
+						baseDir: "/tmp/not-multi-agents/source",
+					},
+				},
+				{
+					path: metadataSubstringProtectedPath,
+					resolvedPath: metadataSubstringProtectedPath,
+					metadata: {
+						baseDir: "/var/lib/my-persistent-task-subagents-plugin",
+					},
+				},
+			],
+		});
+
+		expect(result.extensions).toEqual([]);
+	});
+
+	it("forwards task extension selector warnings through onWarnings", () => {
+		const candidate = join(tempDir, "extensions", "candidate.ts");
+		writeFile(candidate, "export default function () {}\n");
+		const warnings: string[] = [];
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["does-not-exist"] }),
+			join(tempDir, "self-extension.ts"),
+			{
+				onWarnings: (entries) => warnings.push(...entries),
+			},
+		)({
+			extensions: [{ path: candidate, resolvedPath: candidate }],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([]);
+		expect(warnings).toEqual([`No extension candidates matched selector "does-not-exist".`]);
 	});
 });

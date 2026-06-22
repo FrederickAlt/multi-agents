@@ -10,9 +10,32 @@ export interface ResolveRootAgentOptions {
 	defaultRootAgent?: string;
 }
 
+export const SELECTED_ROOT_AGENT_ENTRY_TYPE = "selected-root-agent" as const;
+export const SELECTED_ROOT_AGENT_ENTRY_KEY = "selectedRootAgent" as const;
+
 export interface ResolvedRootAgent {
 	agent: AgentConfig;
 	selection: RootAgentSelection;
+}
+
+export interface SessionCustomEntryLike {
+	type: string;
+	customType?: string;
+	data?: unknown;
+}
+
+export function getSelectedRootAgentFromSessionEntries(entries: SessionCustomEntryLike[]): string | undefined {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry?.type !== "custom") continue;
+		if (entry.customType !== SELECTED_ROOT_AGENT_ENTRY_TYPE) continue;
+		if (!entry.data || typeof entry.data !== "object") continue;
+		const raw = (entry.data as { [key: string]: unknown })[SELECTED_ROOT_AGENT_ENTRY_KEY];
+		if (typeof raw !== "string") continue;
+		const trimmed = raw.trim();
+		if (trimmed) return trimmed;
+	}
+	return undefined;
 }
 
 export function resolveRootAgent(options: ResolveRootAgentOptions): ResolvedRootAgent {

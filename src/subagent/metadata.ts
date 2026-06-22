@@ -4,7 +4,6 @@
  * Responsibilities:
  * - Sidecar path calculation
  * - Load / save with fallback for missing or corrupt files
- * - Selected Root agent persistence
  * - Concurrent-safe Sub-agent record allocation (hex ID + human name)
  * - Timestamp persistence
  * - Cleanup of Sub-agent session files when the Root agent session is replaced
@@ -84,7 +83,6 @@ export interface MetadataFile {
 	version: 1;
 	mainSessionId: string;
 	mainSessionFile?: string;
-	selectedMainAgent?: string;
 	records: SubagentRecord[];
 }
 
@@ -194,11 +192,17 @@ export class MetadataStore {
 		if (fs.existsSync(filePath)) {
 			try {
 				const raw = fs.readFileSync(filePath, "utf-8");
-				const parsed = JSON.parse(raw) as MetadataFile;
+				const parsed = JSON.parse(raw) as MetadataFile & { selectedMainAgent?: unknown };
 				if (parsed.version === 1 && Array.isArray(parsed.records)) {
-					this._metadata = parsed;
+					this._metadata = {
+						version: 1,
+						mainSessionId: typeof parsed.mainSessionId === "string" ? parsed.mainSessionId : this.ctx.sessionId,
+						mainSessionFile:
+							typeof parsed.mainSessionFile === "string" ? parsed.mainSessionFile : this.ctx.sessionFile,
+						records: parsed.records,
+					};
 					this.logger.debug("metadata_reload_ok", { recordCount: parsed.records.length });
-					return parsed;
+					return this._metadata;
 				}
 			} catch (error) {
 				this.logger.warn("metadata_reload_failed", {
@@ -278,19 +282,6 @@ export class MetadataStore {
 		}
 		this._metadata = null;
 		logger.info("metadata_cleanup_done");
-	}
-
-	// ---- Selected Root agent ----
-
-	/** The name of the currently selected Root (main) agent, or undefined. */
-	get selectedMainAgent(): string | undefined {
-		return this.load().selectedMainAgent;
-	}
-
-	set selectedMainAgent(name: string | undefined) {
-		const metadata = this.load();
-		metadata.selectedMainAgent = name ?? undefined;
-		this.save();
 	}
 
 	// ---- Record access ----
