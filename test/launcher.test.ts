@@ -846,6 +846,27 @@ describe("pi-agents launcher command generation", () => {
 		}
 	});
 
+	it("buildLauncherArgs resolves --resume bootstrap without a valid default root agent", async () => {
+		const previous = process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+		process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = "stale-root";
+		try {
+			const discoverAgents = vi.fn(() => ({ agents: [] }));
+			const result = await buildLauncherArgs(["--resume", "--defaultRootAgent", "missing-root"], {
+				discoverAgentsForLauncher: discoverAgents,
+			});
+			expect(result.args).toContain("--resume");
+			expect(result.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV]).toBe("1");
+			expect(result.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBeUndefined();
+			expect(discoverAgents).not.toHaveBeenCalled();
+		} finally {
+			if (previous === undefined) {
+				delete process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+			} else {
+				process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = previous;
+			}
+		}
+	});
+
 	it("starts a bootstrap pi for --resume without wrapper picker interception", async () => {
 		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
 		spawnSyncMock.mockReset();
@@ -887,6 +908,7 @@ describe("pi-agents launcher command generation", () => {
 			expect(firstCallArgs).not.toContain("--session");
 			expect(collectExtensionValues(firstCallArgs)).toEqual([MULTI_AGENTS_EXTENSION_ENTRY]);
 			expect(firstCallEnv?.env?.[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV]).toBe("1");
+			expect(firstCallEnv?.env?.[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBeUndefined();
 			expect(collectExtensionValues(firstCallArgs).includes(configuredExtension)).toBe(false);
 			expect(collectExtensionValues(firstCallArgs).includes(userForcedExtension)).toBe(false);
 		} finally {

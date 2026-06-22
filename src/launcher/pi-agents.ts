@@ -565,17 +565,19 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 	}
 
 	const agentDir = getAgentDir();
-	const rootAgent = resolveLauncherRootAgent({
-		parsed,
-		selectedSessionRootAgent,
-		agents: resolver.discoverAgents().agents,
-	});
 	const hasNoExtensions = args.includes("--no-extensions") || args.includes("-ne");
 	if (!hasNoExtensions) {
 		args.unshift("--no-extensions");
 	}
 
+	let launchRootAgent: string | undefined;
 	if (!isBootstrapResume) {
+		const rootAgent = resolveLauncherRootAgent({
+			parsed,
+			selectedSessionRootAgent,
+			agents: resolver.discoverAgents().agents,
+		});
+		launchRootAgent = rootAgent.name;
 		const extensionCandidates = await resolver.resolveExtensionCandidates({ cwd, agentDir });
 		const selection = resolveLauncherExtensions(rootAgent, extensionCandidates);
 		for (const warning of selection.warnings) {
@@ -592,7 +594,6 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 		args.push("--extension", extensionPath);
 	}
 
-	const launchRootAgent = rootAgent.name;
 	const childEnv: NodeJS.ProcessEnv = { ...process.env };
 	delete childEnv[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
 	delete childEnv[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV];
@@ -600,8 +601,7 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 	childEnv[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV] = restartRequestFile;
 	if (isBootstrapResume) {
 		childEnv[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] = "1";
-	}
-	if (!selectedSessionPath) {
+	} else if (launchRootAgent && !selectedSessionPath) {
 		childEnv[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = launchRootAgent;
 	}
 
