@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,11 @@ import { DefaultPackageManager, type ResolvedResource, SettingsManager } from "@
 
 import { type AgentConfig, discoverAgents } from "../subagent/agents.js";
 import { type ExtensionSelection, resolveExtensionsForAgent } from "../subagent/extension-filter.js";
-import { MULTI_AGENTS_LAUNCHER_ENV, MULTI_AGENTS_LAUNCHER_ENV_VALUE } from "../subagent/launcher-contract.js";
+import {
+	MULTI_AGENTS_LAUNCHER_ENV,
+	MULTI_AGENTS_LAUNCHER_ENV_VALUE,
+	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
+} from "../subagent/launcher-contract.js";
 import { getSelectedRootAgentFromSessionEntries, resolveRootAgent } from "../subagent/root-agent.js";
 
 export const MULTI_AGENTS_EXTENSION_ENTRY = fileURLToPath(new URL("../subagent/index.ts", import.meta.url));
@@ -19,6 +23,7 @@ interface BuildLaunchResult {
 	args: string[];
 	env: NodeJS.ProcessEnv;
 	sessionPathUsed?: string;
+	restartFile?: string;
 	skipLaunch?: boolean;
 }
 
@@ -50,6 +55,7 @@ export interface LauncherOptions {
 	extensionPath?: string;
 	cwd?: string;
 	piCommand?: string;
+	restartRequestFile?: string;
 	resumePicker?: ResumePicker;
 	// Optional test seams: allow dependency injection for extension resolution.
 	discoverAgentsForLauncher?: () => { agents: AgentConfig[] };
@@ -63,6 +69,11 @@ type SessionLike = {
 	customType?: unknown;
 	data?: unknown;
 };
+
+interface RestartRequest {
+	version?: number;
+	requestedRootAgent?: string;
+}
 
 const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
 const ENV_SESSION_DIR = "PI_CODING_AGENT_SESSION_DIR";
@@ -141,6 +152,97 @@ function resolveSessionDir(value: string | undefined, cwd: string): string {
 
 function parseSessionArgArg(arg: string): boolean {
 	return arg.includes("/") || arg.includes("\\") || arg.endsWith(".jsonl");
+}
+
+function hasArg(args: string[], flag: string): boolean {
+	return args.includes(flag) || args.some((arg) => arg.startsWith(`${flag}=`));
+}
+
+function createRestartRequestFilePath(): string {
+	return resolve(tmpdir(), `pi-agents-restart-${randomUUID()}.json`);
+}
+
+function clearRestartRequestFile(path: string): void {
+	try {
+		unlinkSync(path);
+	} catch {
+		try {
+			writeFileSync(path, "", "utf-8");
+		} catch {
+			// Ignore permission/race conditions; fallback behavior is restart-file miss.
+		}
+	}
+}
+
+function parseRestartRequestPayload(raw: string): string | undefined {
+	try {
+		const parsed = JSON.parse(raw) as RestartRequest;
+		if (!parsed || typeof parsed !== "object") return undefined;
+		const requested = parsed.requestedRootAgent;
+		if (typeof requested !== "string") return undefined;
+		const trimmed = requested.trim();
+		return trimmed || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readRestartRequestFile(path: string): string | undefined {
+	if (!existsSync(path)) {
+		return undefined;
+	}
+	let raw = "";
+	try {
+		raw = readFileSync(path, "utf-8");
+	} catch {
+		return undefined;
+	}
+	for (const line of raw.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		const request = parseRestartRequestPayload(trimmed);
+		if (request) {
+			return request;
+		}
+	}
+	return undefined;
+}
+
+function rewriteArgsForRestart(baseArgs: string[], requestedAgent: string): string[] {
+	const filtered: string[] = [];
+	for (let i = 0; i < baseArgs.length; i++) {
+		const arg = baseArgs[i];
+		if (
+			arg === "--session" ||
+			arg === "-s" ||
+			arg === "--fork" ||
+			arg === "--continue" ||
+			arg === "-c" ||
+			arg === "--resume" ||
+			arg === "-r"
+		) {
+			if ((arg === "--session" || arg === "-s" || arg === "--fork") && baseArgs[i + 1] !== undefined) {
+				i += 1;
+			}
+			continue;
+		}
+		if (arg.startsWith("--session=") || arg.startsWith("--fork=") || arg === "--no-session") {
+			continue;
+		}
+		if (arg === "--agent") {
+			i += 1;
+			continue;
+		}
+		if (arg.startsWith("--agent=")) {
+			continue;
+		}
+		if (arg === "--session-dir" || arg.startsWith("--session-dir=")) {
+			filtered.push(arg);
+			continue;
+		}
+		filtered.push(arg);
+	}
+	return ensureArg(stripExplicitAgentArgs(filtered), "--agent", requestedAgent);
 }
 
 function parseSessionEntries(path: string): SessionLike[] {
@@ -269,10 +371,6 @@ function pickSessionRootAgent(sessionPath: string): string | undefined {
 			entry?.type === "custom" && typeof entry === "object",
 	);
 	return getSelectedRootAgentFromSessionEntries(entries);
-}
-
-function hasArg(args: string[], flag: string): boolean {
-	return args.includes(flag) || args.some((arg) => arg.startsWith(`${flag}=`));
 }
 
 function formatResumeOptions(sessions: SessionIndexEntry[]): string[] {
@@ -517,6 +615,7 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 			options.resolveExtensionCandidates ??
 			((resolverOptions) => resolveExtensionCandidates(resolverOptions.cwd, resolverOptions.agentDir)),
 	};
+	const restartRequestFile = options.restartRequestFile ?? createRestartRequestFilePath();
 
 	const parsed = parseLauncherArgs(userArgs);
 	const configuredSessionDir = parsed.sessionDir ?? process.env[ENV_SESSION_DIR];
@@ -602,7 +701,9 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 		env: {
 			...process.env,
 			[MULTI_AGENTS_LAUNCHER_ENV]: MULTI_AGENTS_LAUNCHER_ENV_VALUE,
+			[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]: restartRequestFile,
 		},
+		restartFile: restartRequestFile,
 		sessionPathUsed: selectedSessionPath,
 		skipLaunch,
 	};
@@ -611,6 +712,7 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 export async function launchPi(args: string[], options: LauncherOptions = {}): Promise<number> {
 	const cwd = options.cwd ?? process.cwd();
 	const parsed = parseLauncherArgs(args);
+	const restartRequestFile = options.restartRequestFile ?? createRestartRequestFilePath();
 	let effectiveResumePicker: ResumePicker | undefined;
 	if (
 		parsed.resumeSession &&
@@ -628,22 +730,52 @@ export async function launchPi(args: string[], options: LauncherOptions = {}): P
 		effectiveResumePicker = () => selected;
 	}
 
-	const config = await buildLauncherArgs(args, {
-		...options,
-		resumePicker: options.resumePicker ?? effectiveResumePicker,
-	});
-	if (config.skipLaunch) {
-		return 0;
+	let launchArgs = args;
+	clearRestartRequestFile(restartRequestFile);
+	let resultStatus = 0;
+	let restartCount = 0;
+	while (true) {
+		const config = await buildLauncherArgs(launchArgs, {
+			...options,
+			restartRequestFile,
+			resumePicker: options.resumePicker ?? effectiveResumePicker,
+		});
+		effectiveResumePicker = undefined;
+		if (config.skipLaunch) {
+			return 0;
+		}
+
+		// Ensure that stale restart requests from previous runs do not get
+		// accidentally consumed by this launch cycle.
+		clearRestartRequestFile(restartRequestFile);
+		const result = spawnSync(config.command, config.args, {
+			env: config.env,
+			stdio: "inherit",
+		});
+		if (result.error) {
+			throw result.error;
+		}
+		if (result.signal) {
+			clearRestartRequestFile(restartRequestFile);
+			return 128;
+		}
+		resultStatus = result.status ?? 0;
+		if (resultStatus !== 0) {
+			clearRestartRequestFile(restartRequestFile);
+			return resultStatus;
+		}
+
+		const requestedRootAgent = readRestartRequestFile(restartRequestFile);
+		clearRestartRequestFile(restartRequestFile);
+		if (!requestedRootAgent) {
+			return resultStatus;
+		}
+
+		restartCount += 1;
+		if (restartCount > 10) {
+			console.warn("pi-agents: exceeded maximum number of Root-agent restarts. Aborting.");
+			return 1;
+		}
+		launchArgs = rewriteArgsForRestart(args, requestedRootAgent);
 	}
-	const result = spawnSync(config.command, config.args, {
-		env: config.env,
-		stdio: "inherit",
-	});
-	if (result.error) {
-		throw result.error;
-	}
-	if (result.signal) {
-		return 128;
-	}
-	return result.status ?? 0;
 }

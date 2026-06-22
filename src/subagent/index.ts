@@ -5,6 +5,7 @@
  * creates or resumes a real Pi AgentSession stored in normal session storage.
  */
 
+import { unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -20,7 +21,7 @@ import type { DebugLogger } from "./debug-logger.js";
 import { makeNoopDebugLogger, makeSessionDebugLogger } from "./debug-logger.js";
 import { defaultRootPolicy, selectedRootPolicy } from "./depth-policy.js";
 import { filterExtensionsForAgent } from "./extension-filter.js";
-import { ensureMultiAgentsLauncherContext } from "./launcher-contract.js";
+import { ensureMultiAgentsLauncherContext, MULTI_AGENTS_RESTART_REQUEST_FILE_ENV } from "./launcher-contract.js";
 import { MetadataStore } from "./metadata.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
@@ -68,6 +69,67 @@ export {
 
 function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
 	return agents.find((agent) => agent.name === name);
+}
+
+interface RestartRequestPayload {
+	version: 1;
+	requestedRootAgent: string;
+}
+
+function writeRestartRequest(path: string, requestedRootAgent: string): void {
+	const payload: RestartRequestPayload = {
+		version: 1,
+		requestedRootAgent,
+	};
+	writeFileSync(path, `${JSON.stringify(payload)}\n`, "utf-8");
+}
+
+function clearRestartRequest(path: string): void {
+	try {
+		unlinkSync(path);
+	} catch {
+		// Ignored: best effort cleanup for cancel/failure paths.
+	}
+}
+
+function requestPiShutdown(
+	ctx: {
+		newSession?: () => Promise<{ cancelled?: boolean } | undefined> | ({ cancelled?: boolean } | undefined);
+	},
+	restartRequestFile?: string,
+	options: { onCancelled?: () => void; onFailure?: () => void } = {},
+) {
+	let shutdownResult: { cancelled?: boolean } | undefined;
+	try {
+		shutdownResult = ctx.newSession?.();
+	} catch {
+		if (restartRequestFile) {
+			clearRestartRequest(restartRequestFile);
+		}
+		options.onFailure?.();
+		return Promise.resolve({ cancelled: false, failed: true });
+	}
+
+	return Promise.resolve(shutdownResult)
+		.then((result) => {
+			const cancelFlag = result && typeof result === "object" && "cancelled" in result ? result.cancelled : false;
+			if (cancelFlag) {
+				if (restartRequestFile) {
+					clearRestartRequest(restartRequestFile);
+				}
+				options.onCancelled?.();
+				return { cancelled: true };
+			}
+			process.exit(0);
+			return { cancelled: false };
+		})
+		.catch(() => {
+			if (restartRequestFile) {
+				clearRestartRequest(restartRequestFile);
+			}
+			options.onFailure?.();
+			return { cancelled: false, failed: true };
+		});
 }
 
 // Module-level session manager singleton so both Task and wait_for_agent
@@ -582,11 +644,45 @@ export default function (pi: ExtensionAPI) {
 				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
 				return;
 			}
+			const requestFile = process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV];
+			if (!requestFile?.trim()) {
+				showMessage(
+					ctx,
+					"Cannot restart with a different Root agent: launcher restart file is missing. Start Pi with pi-agents.",
+					"error",
+				);
+				return;
+			}
+			try {
+				writeRestartRequest(requestFile, agent.name);
+			} catch {
+				showMessage(ctx, "Failed to save the requested Root-agent restart request.", "error");
+				return;
+			}
 			showMessage(
 				ctx,
-				`Switching Root agents in-session is not supported yet. Start a new Pi session with --agent ${agent.name} to use it.`,
-				"warning",
+				`Restarting Pi with Root agent "${agent.name}" in a fresh session (new session will be used).`,
+				"info",
 			);
+			const shutdownResult = await requestPiShutdown(ctx, requestFile, {
+				onCancelled: () => {
+					showMessage(
+						ctx,
+						`Root agent "${agent.name}" restart was cancelled. Staying in the current session.`,
+						"warning",
+					);
+				},
+				onFailure: () => {
+					showMessage(
+						ctx,
+						`Failed to prepare Root-agent session restart for "${agent.name}". Staying in the current session.`,
+						"error",
+					);
+				},
+			});
+			if (shutdownResult?.cancelled) {
+				return;
+			}
 		},
 	});
 }

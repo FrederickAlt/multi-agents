@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,11 @@ vi.mock("node:child_process", () => ({
 
 import * as mockedChildProcess from "node:child_process";
 import { buildLauncherArgs, launchPi, MULTI_AGENTS_EXTENSION_ENTRY } from "../src/launcher/pi-agents.js";
-import { MULTI_AGENTS_LAUNCHER_ENV, MULTI_AGENTS_LAUNCHER_ENV_VALUE } from "../src/subagent/launcher-contract.js";
+import {
+	MULTI_AGENTS_LAUNCHER_ENV,
+	MULTI_AGENTS_LAUNCHER_ENV_VALUE,
+	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
+} from "../src/subagent/launcher-contract.js";
 
 function createSessionFile(
 	sessionDir: string,
@@ -118,6 +122,14 @@ describe("pi-agents launcher command generation", () => {
 		expect(result.args[0]).toBe("--no-extensions");
 		expect(result.args).toContain("--extension");
 		expect(result.args).toContain(MULTI_AGENTS_EXTENSION_ENTRY);
+	});
+
+	it("passes a launcher restart-request file path in child env", async () => {
+		const result = await buildLauncherArgs(["--provider", "openai"], {
+			restartRequestFile: "/tmp/pi-agents-restart.json",
+		});
+		expect(result.restartFile).toBe("/tmp/pi-agents-restart.json");
+		expect(result.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]).toBe("/tmp/pi-agents-restart.json");
 	});
 
 	it("launches Pi with the injected launcher arguments and env contract", async () => {
@@ -830,6 +842,229 @@ describe("pi-agents launcher command generation", () => {
 			expect(forkContents[0].type).toBe("session");
 			expect(forkContents[0].parentSession).toBe(sourcePath);
 			expect(result.args[result.args.indexOf("--agent") + 1]).toBe("planner");
+		});
+	});
+
+	it("restarts into a standalone root-agent session when a restart request is written", async () => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+
+		const root = mkdtempSync(join(tmpdir(), "pi-agents-launch-restart-"));
+		const restartFile = join(root, "root-restart.json");
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const defaultExtension = join(workDir, "extensions", "default.ts");
+		const plannerExtension = join(workDir, "extensions", "planner.ts");
+		writeExtensionFile(defaultExtension);
+		writeExtensionFile(plannerExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [defaultExtension, plannerExtension],
+		});
+		writeAgentDefinition(launcherAgentDir, "default", ["default.ts"]);
+		writeAgentDefinition(launcherAgentDir, "planner", ["planner.ts"]);
+
+		const spawnResult = {
+			status: 0,
+			signal: null,
+			stdout: null,
+			stderr: null,
+			output: [],
+			pid: 123,
+		} as any;
+
+		spawnSyncMock.mockImplementationOnce((_: any, __: any, options: any) => {
+			writeFileSync(
+				options.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV],
+				`${JSON.stringify({ version: 1, requestedRootAgent: "planner" })}\n`,
+				"utf-8",
+			);
+			return spawnResult;
+		});
+		spawnSyncMock.mockImplementationOnce(() => spawnResult);
+
+		try {
+			const result = await launchPi(["--provider", "openai", "--session-dir", workDir], {
+				cwd: root,
+				restartRequestFile: restartFile,
+			});
+
+			expect(result).toBe(0);
+			expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+			const firstCall = spawnSyncMock.mock.calls[0];
+			const secondCall = spawnSyncMock.mock.calls[1];
+			const firstArgs = firstCall[1] as string[];
+			const secondArgs = secondCall[1] as string[];
+			const firstExtensions = collectExtensionValues(firstArgs);
+			const secondExtensions = collectExtensionValues(secondArgs);
+			expect(firstExtensions).toContain(defaultExtension);
+			expect(firstExtensions).not.toContain(plannerExtension);
+			expect(secondExtensions).toContain(plannerExtension);
+			expect(secondExtensions).not.toContain(defaultExtension);
+			expect(secondArgs).toContain("--agent");
+			expect(secondArgs[secondArgs.indexOf("--agent") + 1]).toBe("planner");
+			expect(secondArgs).not.toContain("--session");
+			if (firstCall[2] && typeof firstCall[2] === "object") {
+				const env = (firstCall[2] as { env?: Record<string, string | undefined> }).env;
+				expect(env?.[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]).toBe(restartFile);
+			}
+			if (secondCall[2] && typeof secondCall[2] === "object") {
+				const env = (secondCall[2] as { env?: Record<string, string | undefined> }).env;
+				expect(env?.[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]).toBe(restartFile);
+			}
+			expect(existsSync(restartFile)).toBe(false);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not honor restart request after non-zero child exit", async () => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+
+		const root = mkdtempSync(join(tmpdir(), "pi-agents-launch-restart-nonzero-"));
+		const restartFile = join(root, "root-restart.json");
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const defaultExtension = join(workDir, "extensions", "default.ts");
+		const plannerExtension = join(workDir, "extensions", "planner.ts");
+		writeExtensionFile(defaultExtension);
+		writeExtensionFile(plannerExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [defaultExtension, plannerExtension],
+		});
+		writeAgentDefinition(launcherAgentDir, "default", ["default.ts"]);
+		writeAgentDefinition(launcherAgentDir, "planner", ["planner.ts"]);
+
+		const spawnResult = {
+			status: 5,
+			signal: null,
+			stdout: null,
+			stderr: null,
+			output: [],
+			pid: 123,
+		} as any;
+
+		spawnSyncMock.mockImplementationOnce((_: any, __: any, options: any) => {
+			writeFileSync(
+				options.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV],
+				`${JSON.stringify({ version: 1, requestedRootAgent: "planner" })}\n`,
+				"utf-8",
+			);
+			return spawnResult;
+		});
+
+		try {
+			const result = await launchPi(["--provider", "openai", "--session-dir", workDir], {
+				cwd: root,
+				restartRequestFile: restartFile,
+			});
+
+			expect(result).toBe(5);
+			expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+			expect(existsSync(restartFile)).toBe(false);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not honor restart request after signal-terminated child exit", async () => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+
+		const root = mkdtempSync(join(tmpdir(), "pi-agents-launch-restart-signal-"));
+		const restartFile = join(root, "root-restart.json");
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const defaultExtension = join(workDir, "extensions", "default.ts");
+		const plannerExtension = join(workDir, "extensions", "planner.ts");
+		writeExtensionFile(defaultExtension);
+		writeExtensionFile(plannerExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [defaultExtension, plannerExtension],
+		});
+		writeAgentDefinition(launcherAgentDir, "default", ["default.ts"]);
+		writeAgentDefinition(launcherAgentDir, "planner", ["planner.ts"]);
+
+		writeFileSync(restartFile, `${JSON.stringify({ version: 1, requestedRootAgent: "default" })}\n`, "utf-8");
+		const spawnResult = {
+			status: null,
+			signal: "SIGTERM",
+			stdout: null,
+			stderr: null,
+			output: [],
+			pid: 123,
+		} as any;
+
+		spawnSyncMock.mockImplementationOnce(() => spawnResult);
+
+		try {
+			const result = await launchPi(["--provider", "openai", "--session-dir", workDir], {
+				cwd: root,
+				restartRequestFile: restartFile,
+			});
+
+			expect(result).toBe(128);
+			expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+			expect(existsSync(restartFile)).toBe(false);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		{ contextFlag: "--fork", args: ["--fork", "source"] },
+		{ contextFlag: "--continue", args: ["--continue"] },
+		{ contextFlag: "--resume", args: ["--resume"] },
+	])("strips prior context flag $contextFlag when honoring a restart request", async ({ contextFlag, args }) => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+
+		await withTempSessionsDir(async (sessionRoot, sessionDir) => {
+			const restartFile = join(sessionRoot, "root-restart.json");
+			const sourceSessionPath = createSessionFile(sessionDir, "source", [
+				{
+					type: "custom",
+					customType: "selected-root-agent",
+					id: "entry-source",
+					parentId: null,
+					timestamp: new Date().toISOString(),
+					data: { selectedRootAgent: "default" },
+				},
+			]);
+			const baseArgs = ["--provider", "openai", ...args, "--session-dir", sessionDir];
+			const launchArgs =
+				contextFlag === "--fork"
+					? ["--fork", "source", "--provider", "openai", "--session-dir", sessionDir]
+					: baseArgs;
+			const spawnResult = {
+				status: 0,
+				signal: null,
+				stdout: null,
+				stderr: null,
+				output: [],
+				pid: 123,
+			} as any;
+			spawnSyncMock.mockImplementationOnce((_: any, __: any, options: any) => {
+				writeFileSync(
+					options.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV],
+					`${JSON.stringify({ version: 1, requestedRootAgent: "planner" })}\n`,
+					"utf-8",
+				);
+				return spawnResult;
+			});
+			spawnSyncMock.mockImplementationOnce(() => spawnResult);
+
+			const result = await launchPi(launchArgs, {
+				cwd: sessionRoot,
+				restartRequestFile: restartFile,
+				resumePicker: contextFlag === "--resume" ? () => sourceSessionPath : undefined,
+			});
+
+			expect(result).toBe(0);
+			expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+			const secondCall = spawnSyncMock.mock.calls[1];
+			const secondArgs = secondCall[1] as string[];
+			expect(secondArgs).not.toContain(contextFlag);
 		});
 	});
 });
