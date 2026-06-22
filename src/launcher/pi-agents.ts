@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	DefaultPackageManager,
@@ -22,7 +22,14 @@ import {
 } from "../subagent/launcher-contract.js";
 import { getSelectedRootAgentFromSessionEntries, resolveRootAgent } from "../subagent/root-agent.js";
 
-export const MULTI_AGENTS_EXTENSION_ENTRY = fileURLToPath(new URL("../subagent/index.ts", import.meta.url));
+const MULTI_AGENTS_EXTENSION_ENTRY_TS = fileURLToPath(new URL("../subagent/index.ts", import.meta.url));
+const MULTI_AGENTS_EXTENSION_ENTRY_JS = fileURLToPath(new URL("../subagent/index.js", import.meta.url));
+
+export const PI_AGENTS_PI_BIN_ENV = "PI_AGENTS_PI_BIN";
+
+export const MULTI_AGENTS_EXTENSION_ENTRY = existsSync(MULTI_AGENTS_EXTENSION_ENTRY_JS)
+	? MULTI_AGENTS_EXTENSION_ENTRY_JS
+	: MULTI_AGENTS_EXTENSION_ENTRY_TS;
 
 interface BuildLaunchResult {
 	command: string;
@@ -69,6 +76,34 @@ type ParsedRestartRequest =
 	| { type: "resume-session"; sessionPath: string };
 
 const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
+const PI_AGENT_BINARY_NAME = "pi";
+const PI_AGENTS_COMMAND_BASE_NAMES = new Set(["pi-agents"]);
+
+function normalizeCommandBase(command: string): string {
+	return basename(command)
+		.toLowerCase()
+		.replace(/\.(?:[cm]?js|m?js|cmd|bat|exe)$/i, "");
+}
+
+function resolvePiCommandValue(piCommand?: string): string {
+	const configured = piCommand?.trim() || process.env[PI_AGENTS_PI_BIN_ENV]?.trim() || PI_AGENT_BINARY_NAME;
+	if (!configured) {
+		return PI_AGENT_BINARY_NAME;
+	}
+	const baseName = normalizeCommandBase(configured);
+	if (PI_AGENTS_COMMAND_BASE_NAMES.has(baseName)) {
+		return PI_AGENT_BINARY_NAME;
+	}
+	const launcherArg = process.argv[1] ?? "";
+	if (normalizeCommandBase(launcherArg) === baseName && baseName) {
+		return PI_AGENT_BINARY_NAME;
+	}
+	return configured;
+}
+
+function getLauncherCommand(options: { piCommand?: string }): string {
+	return resolvePiCommandValue(options.piCommand);
+}
 const ENV_SESSION_DIR = "PI_CODING_AGENT_SESSION_DIR";
 
 function expandTildePath(value: string): string {
@@ -501,7 +536,7 @@ function assertNoResumeConflicts(parsed: ParsedLauncherArgState): void {
 
 export async function buildLauncherArgs(userArgs: string[], options: LauncherOptions = {}): Promise<BuildLaunchResult> {
 	const cwd = options.cwd ?? process.cwd();
-	const piCommand = options.piCommand ?? "pi";
+	const piCommand = getLauncherCommand(options);
 	const extensionPath = options.extensionPath ?? MULTI_AGENTS_EXTENSION_ENTRY;
 	const resolver = {
 		discoverAgents: options.discoverAgentsForLauncher ?? discoverAgents,

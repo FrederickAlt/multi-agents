@@ -9,7 +9,12 @@ vi.mock("node:child_process", () => ({
 }));
 
 import * as mockedChildProcess from "node:child_process";
-import { buildLauncherArgs, launchPi, MULTI_AGENTS_EXTENSION_ENTRY } from "../src/launcher/pi-agents.js";
+import {
+	buildLauncherArgs,
+	launchPi,
+	MULTI_AGENTS_EXTENSION_ENTRY,
+	PI_AGENTS_PI_BIN_ENV,
+} from "../src/launcher/pi-agents.js";
 import {
 	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
 	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
@@ -124,6 +129,53 @@ describe("pi-agents launcher command generation", () => {
 		expect(result.args[0]).toBe("--no-extensions");
 		expect(result.args).toContain("--extension");
 		expect(result.args).toContain(MULTI_AGENTS_EXTENSION_ENTRY);
+	});
+
+	it("uses PI_AGENTS_PI_BIN to override the resolved Pi binary", async () => {
+		const previous = process.env[PI_AGENTS_PI_BIN_ENV];
+		process.env[PI_AGENTS_PI_BIN_ENV] = "/usr/bin/pi-custom";
+		try {
+			const result = await buildLauncherArgs(["--provider", "openai"]);
+			expect(result.command).toBe("/usr/bin/pi-custom");
+		} finally {
+			if (previous === undefined) {
+				delete process.env[PI_AGENTS_PI_BIN_ENV];
+			} else {
+				process.env[PI_AGENTS_PI_BIN_ENV] = previous;
+			}
+		}
+	});
+
+	it("falls back to pi when PI_AGENTS_PI_BIN points at a wrapper launcher", async () => {
+		const previous = process.env[PI_AGENTS_PI_BIN_ENV];
+		process.env[PI_AGENTS_PI_BIN_ENV] = "pi-agents";
+		try {
+			const result = await buildLauncherArgs(["--provider", "openai"]);
+			expect(result.command).toBe("pi");
+		} finally {
+			if (previous === undefined) {
+				delete process.env[PI_AGENTS_PI_BIN_ENV];
+			} else {
+				process.env[PI_AGENTS_PI_BIN_ENV] = previous;
+			}
+		}
+	});
+
+	it("lets an explicit piCommand option override the PI_AGENTS_PI_BIN env var", async () => {
+		const previous = process.env[PI_AGENTS_PI_BIN_ENV];
+		process.env[PI_AGENTS_PI_BIN_ENV] = "/usr/bin/pi-env";
+		try {
+			const result = await buildLauncherArgs(["--provider", "openai"], {
+				piCommand: "/usr/bin/pi-explicit",
+			});
+			expect(result.command).toBe("/usr/bin/pi-explicit");
+		} finally {
+			if (previous === undefined) {
+				delete process.env[PI_AGENTS_PI_BIN_ENV];
+			} else {
+				process.env[PI_AGENTS_PI_BIN_ENV] = previous;
+			}
+		}
 	});
 
 	it("passes a launcher restart-request file path in child env", async () => {
