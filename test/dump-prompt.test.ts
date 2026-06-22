@@ -19,6 +19,7 @@ function createFakePi() {
 	const allTools: any[] = [{ name: "read", description: "Read file contents", parameters: {} }];
 	let activeTools = ["read"];
 	const pi = {
+		appendEntry: () => {},
 		on(event: string, handler: (event: any, ctx: any) => unknown) {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
@@ -40,7 +41,7 @@ function createFakePi() {
 		},
 		getAllTools: () => [...allTools],
 	} as any;
-	return { pi, handlers, commands };
+	return { pi, handlers, commands, flags };
 }
 
 describe("integrated dump-prompt command", () => {
@@ -74,9 +75,10 @@ You are a scout.
 	});
 
 	it("dumps the selected Root agent prompt without a provider turn", async () => {
-		const { pi, commands } = createFakePi();
+		const { pi, commands, flags } = createFakePi();
 		taskExtension(pi);
 		let notification = "";
+		flags.set("defaultRootAgent", "explorer");
 		const ctx = {
 			cwd: tempDir,
 			sessionManager: makeSessionManager(tempDir, "selected-dump-session"),
@@ -85,10 +87,8 @@ You are a scout.
 					notification = message;
 				},
 			},
-			newSession: async () => ({ cancelled: true }),
 		};
 
-		await commands.get("agent").handler("explorer", ctx);
 		await commands.get("dump-prompt").handler("", ctx);
 
 		expect(notification).toContain("CURRENT MULTI-AGENTS SYSTEM PROMPT");
@@ -97,9 +97,10 @@ You are a scout.
 	});
 
 	it("clears the last provider prompt on session_start", async () => {
-		const { pi, handlers, commands } = createFakePi();
+		const { pi, handlers, commands, flags } = createFakePi();
 		taskExtension(pi);
 		let notification = "";
+		flags.set("defaultRootAgent", "explorer");
 		const ctx = {
 			cwd: tempDir,
 			sessionManager: makeSessionManager(tempDir, "clear-provider-dump-session"),
@@ -109,10 +110,7 @@ You are a scout.
 					notification = message;
 				},
 			},
-			newSession: async () => ({ cancelled: true }),
 		};
-
-		await commands.get("agent").handler("explorer", ctx);
 		for (const handler of handlers.get("before_provider_request") ?? []) {
 			await handler({}, ctx);
 		}

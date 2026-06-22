@@ -20,6 +20,7 @@ import type { DebugLogger } from "./debug-logger.js";
 import { makeNoopDebugLogger, makeSessionDebugLogger } from "./debug-logger.js";
 import { defaultRootPolicy, selectedRootPolicy } from "./depth-policy.js";
 import { filterExtensionsForAgent } from "./extension-filter.js";
+import { ensureMultiAgentsLauncherContext } from "./launcher-contract.js";
 import { MetadataStore } from "./metadata.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
@@ -33,7 +34,13 @@ import {
 	renderComposedAgentSystemPrompt,
 } from "./prompt-composition.js";
 import { discoverPromptParts } from "./prompt-parts.js";
-import { DEFAULT_ROOT_AGENT_NAME, resolveRootAgent } from "./root-agent.js";
+import {
+	DEFAULT_ROOT_AGENT_NAME,
+	getSelectedRootAgentFromSessionEntries,
+	resolveRootAgent,
+	SELECTED_ROOT_AGENT_ENTRY_KEY,
+	SELECTED_ROOT_AGENT_ENTRY_TYPE,
+} from "./root-agent.js";
 import { seedAgentConfig } from "./seeding.js";
 import {
 	PiAgentSessionFactory,
@@ -63,23 +70,6 @@ function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined
 	return agents.find((agent) => agent.name === name);
 }
 
-// Persists across extension module reloads (triggered by newSession).
-// Extension-level closure variables are lost on reload because jiti uses
-// moduleCache: false. globalThis survives because it's process-global.
-const GLOBAL_SELECTED_AGENT_KEY = "__multi_agents_selected_main_agent";
-
-function getGlobalSelectedAgent(): string | undefined {
-	return (globalThis as any)[GLOBAL_SELECTED_AGENT_KEY];
-}
-
-function setGlobalSelectedAgent(name: string | undefined): void {
-	if (name === undefined) {
-		delete (globalThis as any)[GLOBAL_SELECTED_AGENT_KEY];
-	} else {
-		(globalThis as any)[GLOBAL_SELECTED_AGENT_KEY] = name;
-	}
-}
-
 // Module-level session manager singleton so both Task and wait_for_agent
 // share the same tracked sessions.
 let _sessionManager: SubagentSessionManager | undefined;
@@ -99,6 +89,7 @@ function getOrCreateSessionManager(logger?: DebugLogger): SubagentSessionManager
 
 let seeded = false;
 export default function (pi: ExtensionAPI) {
+	ensureMultiAgentsLauncherContext();
 	if (!seeded) {
 		seedAgentConfig();
 		seeded = true;
@@ -129,6 +120,16 @@ export default function (pi: ExtensionAPI) {
 		return typeof flag === "string" && flag.trim() ? flag.trim() : DEFAULT_ROOT_AGENT_NAME;
 	};
 
+	const getLatestSelectedRootAgentForSession = (ctx: {
+		sessionManager: { getEntries: () => Array<{ type: string; customType?: string; data?: unknown }> };
+	}): string | undefined => {
+		try {
+			return getSelectedRootAgentFromSessionEntries(ctx.sessionManager.getEntries());
+		} catch {
+			return undefined;
+		}
+	};
+
 	const resolveRootAgentForSession = (selectedAgent?: string): AgentConfig => {
 		const discovery = discoverAgents();
 		return resolveRootAgent({
@@ -136,6 +137,28 @@ export default function (pi: ExtensionAPI) {
 			selectedAgent,
 			defaultRootAgent: configuredDefaultRootAgent(),
 		}).agent;
+	};
+
+	const resolveRootAgentForCurrentSession = (ctx: {
+		sessionManager: { getEntries: () => Array<{ type: string; customType?: string; data?: unknown }> };
+	}): AgentConfig => {
+		const selectedFromSession = getLatestSelectedRootAgentForSession(ctx);
+		if (selectedFromSession) {
+			return resolveRootAgentForSession(selectedFromSession);
+		}
+
+		const flagAgent = pi.getFlag("agent");
+		if (typeof flagAgent === "string" && flagAgent.trim()) {
+			return resolveRootAgentForSession(flagAgent.trim());
+		}
+
+		return resolveRootAgentForSession(undefined);
+	};
+
+	const appendSelectedRootAgentEntry = (agentName: string): void => {
+		pi.appendEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+			[SELECTED_ROOT_AGENT_ENTRY_KEY]: agentName,
+		});
 	};
 
 	const formatRootAgentResolutionError = (error: unknown): string => {
@@ -196,7 +219,7 @@ export default function (pi: ExtensionAPI) {
 		const logger = makeSessionDebugLogger(ctx.sessionManager);
 		const activeStore = MetadataStore.fromSessionManager(ctx.sessionManager, logger);
 		activeStore.load();
-		const agent = resolveRootAgentForSession(activeStore.selectedMainAgent);
+		const agent = resolveRootAgentForCurrentSession(ctx);
 		return renderComposedAgentSystemPrompt(
 			{
 				agent,
@@ -313,11 +336,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event, ctx) => {
-		const activeStore =
-			store ?? MetadataStore.fromSessionManager(ctx.sessionManager, mainRuntime.logger ?? makeNoopDebugLogger());
 		try {
-			activeStore.load();
-			resolveRootAgentForSession(activeStore.selectedMainAgent);
+			resolveRootAgentForCurrentSession(ctx);
 		} catch (error) {
 			showMessage(ctx, formatRootAgentResolutionError(error), "error");
 			return { action: "handled" as const };
@@ -353,26 +373,23 @@ export default function (pi: ExtensionAPI) {
 		store = activeStore;
 		rootLogger.info("root_session_start", { sessionDir: ctx.sessionManager.getSessionDir() });
 		activeStore.load();
-		// Restore the agent set by /agent X before newSession.
-		// globalThis is used because the extension module is reloaded during
-		// newSession (jiti with moduleCache: false), and closure-level vars
-		// are lost.
-		const globalAgent = getGlobalSelectedAgent();
-		if (globalAgent) {
-			setGlobalSelectedAgent(undefined);
-			activeStore.selectedMainAgent = globalAgent;
-		}
+
+		const sessionAgent = getLatestSelectedRootAgentForSession(ctx);
 		const flagAgent = pi.getFlag("agent");
-		if (typeof flagAgent === "string" && flagAgent.trim()) {
-			activeStore.selectedMainAgent = flagAgent.trim();
-		}
+		const selectedAgent =
+			sessionAgent || (typeof flagAgent === "string" && flagAgent.trim() ? flagAgent.trim() : undefined);
+		const hasValidSessionSelection = Boolean(sessionAgent);
+
 		let rootAgent: AgentConfig;
 		try {
-			rootAgent = resolveRootAgentForSession(activeStore.selectedMainAgent);
+			rootAgent = resolveRootAgentForSession(selectedAgent);
 		} catch (error) {
 			showMessage(ctx, formatRootAgentResolutionError(error), "error");
 			deactivateTaskTool(pi);
 			return;
+		}
+		if (!hasValidSessionSelection || getLatestSelectedRootAgentForSession(ctx) !== rootAgent.name) {
+			appendSelectedRootAgentEntry(rootAgent.name);
 		}
 		mainRuntime.treeDepth = 0;
 		mainRuntime.depthPolicy = selectedRootPolicy(rootAgent);
@@ -471,7 +488,7 @@ export default function (pi: ExtensionAPI) {
 			const logger = mainRuntime.logger ?? makeNoopDebugLogger();
 			store = MetadataStore.fromSessionManager(ctx.sessionManager, logger);
 		}
-		const agent = resolveRootAgentForSession(store.selectedMainAgent);
+		const agent = resolveRootAgentForCurrentSession(ctx);
 		mainRuntime.store = store;
 		mainRuntime.treeDepth = 0;
 		mainRuntime.depthPolicy = selectedRootPolicy(agent);
@@ -547,7 +564,7 @@ export default function (pi: ExtensionAPI) {
 			const discovery = discoverAgents();
 			if (!name) {
 				const available = formatAgentList(discovery.agents, 30).text;
-				const current = store?.selectedMainAgent ?? configuredDefaultRootAgent();
+				const current = resolveRootAgentForCurrentSession(ctx).name;
 				showMessage(ctx, `Current agent: ${current}\n\nAvailable: ${available}`, "info");
 				return;
 			}
@@ -557,23 +574,11 @@ export default function (pi: ExtensionAPI) {
 				showMessage(ctx, `Unknown agent "${name}".\n\nAvailable: ${available}`, "warning");
 				return;
 			}
-			const activeStore = MetadataStore.fromSessionManager(
-				ctx.sessionManager,
-				mainRuntime.logger ?? makeNoopDebugLogger(),
+			showMessage(
+				ctx,
+				`Switching Root agents in-session is not supported yet. Start a new Pi session with --agent ${agent.name} to use it.`,
+				"warning",
 			);
-			store = activeStore;
-			activeStore.selectedMainAgent = agent.name;
-			mainRuntime.store = activeStore;
-			mainRuntime.treeDepth = 0;
-			mainRuntime.depthPolicy = selectedRootPolicy(agent);
-			setGlobalSelectedAgent(agent.name);
-			try {
-				const result = await ctx.newSession({ parentSession: ctx.sessionManager.getSessionFile() });
-				if (result.cancelled) setGlobalSelectedAgent(undefined);
-			} catch (err) {
-				setGlobalSelectedAgent(undefined);
-				throw err;
-			}
 		},
 	});
 }

@@ -24,6 +24,7 @@ import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
 	FINAL_RESPONSE_REQUIRED_MESSAGE,
 } from "../src/subagent/output-extraction.js";
+import { SELECTED_ROOT_AGENT_ENTRY_KEY, SELECTED_ROOT_AGENT_ENTRY_TYPE } from "../src/subagent/root-agent.js";
 import { configureTaskToolForRuntime } from "../src/subagent/task-tool-registration.js";
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 	const sentMessages: Array<{ message: any; options?: any }> = [];
 	const nextTurnMessages: any[] = [];
 	const followUpMessages: any[] = [];
+	const appendedEntries: Array<{ customType: string; data?: any }> = [];
 	let activeTools = [...(options.activeTools ?? ["read", "bash", "edit", "write"])];
 	const pi = {
 		on: (event: string, handler: any) => handlers.set(event, handler),
@@ -54,6 +56,9 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 			registeredTools.push(tool);
 		},
 		registerCommand: (name: string, command: any) => commands.set(name, command),
+		appendEntry: (customType: string, data?: any) => {
+			appendedEntries.push({ customType, data });
+		},
 		sendMessage: (message: any, options?: any) => {
 			sentMessages.push({ message, options });
 			if (options?.deliverAs === "nextTurn") nextTurnMessages.push(message);
@@ -74,6 +79,7 @@ function createFakeExtensionApi(options: { activeTools?: string[] } = {}) {
 			return [text, ...queued.map((message) => String(message.content ?? ""))].join("\n\n");
 		},
 		_getActiveTools: () => [...activeTools],
+		_appendedEntries: appendedEntries,
 	} as any;
 	return { pi, handlers, commands, flags };
 }
@@ -83,6 +89,7 @@ function makeSessionManager(dir: string, sessionId: string) {
 		getSessionDir: () => dir,
 		getSessionId: () => sessionId,
 		getSessionFile: () => join(dir, `${sessionId}.jsonl`),
+		getEntries: () => [],
 	};
 }
 
@@ -490,6 +497,123 @@ describe("extension loading", () => {
 		expect(result?.systemPrompt).toContain("- read: Read file contents");
 	});
 
+	it("appends selected-root-agent custom entry during session_start", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		await handlers.get("session_start")({ type: "session_start", reason: "startup" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+
+		const selectedEntries = (pi as any)._appendedEntries.filter(
+			(entry: { customType: string; data: unknown }) => entry.customType === SELECTED_ROOT_AGENT_ENTRY_TYPE,
+		);
+		expect(selectedEntries).toHaveLength(1);
+		expect(selectedEntries[0]?.data).toMatchObject({ [SELECTED_ROOT_AGENT_ENTRY_KEY]: "default" });
+	});
+
+	it("appends selected-root-agent custom entry on reload when no valid existing selection exists", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		await handlers.get("session_start")({ type: "session_start", reason: "reload" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+
+		const selectedEntries = (pi as any)._appendedEntries.filter(
+			(entry: { customType: string; data: unknown }) => entry.customType === SELECTED_ROOT_AGENT_ENTRY_TYPE,
+		);
+		expect(selectedEntries).toHaveLength(1);
+		expect(selectedEntries[0]?.data).toMatchObject({ [SELECTED_ROOT_AGENT_ENTRY_KEY]: "default" });
+	});
+
+	it("does not append duplicate selected-root-agent custom entry when session already has matching selection", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const baseSessionManager = SessionManager.create(tempDir, tempDir);
+		const sessionManager = {
+			getSessionDir: () => baseSessionManager.getSessionDir(),
+			getSessionId: () => baseSessionManager.getSessionId(),
+			getSessionFile: () => baseSessionManager.getSessionFile(),
+			getEntries: () =>
+				(pi as any)._appendedEntries.map((entry: { customType: string; data: unknown }) => ({
+					type: "custom",
+					customType: entry.customType,
+					data: entry.data,
+					id: "dummy",
+					parentId: null,
+					timestamp: "",
+				})),
+		};
+
+		await handlers.get("session_start")({ type: "session_start", reason: "startup" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+		expect((pi as any)._appendedEntries).toHaveLength(1);
+
+		await handlers.get("session_start")({ type: "session_start", reason: "reload" }, {
+			ui: { notify: () => {} },
+			cwd: tempDir,
+			sessionManager,
+		} as any);
+
+		expect((pi as any)._appendedEntries).toHaveLength(1);
+	});
+
+	it("uses the latest selected-root-agent custom entry from session JSONL", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+			[SELECTED_ROOT_AGENT_ENTRY_KEY]: "explorer",
+		});
+		sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+			[SELECTED_ROOT_AGENT_ENTRY_KEY]: "planner",
+		});
+
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
+
+		expect(result?.systemPrompt).toContain("software architect and planning specialist");
+	});
+
+	it("prefers existing session selection over the launch --agent flag", async () => {
+		const { pi, handlers, flags } = createFakeExtensionApi();
+		taskExtension(pi);
+		flags.set("agent", "planner");
+
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+			[SELECTED_ROOT_AGENT_ENTRY_KEY]: "explorer",
+		});
+
+		const result = await handlers.get("before_agent_start")(
+			{
+				systemPrompt: "Pi base prompt",
+				systemPromptOptions: { cwd: tempDir },
+			},
+			{ cwd: tempDir, sessionManager },
+		);
+
+		expect(result?.systemPrompt).toContain("Explorer agent");
+		expect(result?.systemPrompt).not.toContain("software architect and planning specialist");
+	});
+
 	it("does not preserve hidden Pi prompt material for Root Agent definitions", async () => {
 		writeFile(
 			join(agentDiscoveryDir, "agents", "default.md"),
@@ -626,30 +750,28 @@ describe("extension loading", () => {
 		}
 	});
 
-	it("/agent applies a session-local Root selection without mutating the configured default", async () => {
-		const { pi, handlers, commands, flags } = createFakeExtensionApi();
+	it("/agent with explicit name is deferred until session restart", async () => {
+		const { pi, commands } = createFakeExtensionApi();
 		taskExtension(pi);
 
-		const sessionManager = makeSessionManager(tempDir, "selected-root-session");
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		let newSessionCalls = 0;
+		const notices: string[] = [];
 		const ctx = {
 			cwd: tempDir,
 			sessionManager,
-			ui: { notify: () => {} },
-			newSession: async () => ({ cancelled: true }),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
 		};
 
-		await commands.get("agent").handler("planner", ctx);
-		const result = await handlers.get("before_agent_start")(
-			{
-				systemPrompt: "Pi base prompt",
-				systemPromptOptions: { cwd: tempDir },
-			},
-			ctx,
-		);
-
-		expect(flags.get("defaultRootAgent")).toBe("default");
-		expect(result?.systemPrompt).toContain("software architect and planning specialist");
-		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
+		await commands.get("agent").handler("planner", ctx as any);
+		expect(newSessionCalls).toBe(0);
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toContain("in-session is not supported yet");
+		expect((pi as any)._appendedEntries).toHaveLength(0);
 	});
 
 	// ------------------------------------------------------------------
