@@ -78,12 +78,27 @@ function findAgent(agents: AgentConfig[], name: string): AgentConfig | undefined
 interface RestartRequestPayload {
 	version: 1;
 	requestedRootAgent: string;
+	type?: "agent";
+}
+interface ResumeRestartRequestPayload {
+	version: 1;
+	type: "resume-session";
+	sessionPath: string;
 }
 
 function writeRestartRequest(path: string, requestedRootAgent: string): void {
 	const payload: RestartRequestPayload = {
 		version: 1,
 		requestedRootAgent,
+	};
+	writeFileSync(path, `${JSON.stringify(payload)}\n`, "utf-8");
+}
+
+function writeResumeSessionRestartRequest(path: string, sessionPath: string): void {
+	const payload: ResumeRestartRequestPayload = {
+		version: 1,
+		type: "resume-session",
+		sessionPath,
 	};
 	writeFileSync(path, `${JSON.stringify(payload)}\n`, "utf-8");
 }
@@ -575,6 +590,39 @@ export default function (pi: ExtensionAPI) {
 
 		dumpNextProviderRequest = false;
 		showMessage(ctx, renderDump("SYSTEM PROMPT SENT TO PROVIDER", prompt), "info");
+	});
+
+	pi.on("session_before_switch", async (event, ctx) => {
+		if (event.type !== "session_before_switch" || event.reason !== "resume" || !event.targetSessionFile) {
+			return;
+		}
+
+		const requestFile = process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV];
+		if (!requestFile?.trim()) {
+			return;
+		}
+		try {
+			writeResumeSessionRestartRequest(requestFile, event.targetSessionFile);
+		} catch {
+			clearRestartRequest(requestFile);
+			showMessage(
+				ctx,
+				`Failed to save the requested resume-session restart for "${event.targetSessionFile}". Staying in the current session.`,
+				"error",
+			);
+			return { cancel: true };
+		}
+		showMessage(ctx, `Restarting Pi with selected session in a fresh process.`, "info");
+		requestPiShutdown(ctx, requestFile, {
+			onFailure: () => {
+				showMessage(
+					ctx,
+					`Failed to prepare resume-session restart for "${event.targetSessionFile}". Staying in the current session.`,
+					"error",
+				);
+			},
+		});
+		return { cancel: true };
 	});
 
 	pi.registerCommand("dump-prompt", {

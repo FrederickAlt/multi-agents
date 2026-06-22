@@ -1027,6 +1027,83 @@ describe("pi-agents launcher command generation", () => {
 		}
 	});
 
+	it("restarts into a selected session with a resume-session restart request", async () => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+
+		const root = mkdtempSync(join(tmpdir(), "pi-agents-launch-resume-restart-"));
+		const restartFile = join(root, "resume-restart.json");
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const defaultExtension = join(workDir, "extensions", "default.ts");
+		const plannerExtension = join(workDir, "extensions", "planner.ts");
+		writeExtensionFile(defaultExtension);
+		writeExtensionFile(plannerExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [defaultExtension, plannerExtension],
+		});
+		writeAgentDefinition(launcherAgentDir, "default", ["default.ts"]);
+		writeAgentDefinition(launcherAgentDir, "planner", ["planner.ts"]);
+
+		const sessionDir = join(workDir, "sessions");
+		mkdirSync(sessionDir, { recursive: true });
+		type SessionEntry = { [key: string]: unknown };
+		const selectedSessionPath = createSessionFile(
+			sessionDir,
+			"resume-target",
+			[
+				{
+					type: "custom",
+					customType: "selected-root-agent",
+					id: "entry-target",
+					parentId: null,
+					timestamp: new Date().toISOString(),
+					data: { selectedRootAgent: "planner" },
+				} as SessionEntry,
+			],
+			"/tmp/project",
+		);
+
+		const spawnResult = {
+			status: 0,
+			signal: null,
+			stdout: null,
+			stderr: null,
+			output: [],
+			pid: 123,
+		} as any;
+
+		spawnSyncMock.mockImplementationOnce((_: any, __: any, options: any) => {
+			writeFileSync(
+				options.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV],
+				`${JSON.stringify({ version: 1, type: "resume-session", sessionPath: selectedSessionPath })}\n`,
+				"utf-8",
+			);
+			return spawnResult;
+		});
+		spawnSyncMock.mockImplementationOnce(() => spawnResult);
+
+		try {
+			const result = await launchPi(["--provider", "openai", "--session-dir", workDir], {
+				cwd: root,
+				restartRequestFile: restartFile,
+			});
+
+			expect(result).toBe(0);
+			expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+			const secondArgs = spawnSyncMock.mock.calls[1][1] as string[];
+			const secondExtensions = collectExtensionValues(secondArgs);
+			expect(secondExtensions).toContain(plannerExtension);
+			expect(secondExtensions).not.toContain(defaultExtension);
+			expect(secondArgs).toContain("--session");
+			expect(secondArgs[secondArgs.indexOf("--session") + 1]).toBe(selectedSessionPath);
+			expect(secondArgs).toContain("--agent");
+			expect(secondArgs[secondArgs.indexOf("--agent") + 1]).toBe("planner");
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("does not honor restart request after non-zero child exit", async () => {
 		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
 		spawnSyncMock.mockReset();
@@ -1121,10 +1198,90 @@ describe("pi-agents launcher command generation", () => {
 		}
 	});
 
+	it("strips stale --session-dir when honoring a resume-session restart request", async () => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+
+		const root = mkdtempSync(join(tmpdir(), "pi-agents-launch-resume-session-dir-restart-"));
+		const restartFile = join(root, "resume-restart-session-dir.json");
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const oldSessionDir = mkdtempSync(join(tmpdir(), "pi-agents-old-session-dir-"));
+		const selectedSessionDir = mkdtempSync(join(tmpdir(), "pi-agents-selected-session-dir-"));
+		const defaultExtension = join(workDir, "extensions", "default.ts");
+		const plannerExtension = join(workDir, "extensions", "planner.ts");
+		writeExtensionFile(defaultExtension);
+		writeExtensionFile(plannerExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [defaultExtension, plannerExtension],
+		});
+		writeAgentDefinition(launcherAgentDir, "default", ["default.ts"]);
+		writeAgentDefinition(launcherAgentDir, "planner", ["planner.ts"]);
+
+		type SessionEntry = { [key: string]: unknown };
+		const selectedSessionPath = createSessionFile(
+			selectedSessionDir,
+			"resume-target",
+			[
+				{
+					type: "custom",
+					customType: "selected-root-agent",
+					id: "entry-target",
+					parentId: null,
+					timestamp: new Date().toISOString(),
+					data: { selectedRootAgent: "planner" },
+				} as SessionEntry,
+			],
+			"/tmp/project",
+		);
+
+		const spawnResult = {
+			status: 0,
+			signal: null,
+			stdout: null,
+			stderr: null,
+			output: [],
+			pid: 123,
+		} as any;
+
+		spawnSyncMock.mockImplementationOnce((_: any, __: any, options: any) => {
+			writeFileSync(
+				options.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV],
+				`${JSON.stringify({ version: 1, type: "resume-session", sessionPath: selectedSessionPath })}\n`,
+				"utf-8",
+			);
+			return spawnResult;
+		});
+		spawnSyncMock.mockImplementationOnce(() => spawnResult);
+
+		try {
+			const result = await launchPi(["--provider", "openai", "--session-dir", oldSessionDir], {
+				cwd: root,
+				restartRequestFile: restartFile,
+			});
+
+			expect(result).toBe(0);
+			expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+			const secondCall = spawnSyncMock.mock.calls[1];
+			const secondArgs = secondCall[1] as string[];
+			expect(secondArgs.some((arg) => arg === "--session-dir" || arg.startsWith("--session-dir="))).toBe(false);
+			expect(secondArgs).toContain("--session");
+			expect(secondArgs[secondArgs.indexOf("--session") + 1]).toBe(selectedSessionPath);
+			expect(secondArgs).toContain("--agent");
+			expect(secondArgs[secondArgs.indexOf("--agent") + 1]).toBe("planner");
+			expect(secondArgs).not.toContain(oldSessionDir);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+			rmSync(oldSessionDir, { recursive: true, force: true });
+			rmSync(selectedSessionDir, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		{ contextFlag: "--fork", args: ["--fork", "source"] },
 		{ contextFlag: "--continue", args: ["--continue"] },
 		{ contextFlag: "--resume", args: ["--resume"] },
+		{ contextFlag: "--session", args: ["--session", "source"] },
 	])("strips prior context flag $contextFlag when honoring a restart request", async ({ contextFlag, args }) => {
 		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
 		spawnSyncMock.mockReset();

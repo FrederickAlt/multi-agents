@@ -995,6 +995,145 @@ describe("extension loading", () => {
 		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
 		expect((pi as any)._appendedEntries).toHaveLength(0);
 	});
+
+	it("intercepts resume session switching and requests a resume-session launcher restart", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "resume-restart.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const selectedSessionPath = join(tempDir, "selected-session.jsonl");
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+		try {
+			const result = await handlers.get("session_before_switch")(
+				{ type: "session_before_switch", reason: "resume", targetSessionFile: selectedSessionPath },
+				ctx as any,
+			);
+			expect(result).toEqual({ cancel: true });
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+		}
+
+		const content = readFileSync(restartRequestFile, "utf-8").trim();
+		expect(content).toBe(`{"version":1,"type":"resume-session","sessionPath":"${selectedSessionPath}"}`);
+		expect(shutdownCalls).toBe(1);
+		expect(notices.some((notice) => notice.includes("Restarting Pi with selected session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("does not intercept non-resume or unknown-target session switch events", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "resume-ignore.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+
+		const missingTargetResult = await handlers.get("session_before_switch")(
+			{ type: "session_before_switch", reason: "resume" },
+			ctx as any,
+		);
+		const otherReasonResult = await handlers.get("session_before_switch")(
+			{ type: "session_before_switch", reason: "new", targetSessionFile: join(tempDir, "other-session.jsonl") },
+			ctx as any,
+		);
+		restoreRestartRequestEnv(originalRestartEnv);
+
+		expect(missingTargetResult).toBeUndefined();
+		expect(otherReasonResult).toBeUndefined();
+		expect(shutdownCalls).toBe(0);
+		expect(notices).toHaveLength(0);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("clears pending resume-session restart request when shutdown throws", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "resume-shutdown-fail.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+				throw new Error("shutdown failed");
+			},
+		};
+		const selectedSessionPath = join(tempDir, "resume-session.jsonl");
+		const result = await handlers.get("session_before_switch")(
+			{ type: "session_before_switch", reason: "resume", targetSessionFile: selectedSessionPath },
+			ctx as any,
+		);
+		restoreRestartRequestEnv(originalRestartEnv);
+
+		expect(result).toEqual({ cancel: true });
+		expect(shutdownCalls).toBe(1);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to prepare resume-session restart"))).toBe(true);
+		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
+	});
+
+	it("stays in session when resume restart request file cannot be written", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "nowhere", "resume-unwritable.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		const notices: string[] = [];
+		let shutdownCalls = 0;
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+		const result = await handlers.get("session_before_switch")(
+			{
+				type: "session_before_switch",
+				reason: "resume",
+				targetSessionFile: join(tempDir, "selected-session.jsonl"),
+			},
+			ctx as any,
+		);
+		restoreRestartRequestEnv(originalRestartEnv);
+
+		expect(result).toEqual({ cancel: true });
+		expect(shutdownCalls).toBe(0);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to save the requested resume-session restart"))).toBe(
+			true,
+		);
+	});
+
 	it("rejects unknown /agent names without writing a restart request", async () => {
 		const { pi, commands } = createFakeExtensionApi();
 		taskExtension(pi);
