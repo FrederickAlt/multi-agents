@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx tsx
+#!/usr/bin/env node
 
 import { launchPi } from "./pi-agents.js";
 
