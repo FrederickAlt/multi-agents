@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,12 @@ const tscResult = spawnSync(tscCommand, tscArgs, {
 if (tscResult.status !== 0 || tscResult.error) {
 	console.error("Failed to compile TypeScript sources for distribution.");
 	process.exit(tscResult.status ?? 1);
+}
+
+for (const binPath of [join(distDir, "launcher", "cli.js"), join(distDir, "tui", "cli.js")]) {
+	if (existsSync(binPath)) {
+		chmodSync(binPath, 0o755);
+	}
 }
 
 for (const [from, to] of [
