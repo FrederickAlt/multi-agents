@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, getModel, registerFauxProvider } from "@mariozechner/pi-ai";
+import { fauxAssistantMessage, registerFauxProvider } from "@mariozechner/pi-ai";
 import {
 	AuthStorage,
 	createAgentSession,
@@ -239,10 +239,11 @@ describe("extension loading", () => {
 		});
 		await resourceLoader.reload();
 
+		const model = ModelRegistry.inMemory(AuthStorage.inMemory()).find("anthropic", "claude-sonnet-4-5")!;
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir,
-			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			model,
 			sessionManager,
 			resourceLoader,
 		});

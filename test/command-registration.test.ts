@@ -8,8 +8,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getModel } from "@mariozechner/pi-ai";
-import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+	AuthStorage,
+	createAgentSession,
+	DefaultResourceLoader,
+	ModelRegistry,
+	SessionManager,
+} from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import taskExtension from "../src/subagent/index.js";
 
@@ -73,10 +78,11 @@ async function captureRegisteredCommands(tempDir: string, agentDir: string): Pro
 	});
 	await resourceLoader.reload();
 
+	const model = ModelRegistry.inMemory(AuthStorage.inMemory()).find("anthropic", "claude-sonnet-4-5")!;
 	const { session } = await createAgentSession({
 		cwd: tempDir,
 		agentDir,
-		model: getModel("anthropic", "claude-sonnet-4-5")!,
+		model,
 		sessionManager,
 		resourceLoader,
 	});

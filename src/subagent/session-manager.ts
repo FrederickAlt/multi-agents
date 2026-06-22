@@ -23,14 +23,14 @@ export type ResolvedModel = Pick<Model<any>, "id" | "provider"> & Partial<Model<
 
 import type { AgentConfig } from "./agents.js";
 import { readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
+import { type DebugLogger, makeNoopDebugLogger } from "./debug-logger.js";
+import type { SubagentRecord, TerminalOutcome } from "./metadata.js";
+import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
 import {
 	getSelectedRootAgentFromSessionEntries,
 	SELECTED_ROOT_AGENT_ENTRY_KEY,
 	SELECTED_ROOT_AGENT_ENTRY_TYPE,
 } from "./root-agent.js";
-import { type DebugLogger, makeNoopDebugLogger } from "./debug-logger.js";
-import type { SubagentRecord, TerminalOutcome } from "./metadata.js";
-import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
 
 export const ABORT_FINAL_SUMMARY_TIMEOUT_MS = 5 * 60 * 1000;
 export const ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS = 5 * 1000;

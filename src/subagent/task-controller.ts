@@ -273,9 +273,7 @@ function readSessionHeaderCwd(sessionFile: string | undefined): string | undefin
 		const firstLine = readFileSync(sessionFile, "utf-8").split("\n")[0];
 		if (!firstLine?.trim()) return undefined;
 		const header = JSON.parse(firstLine) as { type?: unknown; cwd?: unknown };
-		return header.type === "session" && typeof header.cwd === "string" && header.cwd.trim()
-			? header.cwd
-			: undefined;
+		return header.type === "session" && typeof header.cwd === "string" && header.cwd.trim() ? header.cwd : undefined;
 	} catch {
 		return undefined;
 	}

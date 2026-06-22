@@ -10,7 +10,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { getModel } from "@mariozechner/pi-ai";
 import {
 	AuthStorage,
 	createAgentSession,
@@ -97,7 +96,7 @@ CRITICAL SAFETY RULES:
 	it("spawns a subagent that reads a file and returns content", async () => {
 		const authPath = join(homedir(), ".pi", "agent", "auth.json");
 		const authStorage = AuthStorage.create(authPath);
-		const _modelRegistry = ModelRegistry.create(authStorage);
+		const modelRegistry = ModelRegistry.create(authStorage);
 
 		const sessionDir = join(projectDir, ".sessions");
 		const sessionManager = SessionManager.create(projectDir, sessionDir);
@@ -108,7 +107,7 @@ CRITICAL SAFETY RULES:
 		});
 		await resourceLoader.reload();
 
-		const model = getModel("openai-codex", "gpt-5.4-mini")!;
+		const model = modelRegistry.find("openai-codex", "gpt-5.4-mini")!;
 		const result = await createAgentSession({
 			cwd: projectDir,
 			agentDir: join(homedir(), ".pi", "agent"),
@@ -154,7 +153,7 @@ Summarize the project in one sentence.`,
 	it("resumes a subagent and it remembers the prior conversation", async () => {
 		const authPath = join(homedir(), ".pi", "agent", "auth.json");
 		const authStorage = AuthStorage.create(authPath);
-		const _modelRegistry = ModelRegistry.create(authStorage);
+		const modelRegistry = ModelRegistry.create(authStorage);
 
 		const sessionDir = join(projectDir, ".sessions");
 		const sessionManager = SessionManager.create(projectDir, sessionDir);
@@ -165,7 +164,7 @@ Summarize the project in one sentence.`,
 		});
 		await resourceLoader.reload();
 
-		const model = getModel("openai-codex", "gpt-5.4-mini")!;
+		const model = modelRegistry.find("openai-codex", "gpt-5.4-mini")!;
 		const result = await createAgentSession({
 			cwd: projectDir,
 			agentDir: join(homedir(), ".pi", "agent"),
