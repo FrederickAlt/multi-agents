@@ -282,6 +282,72 @@ describe("pi-agents launcher command generation", () => {
 		}
 	});
 
+	it("does not include configured pdf-preview candidate for default Root unless explicitly allowed", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const pdfPreviewExtension = join(workDir, "extensions", "pdf-preview", "viewer.ts");
+		writeExtensionFile(pdfPreviewExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [pdfPreviewExtension],
+		});
+		writeFileSync(
+			join(launcherAgentDir, "agents", "default.md"),
+			`---\ndescription: test agent\nextensions: []\n---\n\n## Default Root\n`,
+			"utf-8",
+		);
+		try {
+			const result = await buildLauncherArgs(["--provider", "openai"], { cwd: workDir });
+			const selected = collectExtensionValues(result.args);
+			expect(selected).not.toContain(pdfPreviewExtension);
+			expect(selected).toContain(MULTI_AGENTS_EXTENSION_ENTRY);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	it("allows configured pdf-preview when default Root extension selector matches it", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const pdfPreviewExtension = join(workDir, "extensions", "pdf-preview", "viewer.ts");
+		writeExtensionFile(pdfPreviewExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [pdfPreviewExtension],
+		});
+		writeFileSync(
+			join(launcherAgentDir, "agents", "default.md"),
+			`---\ndescription: test agent\nextensions:\n  - pdf-preview\n---\n\n## Default Root\n`,
+			"utf-8",
+		);
+		try {
+			const result = await buildLauncherArgs(["--provider", "openai"], { cwd: workDir });
+			const selected = collectExtensionValues(result.args);
+			expect(selected).toContain(pdfPreviewExtension);
+			expect(selected).toContain(MULTI_AGENTS_EXTENSION_ENTRY);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	it("force-loads configured pdf-preview with explicit --extension", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
+		const pdfPreviewExtension = join(workDir, "extensions", "pdf-preview", "viewer.ts");
+		writeExtensionFile(pdfPreviewExtension);
+		createSettingsFile(join(launcherAgentDir, "settings.json"), {
+			extensions: [pdfPreviewExtension],
+		});
+		writeFileSync(
+			join(launcherAgentDir, "agents", "default.md"),
+			`---\ndescription: test agent\nextensions: []\n---\n\n## Default Root\n`,
+			"utf-8",
+		);
+		try {
+			const result = await buildLauncherArgs(["--extension", pdfPreviewExtension], { cwd: workDir });
+			const selected = collectExtensionValues(result.args);
+			expect(selected).toContain(pdfPreviewExtension);
+			expect(selected).toContain(MULTI_AGENTS_EXTENSION_ENTRY);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
 	it("preserves explicit user extension even when root filtering would remove it", async () => {
 		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
 		const filteredCandidate = join(workDir, "extensions", "filtered", "candidate.ts");

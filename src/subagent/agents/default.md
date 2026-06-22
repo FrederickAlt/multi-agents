@@ -2,6 +2,7 @@
 description: Default Root coding assistant
 reasoning_effort: high
 depth: 1
+extensions: []
 prompt_parts:
   - 010-tools
   - 020-runtime-context

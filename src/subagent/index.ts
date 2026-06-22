@@ -92,33 +92,22 @@ function clearRestartRequest(path: string): void {
 	}
 }
 
-type ShutdownResult = { cancelled?: boolean; failed?: boolean };
-
-async function requestPiShutdown(
-	ctx: {
-		newSession?: () => Promise<{ cancelled?: boolean } | undefined> | ({ cancelled?: boolean } | undefined);
-	},
+function requestPiShutdown(
+	ctx: { shutdown?: () => void },
 	restartRequestFile?: string,
-	options: { onCancelled?: () => void; onFailure?: () => void } = {},
-): Promise<ShutdownResult | undefined> {
+	options: { onFailure?: () => void } = {},
+): void {
 	try {
-		const shutdownResult = await ctx.newSession?.();
-		const cancelFlag = !!(shutdownResult && typeof shutdownResult === "object" && shutdownResult.cancelled);
-		if (cancelFlag) {
-			if (restartRequestFile) {
-				clearRestartRequest(restartRequestFile);
-			}
-			options.onCancelled?.();
-			return { cancelled: true };
+		if (typeof ctx.shutdown === "function") {
+			ctx.shutdown();
+			return;
 		}
 		process.exit(0);
-		return { cancelled: false };
 	} catch {
 		if (restartRequestFile) {
 			clearRestartRequest(restartRequestFile);
 		}
 		options.onFailure?.();
-		return { cancelled: false, failed: true };
 	}
 }
 
@@ -649,19 +638,8 @@ export default function (pi: ExtensionAPI) {
 				showMessage(ctx, "Failed to save the requested Root-agent restart request.", "error");
 				return;
 			}
-			showMessage(
-				ctx,
-				`Restarting Pi with Root agent "${agent.name}" in a fresh session (new session will be used).`,
-				"info",
-			);
-			const shutdownResult = await requestPiShutdown(ctx, requestFile, {
-				onCancelled: () => {
-					showMessage(
-						ctx,
-						`Root agent "${agent.name}" restart was cancelled. Staying in the current session.`,
-						"warning",
-					);
-				},
+			showMessage(ctx, `Restarting Pi with Root agent "${agent.name}" in a fresh session.`, "info");
+			requestPiShutdown(ctx, requestFile, {
 				onFailure: () => {
 					showMessage(
 						ctx,
@@ -670,9 +648,6 @@ export default function (pi: ExtensionAPI) {
 					);
 				},
 			});
-			if (shutdownResult?.cancelled) {
-				return;
-			}
 		},
 	});
 }

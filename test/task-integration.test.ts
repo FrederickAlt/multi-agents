@@ -763,12 +763,8 @@ describe("extension loading", () => {
 		taskExtension(pi);
 		const previousRequestPath = process.env.PI_MULTI_AGENTS_RESTART_FILE;
 		delete process.env.PI_MULTI_AGENTS_RESTART_FILE;
-		const originalExit = process.exit;
-		let exitCalls = 0;
-		(process as any).exit = ((..._args: unknown[]) => {
-			exitCalls += 1;
-		}) as any;
 		let newSessionCalls = 0;
+		let shutdownCalls = 0;
 		const notices: string[] = [];
 		const ctx = {
 			cwd: tempDir,
@@ -778,16 +774,18 @@ describe("extension loading", () => {
 				newSessionCalls += 1;
 				return { cancelled: false };
 			},
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
 		};
 		try {
 			await commands.get("agent").handler("planner", ctx as any);
 		} finally {
 			restoreRestartRequestEnv(previousRequestPath);
-			process.exit = originalExit;
 		}
 
 		expect(newSessionCalls).toBe(0);
-		expect(exitCalls).toBe(0);
+		expect(shutdownCalls).toBe(0);
 		expect(notices.some((notice) => notice.includes("launcher restart file is missing"))).toBe(true);
 		expect((pi as any)._appendedEntries).toHaveLength(0);
 	});
@@ -799,6 +797,82 @@ describe("extension loading", () => {
 		const restartRequestFile = join(tempDir, "root-restart.json");
 		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
 		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let newSessionCalls = 0;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+			shutdown: () => {
+				shutdownCalls += 1;
+			},
+		};
+
+		try {
+			await commands.get("agent").handler("planner", ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+		}
+
+		const content = readFileSync(restartRequestFile, "utf-8").trim();
+		expect(content).toBe('{"version":1,"requestedRootAgent":"planner"}');
+		expect(newSessionCalls).toBe(0);
+		expect(shutdownCalls).toBe(1);
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toContain('Root agent "planner" in a fresh session');
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("clears pending restart request when /agent shutdown throws", async () => {
+		const { pi, commands } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "root-restart-failed.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
+		let newSessionCalls = 0;
+		let shutdownCalls = 0;
+		const notices: string[] = [];
+		const ctx = {
+			cwd: tempDir,
+			sessionManager: SessionManager.create(tempDir, tempDir),
+			ui: { notify: (message: string) => notices.push(message) },
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+			shutdown: () => {
+				shutdownCalls += 1;
+				throw new Error("shutdown transition failure");
+			},
+		};
+
+		try {
+			await commands.get("agent").handler("planner", ctx as any);
+		} finally {
+			restoreRestartRequestEnv(originalRestartEnv);
+		}
+
+		expect(newSessionCalls).toBe(0);
+		expect(shutdownCalls).toBe(1);
+		expect(existsSync(restartRequestFile)).toBe(false);
+		expect(notices.some((notice) => notice.includes("Failed to prepare Root-agent session restart"))).toBe(true);
+		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
+		expect((pi as any)._appendedEntries).toHaveLength(0);
+	});
+
+	it("falls back to process.exit when shutdown API is unavailable", async () => {
+		const { pi, commands } = createFakeExtensionApi();
+		taskExtension(pi);
+
+		const restartRequestFile = join(tempDir, "root-restart-fallback.json");
+		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
+		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
 		const originalExit = process.exit;
 		let exitCalls = 0;
 		(process as any).exit = ((..._args: unknown[]) => {
@@ -814,8 +888,7 @@ describe("extension loading", () => {
 				newSessionCalls += 1;
 				return { cancelled: false };
 			},
-		};
-
+		} as any;
 		try {
 			await commands.get("agent").handler("planner", ctx as any);
 		} finally {
@@ -823,89 +896,11 @@ describe("extension loading", () => {
 			process.exit = originalExit;
 		}
 
+		expect(newSessionCalls).toBe(0);
+		expect(exitCalls).toBe(1);
 		const content = readFileSync(restartRequestFile, "utf-8").trim();
 		expect(content).toBe('{"version":1,"requestedRootAgent":"planner"}');
-		expect(newSessionCalls).toBe(1);
-		expect(exitCalls).toBe(1);
-		expect(notices).toHaveLength(1);
-		expect(notices[0]).toContain('Root agent "planner" in a fresh session');
-		expect((pi as any)._appendedEntries).toHaveLength(0);
-	});
-
-	it("removes pending restart request when /agent shutdown is cancelled", async () => {
-		const { pi, commands } = createFakeExtensionApi();
-		taskExtension(pi);
-
-		const restartRequestFile = join(tempDir, "root-restart-cancelled.json");
-		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
-		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
-		const originalExit = process.exit;
-		let exitCalls = 0;
-		(process as any).exit = ((..._args: unknown[]) => {
-			exitCalls += 1;
-		}) as any;
-		let newSessionCalls = 0;
-		const notices: string[] = [];
-		const ctx = {
-			cwd: tempDir,
-			sessionManager: SessionManager.create(tempDir, tempDir),
-			ui: { notify: (message: string) => notices.push(message) },
-			newSession: async () => {
-				newSessionCalls += 1;
-				return { cancelled: true };
-			},
-		};
-
-		try {
-			await commands.get("agent").handler("planner", ctx as any);
-		} finally {
-			restoreRestartRequestEnv(originalRestartEnv);
-			process.exit = originalExit;
-		}
-
-		expect(newSessionCalls).toBe(1);
-		expect(exitCalls).toBe(0);
-		expect(existsSync(restartRequestFile)).toBe(false);
-		expect(notices.some((notice) => notice.includes('Root agent "planner" restart was cancelled.'))).toBe(true);
-		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
-		expect((pi as any)._appendedEntries).toHaveLength(0);
-	});
-
-	it("clears pending restart request when /agent shutdown fails", async () => {
-		const { pi, commands } = createFakeExtensionApi();
-		taskExtension(pi);
-
-		const restartRequestFile = join(tempDir, "root-restart-failed.json");
-		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
-		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
-		const originalExit = process.exit;
-		let exitCalls = 0;
-		(process as any).exit = ((..._args: unknown[]) => {
-			exitCalls += 1;
-		}) as any;
-		let newSessionCalls = 0;
-		const notices: string[] = [];
-		const ctx = {
-			cwd: tempDir,
-			sessionManager: SessionManager.create(tempDir, tempDir),
-			ui: { notify: (message: string) => notices.push(message) },
-			newSession: async () => {
-				newSessionCalls += 1;
-				throw new Error("shutdown transition failure");
-			},
-		};
-		try {
-			await commands.get("agent").handler("planner", ctx as any);
-		} finally {
-			restoreRestartRequestEnv(originalRestartEnv);
-			process.exit = originalExit;
-		}
-
-		expect(newSessionCalls).toBe(1);
-		expect(exitCalls).toBe(0);
-		expect(existsSync(restartRequestFile)).toBe(false);
-		expect(notices.some((notice) => notice.includes("Failed to prepare Root-agent session restart"))).toBe(true);
-		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
+		expect(notices.some((notice) => notice.includes('Root agent "planner" in a fresh session.'))).toBe(true);
 		expect((pi as any)._appendedEntries).toHaveLength(0);
 	});
 
@@ -916,19 +911,19 @@ describe("extension loading", () => {
 		const restartRequestFile = join(tempDir, "root-restart-throws-sync.json");
 		const originalRestartEnv = process.env.PI_MULTI_AGENTS_RESTART_FILE;
 		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
-		const originalExit = process.exit;
-		let exitCalls = 0;
-		(process as any).exit = ((..._args: unknown[]) => {
-			exitCalls += 1;
-		}) as any;
 		let newSessionCalls = 0;
+		let shutdownCalls = 0;
 		const notices: string[] = [];
 		const ctx = {
 			cwd: tempDir,
 			sessionManager: SessionManager.create(tempDir, tempDir),
 			ui: { notify: (message: string) => notices.push(message) },
-			newSession: () => {
+			newSession: async () => {
 				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+			shutdown: () => {
+				shutdownCalls += 1;
 				throw new Error("shutdown transition immediate failure");
 			},
 		};
@@ -936,11 +931,10 @@ describe("extension loading", () => {
 			await commands.get("agent").handler("planner", ctx as any);
 		} finally {
 			restoreRestartRequestEnv(originalRestartEnv);
-			process.exit = originalExit;
 		}
 
-		expect(newSessionCalls).toBe(1);
-		expect(exitCalls).toBe(0);
+		expect(newSessionCalls).toBe(0);
+		expect(shutdownCalls).toBe(1);
 		expect(existsSync(restartRequestFile)).toBe(false);
 		expect(notices.some((notice) => notice.includes("Failed to prepare Root-agent session restart"))).toBe(true);
 		expect(notices.some((notice) => notice.includes("Staying in the current session"))).toBe(true);
@@ -953,11 +947,6 @@ describe("extension loading", () => {
 		const restartRequestFile = join(tempDir, "root-restart-unknown.json");
 		const previousRequestPath = process.env.PI_MULTI_AGENTS_RESTART_FILE;
 		process.env.PI_MULTI_AGENTS_RESTART_FILE = restartRequestFile;
-		const originalExit = process.exit;
-		let exitCalls = 0;
-		(process as any).exit = ((..._args: unknown[]) => {
-			exitCalls += 1;
-		}) as any;
 		let newSessionCalls = 0;
 		const notices: string[] = [];
 		const ctx = {
@@ -966,19 +955,14 @@ describe("extension loading", () => {
 			ui: { notify: (message: string) => notices.push(message) },
 			newSession: async () => {
 				newSessionCalls += 1;
-				return { cancelled: false };
+				throw new Error("unexpected restart");
 			},
 		};
-		try {
-			await commands.get("agent").handler("does-not-exist", ctx as any);
-		} finally {
-			restoreRestartRequestEnv(previousRequestPath);
-			process.exit = originalExit;
-		}
+		await expect(commands.get("agent").handler("does-not-exist", ctx as any)).resolves.toBeUndefined();
+		restoreRestartRequestEnv(previousRequestPath);
 
-		expect(() => readFileSync(restartRequestFile, "utf-8")).toThrow();
 		expect(newSessionCalls).toBe(0);
-		expect(exitCalls).toBe(0);
+		expect(() => readFileSync(restartRequestFile, "utf-8")).toThrow();
 		expect(notices.some((notice) => notice.includes("Unknown agent"))).toBe(true);
 		expect((pi as any)._appendedEntries).toHaveLength(0);
 	});
