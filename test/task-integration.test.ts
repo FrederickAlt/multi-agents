@@ -20,6 +20,7 @@ import type { AgentConfig } from "../src/subagent/agents.js";
 import { childPolicy, selectedRootPolicy } from "../src/subagent/depth-policy.js";
 import { filterExtensionsForAgent } from "../src/subagent/extension-filter.js";
 import taskExtension from "../src/subagent/index.js";
+import { MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV } from "../src/subagent/launcher-contract.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
 	FINAL_RESPONSE_REQUIRED_MESSAGE,
@@ -673,6 +674,60 @@ describe("extension loading", () => {
 
 		expect(result?.systemPrompt).toContain("Custom Root Marker");
 		expect(result?.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
+	});
+
+	it("uses launcher-provided root agent from environment when no session selection exists", async () => {
+		const previous = process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+		process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = "planner";
+		try {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+
+			const sessionManager = makeSessionManager(tempDir, "env-root-agent-session");
+			const result = await handlers.get("before_agent_start")(
+				{
+					systemPrompt: "Pi base prompt",
+					systemPromptOptions: { cwd: tempDir },
+				},
+				{ cwd: tempDir, sessionManager },
+			);
+			expect(result?.systemPrompt).toContain("software architect and planning specialist");
+		} finally {
+			if (previous === undefined) {
+				delete process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+			} else {
+				process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = previous;
+			}
+		}
+	});
+
+	it("keeps existing session-root selection authoritative over launcher-provided root agent", async () => {
+		const previous = process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+		process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = "reviewer";
+		try {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+
+			const sessionManager = SessionManager.create(tempDir, tempDir);
+			sessionManager.appendCustomEntry(SELECTED_ROOT_AGENT_ENTRY_TYPE, {
+				[SELECTED_ROOT_AGENT_ENTRY_KEY]: "planner",
+			});
+
+			const result = await handlers.get("before_agent_start")(
+				{
+					systemPrompt: "Pi base prompt",
+					systemPromptOptions: { cwd: tempDir },
+				},
+				{ cwd: tempDir, sessionManager },
+			);
+			expect(result?.systemPrompt).toContain("software architect and planning specialist");
+		} finally {
+			if (previous === undefined) {
+				delete process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+			} else {
+				process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = previous;
+			}
+		}
 	});
 
 	it("throws a visible error when the configured default Root agent is missing", async () => {

@@ -1,15 +1,22 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { DefaultPackageManager, type ResolvedResource, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+	DefaultPackageManager,
+	type ResolvedResource,
+	type SessionInfo,
+	SessionManager,
+	SettingsManager,
+} from "@mariozechner/pi-coding-agent";
 
 import { type AgentConfig, discoverAgents } from "../subagent/agents.js";
 import { type ExtensionSelection, resolveExtensionsForAgent } from "../subagent/extension-filter.js";
 import {
+	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV_VALUE,
 	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
@@ -62,13 +69,14 @@ export interface LauncherOptions {
 	resolveExtensionCandidates?: (options: { cwd: string; agentDir: string }) => Promise<ResolvedResource[]>;
 }
 
-type SessionLike = {
-	type?: unknown;
-	id?: unknown;
-	cwd?: unknown;
-	customType?: unknown;
-	data?: unknown;
-};
+function sessionInfoToCandidate(info: SessionInfo): SessionIndexEntry {
+	return {
+		id: info.id,
+		path: info.path,
+		cwd: info.cwd,
+		modified: info.modified.getTime(),
+	};
+}
 
 interface RestartRequest {
 	version?: number;
@@ -245,111 +253,46 @@ function rewriteArgsForRestart(baseArgs: string[], requestedAgent: string): stri
 	return ensureArg(stripExplicitAgentArgs(filtered), "--agent", requestedAgent);
 }
 
-function parseSessionEntries(path: string): SessionLike[] {
-	if (!existsSync(path)) {
-		return [];
-	}
-	const raw = readFileSync(path, "utf-8");
-	if (!raw.trim()) {
-		return [];
-	}
-	const entries: SessionLike[] = [];
-	for (const line of raw.split(/\r?\n/)) {
-		const trimmed = line.trim();
-		if (!trimmed) {
-			continue;
-		}
-		try {
-			const parsed = JSON.parse(trimmed);
-			if (parsed && typeof parsed === "object") {
-				entries.push(parsed as SessionLike);
-			}
-		} catch {}
-	}
-	return entries;
-}
-
-function readSessionInfo(path: string): SessionIndexEntry | null {
-	const entries = parseSessionEntries(path);
-	const header = entries.find((entry) => entry?.type === "session") as
-		| ({ type: "session"; id?: unknown; cwd?: unknown } & Record<string, unknown>)
-		| undefined;
-	if (!header || typeof header.id !== "string") {
-		return null;
-	}
-	let modified = 0;
-	try {
-		modified = statSync(path).mtime.getTime();
-	} catch {
-		modified = 0;
-	}
-	return {
-		id: header.id,
-		path,
-		cwd: typeof header.cwd === "string" ? header.cwd : "",
-		modified,
-	};
-}
-
-function listSessionsFromDir(dir: string): SessionIndexEntry[] {
-	if (!existsSync(dir)) return [];
-	try {
-		const candidates = readdirSync(dir)
-			.filter((name) => name.endsWith(".jsonl"))
-			.map((name) => readSessionInfo(resolve(dir, name)))
-			.filter((info): info is SessionIndexEntry => info !== null);
-		return candidates.sort((a, b) => {
-			if (a.modified !== b.modified) return b.modified - a.modified;
-			return a.path.localeCompare(b.path);
-		});
-	} catch {
-		return [];
-	}
-}
-
-function listAllSessions(sessionRoot: string): SessionIndexEntry[] {
-	if (!existsSync(sessionRoot)) return [];
-	try {
-		const dirs = readdirSync(sessionRoot, { withFileTypes: true })
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => resolve(sessionRoot, entry.name));
-		const sessions = dirs.flatMap((dir) => listSessionsFromDir(dir));
-		return sessions.sort((a, b) => {
-			if (a.modified !== b.modified) return b.modified - a.modified;
-			return a.path.localeCompare(b.path);
-		});
-	} catch {
-		return [];
-	}
-}
-
-function resolveSessionArg(
+async function resolveSessionArg(
 	arg: string,
 	cwd: string,
 	localSessionDir: string,
-	globalSessionRoot: string,
-): { type: "path" | "local" | "global" | "not_found"; path?: string; cwd?: string; arg?: string } {
+): Promise<{ type: "path" | "local" | "global" | "not_found"; path?: string; cwd?: string; arg?: string }> {
 	if (parseSessionArgArg(arg)) {
 		return { type: "path", path: resolve(cwd, expandTildePath(arg)) };
 	}
 
-	const localMatch = listSessionsFromDir(localSessionDir).find((session) => session.id.startsWith(arg));
+	const localMatch = (await SessionManager.list(cwd, localSessionDir)).find((session) => session.id.startsWith(arg));
 	if (localMatch) {
-		return { type: "local", path: localMatch.path, cwd: localMatch.cwd, arg };
+		return {
+			type: "local",
+			path: localMatch.path,
+			cwd: localMatch.cwd,
+			arg,
+		};
 	}
 
-	const globalMatch = listAllSessions(globalSessionRoot).find((session) => session.id.startsWith(arg));
+	const globalMatch = (await SessionManager.listAll()).find((session) => session.id.startsWith(arg));
 	if (globalMatch) {
-		return { type: "global", path: globalMatch.path, cwd: globalMatch.cwd, arg };
+		return {
+			type: "global",
+			path: globalMatch.path,
+			cwd: globalMatch.cwd,
+			arg,
+		};
 	}
 
 	return { type: "not_found", arg };
 }
 
-function listResumeSessionCandidates(localSessionDir: string, globalSessionRoot: string): SessionIndexEntry[] {
-	const candidates = [...listSessionsFromDir(localSessionDir), ...listAllSessions(globalSessionRoot)];
-	const seen = new Set<string>();
+async function listResumeSessionCandidates(cwd: string, localSessionDir: string): Promise<SessionIndexEntry[]> {
+	const [localSessions, allSessions] = await Promise.all([
+		SessionManager.list(cwd, localSessionDir),
+		SessionManager.listAll(),
+	]);
+	const candidates = [...localSessions, ...allSessions].map(sessionInfoToCandidate);
 	const deduped: SessionIndexEntry[] = [];
+	const seen = new Set<string>();
 	for (const candidate of candidates) {
 		if (seen.has(candidate.path)) continue;
 		seen.add(candidate.path);
@@ -361,15 +304,22 @@ function listResumeSessionCandidates(localSessionDir: string, globalSessionRoot:
 	});
 }
 
-function getMostRecentSession(sessionDir: string): SessionIndexEntry | undefined {
-	return listSessionsFromDir(sessionDir)[0];
+async function getMostRecentSessionPath(localSessionDir: string, cwd: string): Promise<string | undefined> {
+	const manager = SessionManager.continueRecent(cwd, localSessionDir);
+	const path = manager.getSessionFile();
+	if (!path || !existsSync(path)) {
+		return undefined;
+	}
+	return path;
 }
 
-function pickSessionRootAgent(sessionPath: string): string | undefined {
-	const entries = parseSessionEntries(sessionPath).filter(
-		(entry): entry is { type: "custom"; customType?: string; data?: unknown } =>
-			entry?.type === "custom" && typeof entry === "object",
-	);
+function pickSessionRootAgent(sessionPath: string, sessionDir: string): string | undefined {
+	const manager = SessionManager.open(sessionPath, sessionDir);
+	const entries = manager.getEntries().filter((entry) => entry.type === "custom") as Array<{
+		type: string;
+		customType?: string;
+		data?: unknown;
+	}>;
 	return getSelectedRootAgentFromSessionEntries(entries);
 }
 
@@ -378,6 +328,9 @@ function formatResumeOptions(sessions: SessionIndexEntry[]): string[] {
 }
 
 async function promptResumeSelection(sessions: SessionIndexEntry[]): Promise<string | null> {
+	// NOTE: The design intent is to reuse Pi's SessionSelectorComponent for resume
+	// selection. The wrapper does not currently depend on `pi-tui`, so we keep this
+	// minimal prompt fallback for now.
 	if (sessions.length === 0) {
 		return null;
 	}
@@ -549,40 +502,12 @@ function parseLauncherArgs(userArgs: string[]): ParsedLauncherArgState {
 }
 
 function forkSession(sourcePath: string, cwd: string, sessionDir: string): string {
-	const sourceEntries = parseSessionEntries(sourcePath);
-	if (sourceEntries.length === 0) {
-		throw new Error(`Cannot fork: source session file is empty or invalid: ${sourcePath}`);
+	const manager = SessionManager.forkFrom(sourcePath, cwd, sessionDir);
+	const forkedSession = manager.getSessionFile();
+	if (!forkedSession) {
+		throw new Error(`Failed to create forked session from '${sourcePath}'`);
 	}
-	const sourceHeader = sourceEntries.find(
-		(entry): entry is { [key: string]: unknown; id?: unknown } =>
-			entry.type === "session" && typeof entry.id === "string",
-	);
-	if (!sourceHeader || typeof sourceHeader.id !== "string") {
-		throw new Error(`Cannot fork: source session has no header: ${sourcePath}`);
-	}
-
-	mkdirSync(sessionDir, { recursive: true });
-	const timestamp = new Date().toISOString();
-	const newSessionId = randomUUID();
-	const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-	const destination = resolve(sessionDir, `${fileTimestamp}_${newSessionId}.jsonl`);
-
-	const newHeader = {
-		...sourceHeader,
-		id: newSessionId,
-		timestamp,
-		cwd,
-		parentSession: sourcePath,
-	};
-
-	const lines = [
-		JSON.stringify(newHeader),
-		...sourceEntries
-			.filter((entry) => !(entry && typeof entry === "object" && entry.type === "session"))
-			.map((entry) => JSON.stringify(entry)),
-	];
-	writeFileSync(destination, `${lines.join("\n")}\n`);
-	return destination;
+	return forkedSession;
 }
 
 function assertNoResumeConflicts(parsed: ParsedLauncherArgState): void {
@@ -620,7 +545,6 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 	const parsed = parseLauncherArgs(userArgs);
 	const configuredSessionDir = parsed.sessionDir ?? process.env[ENV_SESSION_DIR];
 	const localSessionDir = resolveSessionDir(configuredSessionDir, cwd);
-	const globalSessionRoot = dirname(localSessionDir);
 
 	let selectedSessionPath: string | undefined;
 	let skipLaunch = false;
@@ -631,19 +555,19 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 			if (parsed.sessionArg || parsed.resumeSession || parsed.continueSession) {
 				throw new Error("Error: --fork cannot be combined with --session, --resume, or --continue");
 			}
-			const resolved = resolveSessionArg(parsed.forkArg, cwd, localSessionDir, globalSessionRoot);
+			const resolved = await resolveSessionArg(parsed.forkArg, cwd, localSessionDir);
 			if (resolved.type === "not_found" || !resolved.path) {
 				throw new Error(`No session found matching '${resolved.arg}'`);
 			}
 			selectedSessionPath = forkSession(resolved.path, cwd, localSessionDir);
 		} else if (parsed.sessionArg) {
-			const resolved = resolveSessionArg(parsed.sessionArg, cwd, localSessionDir, globalSessionRoot);
+			const resolved = await resolveSessionArg(parsed.sessionArg, cwd, localSessionDir);
 			if (resolved.type === "not_found" || !resolved.path) {
 				throw new Error(`No session found matching '${resolved.arg}'`);
 			}
 			selectedSessionPath = resolved.path;
 		} else if (parsed.resumeSession) {
-			const sessions = listResumeSessionCandidates(localSessionDir, globalSessionRoot);
+			const sessions = await listResumeSessionCandidates(cwd, localSessionDir);
 			const selected = options.resumePicker ? options.resumePicker(sessions) : undefined;
 			if (!selected) {
 				skipLaunch = true;
@@ -651,11 +575,13 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 				selectedSessionPath = selected;
 			}
 		} else if (parsed.continueSession) {
-			selectedSessionPath = getMostRecentSession(localSessionDir)?.path;
+			selectedSessionPath = await getMostRecentSessionPath(localSessionDir, cwd);
 		}
 	}
 
-	const selectedSessionRootAgent = selectedSessionPath ? pickSessionRootAgent(selectedSessionPath) : undefined;
+	const selectedSessionRootAgent = selectedSessionPath
+		? pickSessionRootAgent(selectedSessionPath, localSessionDir)
+		: undefined;
 	let args = [...parsed.args];
 	if (selectedSessionPath) {
 		args = ensureArg(args, "--session", selectedSessionPath);
@@ -695,14 +621,19 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 		args.push("--extension", extensionPath);
 	}
 
+	const launchRootAgent = rootAgent.name;
+	const childEnv: NodeJS.ProcessEnv = { ...process.env };
+	delete childEnv[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+	childEnv[MULTI_AGENTS_LAUNCHER_ENV] = MULTI_AGENTS_LAUNCHER_ENV_VALUE;
+	childEnv[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV] = restartRequestFile;
+	if (!selectedSessionPath) {
+		childEnv[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = launchRootAgent;
+	}
+
 	return {
 		command: piCommand,
 		args,
-		env: {
-			...process.env,
-			[MULTI_AGENTS_LAUNCHER_ENV]: MULTI_AGENTS_LAUNCHER_ENV_VALUE,
-			[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]: restartRequestFile,
-		},
+		env: childEnv,
 		restartFile: restartRequestFile,
 		sessionPathUsed: selectedSessionPath,
 		skipLaunch,
@@ -724,8 +655,7 @@ export async function launchPi(args: string[], options: LauncherOptions = {}): P
 	) {
 		const configuredSessionDir = parsed.sessionDir ?? process.env[ENV_SESSION_DIR];
 		const localSessionDir = resolveSessionDir(configuredSessionDir, cwd);
-		const globalSessionRoot = dirname(localSessionDir);
-		const sessions = listResumeSessionCandidates(localSessionDir, globalSessionRoot);
+		const sessions = await listResumeSessionCandidates(cwd, localSessionDir);
 		const selected = await promptResumeSelection(sessions);
 		effectiveResumePicker = () => selected;
 	}

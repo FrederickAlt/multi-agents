@@ -21,7 +21,11 @@ import type { DebugLogger } from "./debug-logger.js";
 import { makeNoopDebugLogger, makeSessionDebugLogger } from "./debug-logger.js";
 import { defaultRootPolicy, selectedRootPolicy } from "./depth-policy.js";
 import { filterExtensionsForAgent } from "./extension-filter.js";
-import { ensureMultiAgentsLauncherContext, MULTI_AGENTS_RESTART_REQUEST_FILE_ENV } from "./launcher-contract.js";
+import {
+	ensureMultiAgentsLauncherContext,
+	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
+	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
+} from "./launcher-contract.js";
 import { MetadataStore } from "./metadata.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
@@ -161,6 +165,11 @@ export default function (pi: ExtensionAPI) {
 		return typeof flag === "string" && flag.trim() ? flag.trim() : DEFAULT_ROOT_AGENT_NAME;
 	};
 
+	const configuredLauncherRootAgent = (): string | undefined => {
+		const raw = process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+		return typeof raw === "string" ? raw.trim() || undefined : undefined;
+	};
+
 	const getLatestSelectedRootAgentForSession = (ctx: {
 		sessionManager: { getEntries: () => Array<{ type: string; customType?: string; data?: unknown }> };
 	}): string | undefined => {
@@ -171,12 +180,12 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const resolveRootAgentForSession = (selectedAgent?: string): AgentConfig => {
+	const resolveRootAgentForSession = (selectedAgent?: string, fallbackRootAgent?: string): AgentConfig => {
 		const discovery = discoverAgents();
 		return resolveRootAgent({
 			agents: discovery.agents,
 			selectedAgent,
-			defaultRootAgent: configuredDefaultRootAgent(),
+			defaultRootAgent: fallbackRootAgent || configuredDefaultRootAgent(),
 		}).agent;
 	};
 
@@ -193,7 +202,7 @@ export default function (pi: ExtensionAPI) {
 			return resolveRootAgentForSession(flagAgent.trim());
 		}
 
-		return resolveRootAgentForSession(undefined);
+		return resolveRootAgentForSession(undefined, configuredLauncherRootAgent());
 	};
 
 	const appendSelectedRootAgentEntry = (agentName: string): void => {
@@ -423,21 +432,16 @@ export default function (pi: ExtensionAPI) {
 		rootLogger.info("root_session_start", { sessionDir: ctx.sessionManager.getSessionDir() });
 		activeStore.load();
 
-		const sessionAgent = getLatestSelectedRootAgentForSession(ctx);
-		const flagAgent = pi.getFlag("agent");
-		const selectedAgent =
-			sessionAgent || (typeof flagAgent === "string" && flagAgent.trim() ? flagAgent.trim() : undefined);
-		const hasValidSessionSelection = Boolean(sessionAgent);
-
+		const hasSessionSelection = Boolean(getLatestSelectedRootAgentForSession(ctx));
 		let rootAgent: AgentConfig;
 		try {
-			rootAgent = resolveRootAgentForSession(selectedAgent);
+			rootAgent = resolveRootAgentForCurrentSession(ctx);
 		} catch (error) {
 			showMessage(ctx, formatRootAgentResolutionError(error), "error");
 			deactivateTaskTool(pi);
 			return;
 		}
-		if (!hasValidSessionSelection || getLatestSelectedRootAgentForSession(ctx) !== rootAgent.name) {
+		if (!hasSessionSelection || getLatestSelectedRootAgentForSession(ctx) !== rootAgent.name) {
 			appendSelectedRootAgentEntry(rootAgent.name);
 		}
 		mainRuntime.treeDepth = 0;

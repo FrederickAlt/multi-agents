@@ -11,6 +11,7 @@ vi.mock("node:child_process", () => ({
 import * as mockedChildProcess from "node:child_process";
 import { buildLauncherArgs, launchPi, MULTI_AGENTS_EXTENSION_ENTRY } from "../src/launcher/pi-agents.js";
 import {
+	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV_VALUE,
 	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
@@ -130,6 +131,49 @@ describe("pi-agents launcher command generation", () => {
 		});
 		expect(result.restartFile).toBe("/tmp/pi-agents-restart.json");
 		expect(result.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]).toBe("/tmp/pi-agents-restart.json");
+	});
+
+	it("passes launcher-resolved root agent via env when no session path is used", async () => {
+		const noSessionResult = await buildLauncherArgs(["--provider", "openai"]);
+		expect(noSessionResult.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBe("default");
+
+		await withTempSessionsDir(async (root, sessionDir) => {
+			const selectedRootEntry = {
+				type: "custom",
+				customType: "selected-root-agent",
+				id: "entry-1",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				data: { selectedRootAgent: "planner" },
+			};
+			const sessionPath = createSessionFile(sessionDir, "abc123", [selectedRootEntry], "/tmp/project");
+			const sessionResult = await buildLauncherArgs(["--session", "abc", "--session-dir", sessionDir], {
+				cwd: root,
+			});
+			expect(sessionResult.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBeUndefined();
+			expect(sessionResult.args[sessionResult.args.indexOf("--session") + 1]).toBe(sessionPath);
+		});
+	});
+
+	it("does not leak stale launcher root env when launching with --session", async () => {
+		const previous = process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+		process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = "stale-root";
+		try {
+			await withTempSessionsDir(async (root, sessionDir) => {
+				const sessionPath = createSessionFile(sessionDir, "abc123", [], "/tmp/project");
+				const sessionResult = await buildLauncherArgs(["--session", "abc", "--session-dir", sessionDir], {
+					cwd: root,
+				});
+				expect(sessionResult.sessionPathUsed).toBe(sessionPath);
+				expect(sessionResult.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBeUndefined();
+			});
+		} finally {
+			if (previous === undefined) {
+				delete process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV];
+			} else {
+				process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = previous;
+			}
+		}
 	});
 
 	it("launches Pi with the injected launcher arguments and env contract", async () => {
@@ -531,7 +575,7 @@ describe("pi-agents launcher command generation", () => {
 				"/tmp/project",
 				new Date("2024-01-01T00:00:00.000Z"),
 			);
-			const globalSessionDir = join(dirname(sessionDir), "other");
+			const globalSessionDir = join(process.env.PI_CODING_AGENT_DIR ?? "", "sessions", "global");
 			mkdirSync(globalSessionDir, { recursive: true });
 			const globalSession = createSessionFile(
 				globalSessionDir,
