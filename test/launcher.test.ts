@@ -27,7 +27,7 @@ function createSessionFile(
 	sessionDir: string,
 	id: string,
 	customEntries: Array<Record<string, unknown>> = [],
-	cwd = "/tmp/test-project",
+	cwd = dirname(sessionDir),
 	time: Date = new Date(),
 	sessionHeaderOverrides: Record<string, unknown> = {},
 ) {
@@ -199,7 +199,7 @@ describe("pi-agents launcher command generation", () => {
 				timestamp: new Date().toISOString(),
 				data: { selectedRootAgent: "planner" },
 			};
-			const sessionPath = createSessionFile(sessionDir, "abc123", [selectedRootEntry], "/tmp/project");
+			const sessionPath = createSessionFile(sessionDir, "abc123", [selectedRootEntry], root);
 			const sessionResult = await buildLauncherArgs(["--session", "abc", "--session-dir", sessionDir], {
 				cwd: root,
 			});
@@ -213,7 +213,7 @@ describe("pi-agents launcher command generation", () => {
 		process.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV] = "stale-root";
 		try {
 			await withTempSessionsDir(async (root, sessionDir) => {
-				const sessionPath = createSessionFile(sessionDir, "abc123", [], "/tmp/project");
+				const sessionPath = createSessionFile(sessionDir, "abc123", [], root);
 				const sessionResult = await buildLauncherArgs(["--session", "abc", "--session-dir", sessionDir], {
 					cwd: root,
 				});
@@ -476,7 +476,7 @@ describe("pi-agents launcher command generation", () => {
 				timestamp: new Date().toISOString(),
 				data: { selectedRootAgent: "planner" },
 			};
-			const sessionPath = createSessionFile(sessionDir, "abc123", [selectedRootEntry], "/tmp/project");
+			const sessionPath = createSessionFile(sessionDir, "abc123", [selectedRootEntry], root);
 
 			const result = await buildLauncherArgs(["--session", "abc", "--session-dir", sessionDir], { cwd: root });
 			const sessionArgIdx = result.args.indexOf("--session");
@@ -498,7 +498,7 @@ describe("pi-agents launcher command generation", () => {
 				timestamp: new Date().toISOString(),
 				data: { selectedRootAgent: "planner" },
 			};
-			const sessionPath = createSessionFile(sessionDir, "abc123", [selectedRootEntry], "/tmp/project");
+			const sessionPath = createSessionFile(sessionDir, "abc123", [selectedRootEntry], root);
 			const plannerExtension = join(root, "extensions", "planner", "planner-root.ts");
 			const reviewerExtension = join(root, "extensions", "reviewer", "reviewer-root.ts");
 			writeExtensionFile(plannerExtension);
@@ -574,7 +574,7 @@ describe("pi-agents launcher command generation", () => {
 						data: { selectedRootAgent: "planner" },
 					},
 				],
-				"/tmp/project",
+				root,
 				older,
 			);
 			const newerSession = createSessionFile(
@@ -590,7 +590,7 @@ describe("pi-agents launcher command generation", () => {
 						data: { selectedRootAgent: "reviewer" },
 					},
 				],
-				"/tmp/project",
+				root,
 				newer,
 			);
 
