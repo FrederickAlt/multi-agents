@@ -14,23 +14,26 @@ Filtering the active tool list after startup is not enough. Disallowed extension
 
 Provide launcher-enforced Root agent extension isolation without modifying pi-mono.
 
-Users should start Pi through the multi-agents launcher. The launcher resolves the Root agent before Pi starts, computes the extensions allowed by that Root agent, and starts Pi with only those extensions loaded.
+Users should start Pi through the multi-agents launcher. For normal launches and final session launches, the launcher resolves the Root agent before starting the final Pi child, computes the extensions allowed by that Root agent, and starts Pi with only those extensions loaded.
+
+Startup `--resume` intentionally uses a protected bootstrap child to preserve Pi's native resume picker UX. The bootstrap child loads only the launcher-managed multi-agents extension, lets Pi select the session, and immediately restarts into the final filtered child once the selected session is known.
 
 ## Desired State
 
 When a user launches through the multi-agents launcher:
 
-1. The active Root agent is known before the Pi child process starts.
-2. Pi extension auto-discovery is disabled for the child process.
-3. Only these extensions are loaded:
+1. The active Root agent is known before each final Pi child process starts.
+2. Pi extension auto-discovery is disabled for every launcher-managed child process.
+3. Final child processes load only these extensions:
    - extensions allowed by the resolved Root agent's `extensions:` frontmatter,
    - protected multi-agents runtime extension(s),
    - explicit user-provided `-e/--extension` launch overrides.
-4. Extensions not allowed by the Root agent are absent from the process and cannot register tools, hooks, commands, providers, or side effects.
-5. Task subagent extension filtering continues to work with the same policy as Root filtering.
-6. Root agent selection is persisted in the Pi session JSONL using Pi custom session entries.
-7. Resuming or continuing a session restores the Root agent recorded in that session.
-8. Switching Root agents with `/agent <name>` starts a fresh standalone session for that agent with a newly computed extension set.
+4. Startup `--resume` may use a bootstrap child before the selected session is known. That bootstrap child loads only protected multi-agents runtime extension(s), shows Pi's native resume picker, and restarts into a final filtered child after selection.
+5. Extensions not allowed by the Root agent are absent from final processes and cannot register tools, hooks, commands, providers, or side effects.
+6. Task subagent extension filtering continues to work with the same policy as Root filtering.
+7. Root agent selection is persisted in the Pi session JSONL using Pi custom session entries.
+8. Resuming or continuing a session restores the Root agent recorded in that session.
+9. Switching Root agents with `/agent <name>` starts a fresh standalone session for that agent with a newly computed extension set.
 
 ## User-Facing Requirements
 
@@ -38,7 +41,7 @@ When a user launches through the multi-agents launcher:
 
 The package provides a launcher command, for example `pi-agents`. This is the supported way to use the multi-agents Root-agent system.
 
-The launcher starts real Pi with extension discovery disabled and explicit extension entries, conceptually:
+The launcher starts final Pi children with extension discovery disabled and explicit extension entries, conceptually:
 
 ```bash
 pi --no-extensions \
@@ -46,6 +49,8 @@ pi --no-extensions \
   -e <allowed-extension> \
   ...
 ```
+
+For startup `--resume`, the launcher starts a bootstrap Pi child with extension discovery disabled, only the multi-agents extension injected, and Pi's original `--resume` flag preserved so Pi owns the resume picker UX.
 
 ### Extension Activation Contract
 
@@ -65,7 +70,7 @@ Selector behavior:
 
 Users can disambiguate by writing a more specific selector, including a path-like selector.
 
-Explicit command-line `-e/--extension` entries are user launch overrides and are force-loaded even if the Root agent does not list them.
+Explicit command-line `-e/--extension` entries are user launch overrides and are force-loaded in final child processes even if the Root agent does not list them. During startup `--resume` bootstrap, these overrides are not loaded before session selection; they are preserved and applied to the final restarted child.
 
 ### Session Behavior
 
@@ -74,6 +79,10 @@ The selected Root agent is stored in the session JSONL as a Pi custom entry. The
 New sessions should record the resolved Root agent, including when the agent is the default fallback.
 
 Existing sessions without a selected-root-agent entry fall back to launch/default Root-agent resolution.
+
+Startup `pi-agents --resume` keeps Pi's normal resume picker. The launcher first starts a bootstrap Pi child with only the multi-agents extension loaded. If the user cancels the picker, no restart occurs. If the user selects a session, the bootstrap child requests a wrapper restart into that concrete session, and the final child restores the Root agent recorded in the selected session JSONL.
+
+Interactive `/resume` also keeps Pi's normal picker. After a session is selected, the extension cancels the in-process switch before mutation and asks the wrapper to restart into the selected session with the correct filtered extension set.
 
 ### `/agent` Behavior
 
@@ -102,5 +111,6 @@ The launcher restarts Pi for the new session with that agent's filtered extensio
 2. A Root agent whose `extensions:` matches `pdf-preview` does load that extension when launched through the wrapper.
 3. Explicit user `-e/--extension` arguments are loaded regardless of the Root agent allowlist.
 4. Resuming a session restores the Root agent persisted in that session JSONL.
-5. `/agent <name>` starts a new standalone session with the requested Root agent and its filtered extension set.
-6. Loading the multi-agents extension without the launcher fails loudly.
+5. Startup `pi-agents --resume` and interactive `/resume` use Pi's native picker UX, then restart through the wrapper so the selected session runs with its recorded Root agent and filtered extension set.
+6. `/agent <name>` starts a new standalone session with the requested Root agent and its filtered extension set.
+7. Loading the multi-agents extension without the launcher fails loudly.
