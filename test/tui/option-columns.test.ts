@@ -64,6 +64,36 @@ describe("normalizeOptionCheckboxSaveValues", () => {
 		expect(normalized).toEqual(["summarize"]);
 	});
 
+	it("deduplicates extension aliases mapped to the same storage alias", () => {
+		const normalized = normalizeOptionCheckboxSaveValues(
+			{
+				extensions: ["summarize"],
+				extensionAliases: {
+					summarize: [
+						"/tmp/extensions/summarize/dist/index.ts",
+						"dist",
+						"pi-tool-summarize-replacement",
+						"summarize",
+					],
+				},
+				tools: [],
+				toolExtensionNames: {},
+				models: [],
+				defaultModel: "",
+				modelDiscovery: { status: "ready" as const, error: null },
+				reasoningEfforts: ["low", "medium", "high", "maximum"],
+				depths: [0],
+				canSpawn: [],
+				skills: [],
+				promptParts: [],
+			},
+			"extensions",
+			["pi-tool-summarize-replacement", "summarize", "pi-tool-summarize-replacement"],
+		);
+
+		expect(normalized).toEqual(["summarize"]);
+	});
+
 	it("does not change non-extension fields", () => {
 		const normalized = normalizeOptionCheckboxSaveValues(
 			{

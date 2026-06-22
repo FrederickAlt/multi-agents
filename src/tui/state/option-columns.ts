@@ -128,7 +128,12 @@ export function normalizeOptionCheckboxSaveValues(
 	values: string[],
 ): string[] {
 	if (fieldName !== "extensions") return [...values];
-	return values.map((value) => getExtensionStorageValue(options.extensionAliases, String(value), options.extensions));
+
+	const normalized: string[] = [];
+	for (const value of values) {
+		addUnique(normalized, getExtensionStorageValue(options.extensionAliases, String(value), options.extensions));
+	}
+	return normalized;
 }
 
 export function getAgentDepth(agent: AgentConfigState | undefined): number {

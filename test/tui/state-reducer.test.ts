@@ -152,6 +152,36 @@ describe("configReducer", () => {
 		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
 	});
 
+	it("OPEN_OVERLAY maps legacy extension selector to available option", () => {
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({
+					frontmatter: {
+						description: "test",
+						extensions: ["pi-tool-summarize-replacement"],
+					},
+				}),
+			],
+			options: makeOptions({
+				extensions: ["summarize"],
+				extensionAliases: {
+					summarize: [
+						"/tmp/extensions/summarize/dist/index.ts",
+						"dist",
+						"pi-tool-summarize-replacement",
+						"summarize",
+					],
+				},
+			}),
+		};
+		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "extensions" });
+		expect(next.overlay).not.toBeNull();
+		expect(selectableOverlay(next.overlay).type).toBe("checkbox");
+		expect(selectableOverlay(next.overlay).localSelection).toEqual(["summarize"]);
+		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
+	});
+
 	it("OPEN_OVERLAY creates implicit checkbox when field is missing", () => {
 		const state: ConfigState = {
 			...createInitialState(),

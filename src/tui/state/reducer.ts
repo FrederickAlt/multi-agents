@@ -482,10 +482,17 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			let overlay: OverlayState;
 
 			if (isCheckboxField(action.fieldName)) {
-				const { localSelection, wasImplicit } = resolveCheckboxSelection(
-					Array.isArray(currentValue) ? (currentValue as string[]) : undefined,
-					availableItems,
-				);
+				let localSelection: string[];
+				let wasImplicit: boolean;
+				if (action.fieldName === "extensions") {
+					localSelection = getOptionColumnSelectedValues(agent, state.options, "extensions", agent.name);
+					wasImplicit = currentValue === undefined;
+				} else {
+					({ localSelection, wasImplicit } = resolveCheckboxSelection(
+						Array.isArray(currentValue) ? (currentValue as string[]) : undefined,
+						availableItems,
+					));
+				}
 				overlay = {
 					type: "checkbox",
 					agentIndex: action.agentIndex,

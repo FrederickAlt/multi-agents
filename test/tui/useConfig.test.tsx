@@ -149,4 +149,72 @@ describe("useConfig", () => {
 		expect(writeFieldToFileMock.mock.calls[1]?.[1]).toBe("extensions");
 		expect(writeFieldToFileMock.mock.calls[1]?.[2]).toBeUndefined();
 	});
+
+	it("maps legacy extension selectors when opening overlay and writes deduped values on toggle", async () => {
+		writeFieldToFileMock.mockReset();
+		writeFieldToFileMock.mockReturnValue({ success: true });
+
+		useOptionDiscoveryMock.mockReturnValue({
+			options: makeOptions({
+				extensions: ["summarize"],
+				extensionAliases: {
+					summarize: [
+						"/tmp/extensions/summarize/dist/index.ts",
+						"dist",
+						"pi-tool-summarize-replacement",
+						"summarize",
+					],
+				},
+			}),
+			agents: [
+				makeAgent({
+					frontmatter: {
+						description: "A test agent",
+						extensions: ["pi-tool-summarize-replacement"],
+					},
+				}),
+			],
+			loading: false,
+			error: null,
+			rescan: async () => undefined,
+		});
+
+		const apiRef = { current: undefined as ReturnType<typeof useConfig> | undefined };
+		const Probe = () => {
+			const api = useConfig();
+			apiRef.current = api;
+			return null;
+		};
+
+		const app = render(<Probe />, { patchConsole: false });
+		await flush();
+
+		await act(async () => {
+			apiRef.current?.openOverlay(0, "extensions");
+		});
+		await flush();
+
+		const overlay = apiRef.current?.state.overlay;
+		if (!overlay || overlay.type !== "checkbox") {
+			throw new Error("Expected checkbox overlay");
+		}
+		expect(overlay.type).toBe("checkbox");
+		expect(overlay.wasImplicit).toBe(false);
+		expect(overlay.localSelection).toEqual(["summarize"]);
+
+		await act(async () => {
+			apiRef.current?.instantSaveCheckbox("summarize");
+		});
+		await flush();
+		await act(async () => {
+			apiRef.current?.instantSaveCheckbox("summarize");
+		});
+		await flush();
+
+		app.unmount();
+
+		expect(writeFieldToFileMock).toHaveBeenCalledTimes(2);
+		expect(writeFieldToFileMock.mock.calls[0]?.[2]).toEqual([]);
+		expect(writeFieldToFileMock.mock.calls[1]?.[2]).toBeUndefined();
+	});
 });
