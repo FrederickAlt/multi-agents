@@ -4,7 +4,8 @@ set -eu
 STAGED_FILES=$(mktemp)
 UNSTAGED_FILES=$(mktemp)
 PARTIALLY_STAGED_FILES=$(mktemp)
-trap 'rm -f "$STAGED_FILES" "$UNSTAGED_FILES" "$PARTIALLY_STAGED_FILES"' EXIT
+RESTAGE_FILES=$(mktemp)
+trap 'rm -f "$STAGED_FILES" "$UNSTAGED_FILES" "$PARTIALLY_STAGED_FILES" "$RESTAGE_FILES"' EXIT
 
 git diff --cached --name-only -z | sort -z > "$STAGED_FILES"
 git diff --name-only -z | sort -z > "$UNSTAGED_FILES"
@@ -21,7 +22,12 @@ echo "Running formatting, linting, and type checking..."
 npm run check
 
 if [ -s "$STAGED_FILES" ]; then
-  xargs -0 git add -- < "$STAGED_FILES"
+  # Re-stage formatter changes for files that are still present in the index.
+  # Staged deletions must stay deleted; `git add` on those paths fails.
+  git diff --cached --name-only -z --diff-filter=d > "$RESTAGE_FILES"
+  if [ -s "$RESTAGE_FILES" ]; then
+    xargs -0 git add -- < "$RESTAGE_FILES"
+  fi
 fi
 
 echo "All pre-commit checks passed!"
