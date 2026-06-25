@@ -14,37 +14,8 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "types": ["node", "vitest/globals"],
-    "jsx": "react-jsx",
-    "paths": {
-      "@mariozechner/pi-ai": ["../pi-mono/packages/ai/src/index.ts"],
-      "@mariozechner/pi-ai/oauth": ["../pi-mono/packages/ai/src/oauth.ts"],
-      "@mariozechner/pi-ai/*": ["../pi-mono/packages/ai/src/*.ts", "../pi-mono/packages/ai/src/providers/*.ts"],
-      "@mariozechner/pi-agent-core": ["../pi-mono/packages/agent/src/index.ts"],
-      "@mariozechner/pi-agent-core/*": ["../pi-mono/packages/agent/src/*"],
-      "@mariozechner/pi-coding-agent": ["../pi-mono/packages/coding-agent/src/index.ts"],
-      "@mariozechner/pi-coding-agent/*": ["../pi-mono/packages/coding-agent/src/*"],
-      "@mariozechner/pi-tui": ["../pi-mono/packages/tui/src/index.ts"],
-      "@mariozechner/pi-tui/*": ["../pi-mono/packages/tui/src/*"],
-      "@earendil-works/pi-ai": ["../pi-mono/packages/ai/src/index.ts"],
-      "@earendil-works/pi-ai/oauth": ["../pi-mono/packages/ai/src/oauth.ts"],
-      "@earendil-works/pi-ai/*": ["../pi-mono/packages/ai/src/*.ts", "../pi-mono/packages/ai/src/providers/*.ts"],
-      "@earendil-works/pi-ai/dist/*": ["../pi-mono/packages/ai/src/*"],
-      "@earendil-works/pi-agent-core": ["../pi-mono/packages/agent/src/index.ts"],
-      "@earendil-works/pi-agent-core/*": ["../pi-mono/packages/agent/src/*"],
-      "@earendil-works/pi-coding-agent": ["../pi-mono/packages/coding-agent/src/index.ts"],
-      "@earendil-works/pi-coding-agent/hooks": ["../pi-mono/packages/coding-agent/src/core/hooks/index.ts"],
-      "@earendil-works/pi-coding-agent/*": ["../pi-mono/packages/coding-agent/src/*"],
-      "@earendil-works/pi-tui": ["../pi-mono/packages/tui/src/index.ts"],
-      "@earendil-works/pi-tui/*": ["../pi-mono/packages/tui/src/*"]
-    }
+    "jsx": "react-jsx"
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "test/**/*.ts",
-    "test/**/*.tsx",
-    "vitest.config.ts",
-    "../pi-mono/packages/**/*.d.ts"
-  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "vitest.config.ts"],
   "exclude": ["node_modules"]
 }

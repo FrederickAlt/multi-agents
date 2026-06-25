@@ -117,6 +117,59 @@ describe("normalizeOptionCheckboxSaveValues", () => {
 	});
 });
 
+describe("Task tool depth gating", () => {
+	const options = {
+		extensions: [],
+		tools: ["Task", "read", "bash"],
+		toolExtensionNames: {},
+		models: [],
+		defaultModel: "",
+		modelDiscovery: { status: "ready" as const, error: null },
+		reasoningEfforts: ["low", "medium", "high", "maximum"],
+		depths: [0, 1],
+		canSpawn: [],
+		skills: [],
+		promptParts: [],
+	};
+
+	it("deselects Task for explicit tools when depth is zero", () => {
+		const agent: AgentConfigState = {
+			name: "agent-a",
+			description: "test",
+			filePath: "/tmp/agent-a.md",
+			frontmatter: {
+				description: "test",
+				depth: 0,
+				tools: ["Task", "read"],
+			},
+			body: "",
+			error: null,
+			staleItems: {},
+		};
+
+		expect(getOptionColumnSelectedValues(agent, options, "tools", agent.name)).toEqual(["read"]);
+		expect(getOptionColumnItems(agent, options, "tools", agent.name)).toEqual(["read", "Task", "bash"]);
+	});
+
+	it("deselects Task for implicit tools when depth is zero", () => {
+		const agent: AgentConfigState = {
+			name: "agent-a",
+			description: "test",
+			filePath: "/tmp/agent-a.md",
+			frontmatter: {
+				description: "test",
+				depth: 0,
+			},
+			body: "",
+			error: null,
+			staleItems: {},
+		};
+
+		expect(getOptionColumnSelectedValues(agent, options, "tools", agent.name)).toEqual(["read", "bash"]);
+		expect(getOptionColumnItems(agent, options, "tools", agent.name)).toEqual(["read", "bash", "Task"]);
+	});
+});
+
 describe("extension UI selection alias mapping", () => {
 	it("maps legacy stored selector to available UI option", () => {
 		const options = {

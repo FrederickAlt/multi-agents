@@ -96,6 +96,21 @@ describe("computeInlineCheckboxSaveValue", () => {
 
 		expect(result).toEqual(["agent-a"]);
 	});
+
+	it("keeps Task deselected when depth zero makes it disabled", () => {
+		const options = makeOptions({ tools: ["Task", "read"] });
+		const agent = makeAgent({
+			frontmatter: {
+				description: "A test agent",
+				depth: 0,
+				tools: ["Task", "read"],
+			},
+		});
+
+		const result = computeInlineCheckboxSaveValue(options, agent, "tools", "Task");
+
+		expect(result).toEqual(["read"]);
+	});
 });
 
 describe("useConfig", () => {
@@ -148,6 +163,62 @@ describe("useConfig", () => {
 		expect(writeFieldToFileMock.mock.calls[0]?.[2]).toEqual([]);
 		expect(writeFieldToFileMock.mock.calls[1]?.[1]).toBe("extensions");
 		expect(writeFieldToFileMock.mock.calls[1]?.[2]).toBeUndefined();
+	});
+
+	it("removes explicit Task tool when saving depth zero", async () => {
+		writeFieldToFileMock.mockReset();
+		writeFieldToFileMock.mockImplementation((_filePath: string, fieldName: string, value: unknown) => ({
+			success: true,
+			frontmatter:
+				fieldName === "tools"
+					? { description: "A test agent", depth: 0, tools: value }
+					: { description: "A test agent", depth: value, tools: ["Task", "read"] },
+		}));
+
+		useOptionDiscoveryMock.mockReturnValue({
+			options: makeOptions({ tools: ["Task", "read"], depths: [0, 1] }),
+			agents: [
+				makeAgent({
+					frontmatter: {
+						description: "A test agent",
+						depth: 1,
+						tools: ["Task", "read"],
+					},
+				}),
+			],
+			loading: false,
+			error: null,
+			rescan: async () => undefined,
+		});
+
+		const apiRef = { current: undefined as ReturnType<typeof useConfig> | undefined };
+		const Probe = () => {
+			const api = useConfig();
+			apiRef.current = api;
+			return null;
+		};
+
+		const app = render(<Probe />, { patchConsole: false });
+		await flush();
+
+		await act(async () => {
+			apiRef.current?.openOverlay(0, "depth");
+		});
+		await flush();
+		await act(async () => {
+			apiRef.current?.selectDropdown("0");
+		});
+		await flush();
+		await act(async () => {
+			apiRef.current?.commitOverlay();
+		});
+		await flush();
+
+		app.unmount();
+
+		expect(writeFieldToFileMock).toHaveBeenCalledTimes(2);
+		expect(writeFieldToFileMock.mock.calls[0]).toMatchObject(["/tmp/agent-a.md", "depth", 0]);
+		expect(writeFieldToFileMock.mock.calls[1]).toMatchObject(["/tmp/agent-a.md", "tools", ["read"]]);
 	});
 
 	it("maps legacy extension selectors when opening overlay and writes deduped values on toggle", async () => {

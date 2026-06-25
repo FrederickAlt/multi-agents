@@ -40,6 +40,28 @@ function normalizeStringList(value: unknown): string[] {
 	return Array.isArray(value) ? value.map(String) : [String(value)];
 }
 
+function depthValuePreventsSpawning(value: unknown): boolean {
+	if (value === undefined || value === null || value === "") return true;
+	if (typeof value === "number") return !Number.isSafeInteger(value) || value <= 0;
+	const trimmed = String(value).trim();
+	if (!/^-?\d+$/.test(trimmed)) return true;
+	const parsed = Number.parseInt(trimmed, 10);
+	return !Number.isSafeInteger(parsed) || parsed <= 0;
+}
+
+function explicitToolsWithoutTaskForNonSpawningDepth(
+	agent: AgentConfigState,
+	fieldName: string,
+	newValue: string[] | string | number | undefined,
+): string[] | undefined {
+	if (fieldName !== "depth" || !depthValuePreventsSpawning(newValue)) return undefined;
+	const rawTools = agent.frontmatter?.tools;
+	if (rawTools === undefined || rawTools === null) return undefined;
+	const tools = normalizeStringList(rawTools);
+	if (!tools.includes("Task")) return undefined;
+	return tools.filter((tool) => tool !== "Task");
+}
+
 export function computeInlineCheckboxSaveValue(
 	options: DiscoveredOptions,
 	agent: AgentConfigState,
@@ -277,36 +299,63 @@ export function useConfig() {
 				status: { type: "saving", message: "Saving...", timestamp: Date.now() },
 			});
 
-			const result = writeFieldToFile(agent.filePath, fieldName, newValue);
+			const primaryResult = writeFieldToFile(agent.filePath, fieldName, newValue);
 
-			if (result.success) {
-				if (result.frontmatter) {
-					dispatch({
-						type: "UPDATE_AGENT_FRONTMATTER",
-						agentIndex,
-						frontmatter: result.frontmatter,
-						staleItems: agent.staleItems,
-					});
-				}
-
+			if (!primaryResult.success) {
 				dispatch({
 					type: "SAVE_COMPLETE",
 					agentIndex,
 					status: {
-						type: "saved",
-						message: `Saved ${agent.name}.md`,
+						type: "error",
+						message: `Save failed: ${primaryResult.error}`,
 						timestamp: Date.now(),
 					},
 				});
 				return;
 			}
 
+			let frontmatter = primaryResult.frontmatter;
+			const tasklessTools = explicitToolsWithoutTaskForNonSpawningDepth(agent, fieldName, newValue);
+			if (tasklessTools !== undefined) {
+				const toolsResult = writeFieldToFile(agent.filePath, "tools", tasklessTools);
+				if (!toolsResult.success) {
+					if (frontmatter) {
+						dispatch({
+							type: "UPDATE_AGENT_FRONTMATTER",
+							agentIndex,
+							frontmatter,
+							staleItems: agent.staleItems,
+						});
+					}
+					dispatch({
+						type: "SAVE_COMPLETE",
+						agentIndex,
+						status: {
+							type: "error",
+							message: `Saved depth but failed to remove Task from tools: ${toolsResult.error}`,
+							timestamp: Date.now(),
+						},
+					});
+					return;
+				}
+				frontmatter = toolsResult.frontmatter ?? frontmatter;
+			}
+
+			if (frontmatter) {
+				dispatch({
+					type: "UPDATE_AGENT_FRONTMATTER",
+					agentIndex,
+					frontmatter,
+					staleItems: agent.staleItems,
+				});
+			}
+
 			dispatch({
 				type: "SAVE_COMPLETE",
 				agentIndex,
 				status: {
-					type: "error",
-					message: `Save failed: ${result.error}`,
+					type: "saved",
+					message: `Saved ${agent.name}.md`,
 					timestamp: Date.now(),
 				},
 			});
@@ -539,52 +588,9 @@ export function useConfig() {
 			}
 		}
 
-		// Dispatch saving status
-		dispatch({
-			type: "SAVE_COMPLETE",
-			agentIndex: overlay.agentIndex,
-			status: { type: "saving", message: "Saving...", timestamp: Date.now() },
-		});
-
-		// Write to file
-		const result = writeFieldToFile(agent.filePath, overlay.fieldName, newValue);
-
-		if (result.success) {
-			// Use result.frontmatter to avoid a separate readAgent re-read
-			if (result.frontmatter) {
-				dispatch({
-					type: "UPDATE_AGENT_FRONTMATTER",
-					agentIndex: overlay.agentIndex,
-					frontmatter: result.frontmatter,
-					// Preserve existing stale-items; they only refresh on full rescan
-					staleItems: agent.staleItems,
-				});
-			}
-
-			dispatch({
-				type: "SAVE_COMPLETE",
-				agentIndex: overlay.agentIndex,
-				status: {
-					type: "saved",
-					message: `Saved ${agent.name}.md`,
-					timestamp: Date.now(),
-				},
-			});
-		} else {
-			dispatch({
-				type: "SAVE_COMPLETE",
-				agentIndex: overlay.agentIndex,
-				status: {
-					type: "error",
-					message: `Save failed: ${result.error}`,
-					timestamp: Date.now(),
-				},
-			});
-		}
-
-		// Close overlay
+		saveFieldValue(agent, overlay.agentIndex, overlay.fieldName, newValue);
 		dispatch({ type: "CLOSE_OVERLAY" });
-	}, [state.overlay, state.agents, state.options.models]);
+	}, [state.overlay, state.agents, state.options.models, saveFieldValue]);
 
 	const setOptionColumnFilter = useCallback((value: string) => {
 		dispatch({ type: "SET_OPTION_COLUMN_FILTER", filter: value });

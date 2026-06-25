@@ -335,7 +335,10 @@ export function getOptionColumnSelectedValues(
 		}
 
 		if (fieldName === "tools") {
-			return selectedValues.filter((value) => extensionToolIsEnabled(options, agent, value));
+			const disabledTools = new Set(getOptionColumnDisabledItems(agent, options, "tools"));
+			return selectedValues.filter(
+				(value) => extensionToolIsEnabled(options, agent, value) && !disabledTools.has(value),
+			);
 		}
 		if (fieldName === "extensions") {
 			const mappedSelectedValues: string[] = [];

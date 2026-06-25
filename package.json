@@ -12,7 +12,9 @@
     "tui:dump": "tsx src/tui/dev/render-scenarios.tsx",
     "prepare": "husky",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "check:pi-mono": "PI_MONO_SOURCE=1 tsgo -p tsconfig.pi-mono.json --noEmit",
+    "test:pi-mono": "PI_MONO_SOURCE=1 vitest --run"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -27,6 +29,10 @@
   ],
   "devDependencies": {
     "@biomejs/biome": "2.3.5",
+    "@mariozechner/pi-agent-core": "^0.73.1",
+    "@mariozechner/pi-ai": "^0.73.1",
+    "@mariozechner/pi-coding-agent": "^0.73.1",
+    "@mariozechner/pi-tui": "^0.73.1",
     "@types/node": "^22.10.5",
     "@types/react": "^18.3.29",
     "@typescript/native-preview": "7.0.0-dev.20260120.1",
@@ -41,8 +47,8 @@
     "typebox": "^1.1.38"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "^0.73.0",
     "@mariozechner/pi-agent-core": "^0.73.0",
+    "@mariozechner/pi-ai": "^0.73.0",
     "@mariozechner/pi-coding-agent": "^0.73.0",
     "@mariozechner/pi-tui": "^0.73.0"
   }
