@@ -1845,6 +1845,33 @@ describe("extension loading", () => {
 		expect(result.extensions.map((extension: any) => extension.path)).toEqual([target]);
 	});
 
+	it("matches package-name selectors from loaded extension paths inside a package", () => {
+		const packageBase = join(tempDir, "extensions", "file-inject");
+		const target = join(packageBase, "src", "index.ts");
+		writeFile(target, "export default function () {}\n");
+		writeFile(join(packageBase, "package.json"), '{"name":"pi-file-inject"}\n');
+		const warnings: string[] = [];
+
+		const result = filterExtensionsForAgent(
+			makeAgent("explorer", { depth: 0, extensions: ["pi-file-inject"] }),
+			join(tempDir, "self-extension.ts"),
+			{ onWarnings: (entries) => warnings.push(...entries) },
+		)({
+			extensions: [
+				{
+					path: target,
+					resolvedPath: target,
+					sourceInfo: {
+						baseDir: join(packageBase, "src"),
+					},
+				},
+			],
+		});
+
+		expect(result.extensions.map((extension: any) => extension.path)).toEqual([target]);
+		expect(warnings).toEqual([]);
+	});
+
 	it("preserves protected multi-agent extensions when path segment is exact", () => {
 		const protectedPath = join(tempDir, "extensions", "persistent-task-subagents", "build", "runner.ts");
 		const nonProtectedPath = join(tempDir, "extensions", "not-multi-agents", "evil.ts");

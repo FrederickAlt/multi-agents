@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { AgentConfig } from "./agents.js";
 import { matchesProtectedMultiAgentExtension } from "./protected-extension.js";
@@ -97,8 +97,32 @@ function readPackageJsonNameFromBaseDir(baseDir: string | undefined): string | u
 	}
 }
 
-function addPackageJsonNameAlias(aliases: Set<string>, baseDir: string | undefined): void {
-	addCandidateAlias(aliases, readPackageJsonNameFromBaseDir(baseDir));
+function packageSearchStartDir(value: string | undefined): string | undefined {
+	if (!value || value.startsWith("<")) return undefined;
+	const absolute = path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
+	try {
+		return statSync(absolute).isDirectory() ? absolute : path.dirname(absolute);
+	} catch {
+		const guessedDir = path.extname(absolute) ? path.dirname(absolute) : absolute;
+		return existsSync(guessedDir) ? guessedDir : undefined;
+	}
+}
+
+function readNearestPackageJsonNameFromAncestor(startPath: string | undefined): string | undefined {
+	let currentDir = packageSearchStartDir(startPath);
+	while (currentDir) {
+		if (existsSync(path.join(currentDir, "package.json"))) {
+			return readPackageJsonNameFromBaseDir(currentDir);
+		}
+		const parentDir = path.dirname(currentDir);
+		if (parentDir === currentDir) return undefined;
+		currentDir = parentDir;
+	}
+	return undefined;
+}
+
+function addPackageJsonNameAlias(aliases: Set<string>, startPath: string | undefined): void {
+	addCandidateAlias(aliases, readNearestPackageJsonNameFromAncestor(startPath));
 }
 
 export function extensionAliasSet(
@@ -127,6 +151,10 @@ export function extensionAliasSet(
 	}
 	addCandidateAliasPath(aliases, candidate.path);
 	addCandidateAliasPath(aliases, candidate.resolvedPath);
+	if (includePackageNames) {
+		addPackageJsonNameAlias(aliases, candidate.path);
+		addPackageJsonNameAlias(aliases, candidate.resolvedPath);
+	}
 	if (candidate.metadata?.baseDir) {
 		addCandidateAlias(aliases, candidate.metadata.baseDir);
 		addCandidateAlias(aliases, path.basename(candidate.metadata.baseDir));
