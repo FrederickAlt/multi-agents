@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	discoverAllAgentNames,
 	discoverCanSpawn,
+	discoverConfiguredExtensions,
 	discoverExtensions,
 	discoverModelsFromPiCli,
 	discoverPromptParts,
@@ -107,6 +108,25 @@ describe("discoverExtensions", () => {
 		expect(aCount).toBe(1);
 		expect(exts[0]).toBe("a-ext");
 		expect(exts[1]).toBe("b-ext");
+	});
+
+	it("surfaces configured packages whose only extension is disabled", () => {
+		const packageDir = mkdir("packages", "pdf-preview");
+		fs.writeFileSync(
+			path.join(packageDir, "package.json"),
+			JSON.stringify({ name: "pdf-preview", pi: { extensions: ["./index.ts"] } }),
+		);
+		writeFile("packages", "pdf-preview", "index.ts");
+		fs.writeFileSync(
+			path.join(tempDir, "settings.json"),
+			JSON.stringify({ packages: [{ source: "packages/pdf-preview", extensions: ["-index.ts"] }] }),
+		);
+
+		const discovered = discoverConfiguredExtensions(tempDir, tempDir);
+
+		expect(discovered.extensions).toContain("pdf-preview");
+		expect(discovered.disabledExtensions).toContain("pdf-preview");
+		expect(discovered.extensionAliases["pdf-preview"]).toContain("packages/pdf-preview");
 	});
 });
 

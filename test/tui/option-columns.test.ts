@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	getOptionColumnDisabledItems,
 	getOptionColumnItems,
 	getOptionColumnSelectedValues,
 	normalizeOptionCheckboxSaveValues,
@@ -210,5 +211,35 @@ describe("extension UI selection alias mapping", () => {
 
 		expect(getOptionColumnSelectedValues(agent, options, "extensions")).toEqual(["summarize"]);
 		expect(getOptionColumnItems(agent, options, "extensions", agent.name)).toEqual(["summarize"]);
+	});
+
+	it("shows disabled configured extensions without implicitly selecting them", () => {
+		const options = {
+			extensions: ["mcp-deamon", "pdf-preview"],
+			disabledExtensions: ["pdf-preview"],
+			tools: [],
+			toolExtensionNames: {},
+			models: [],
+			defaultModel: "",
+			modelDiscovery: { status: "ready" as const, error: null },
+			reasoningEfforts: ["low", "medium", "high", "maximum"],
+			depths: [0],
+			canSpawn: [],
+			skills: [],
+			promptParts: [],
+		};
+		const agent: AgentConfigState = {
+			name: "agent-a",
+			description: "test",
+			filePath: "/tmp/agent-a.md",
+			frontmatter: { description: "test" },
+			body: "",
+			error: null,
+			staleItems: {},
+		};
+
+		expect(getOptionColumnItems(agent, options, "extensions", agent.name)).toEqual(["mcp-deamon", "pdf-preview"]);
+		expect(getOptionColumnSelectedValues(agent, options, "extensions")).toEqual(["mcp-deamon"]);
+		expect(getOptionColumnDisabledItems(agent, options, "extensions")).toContain("pdf-preview");
 	});
 });

@@ -69,6 +69,12 @@ export interface DiscoveredOptions {
 	 */
 	toolExtensionNames?: Record<string, string[]>;
 	extensions: string[];
+	/**
+	 * Extension option names that are present in settings but disabled at the
+	 * package/resource level. They are shown for visibility but cannot be selected
+	 * per agent because Pi will not load them until global/project settings change.
+	 */
+	disabledExtensions?: string[];
 	extensionAliases?: Record<string, string[]>;
 	models: ModelOption[];
 	/**

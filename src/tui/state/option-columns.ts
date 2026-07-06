@@ -205,7 +205,10 @@ export function getOptionColumnDisabledItems(
 		return ["Task"];
 	}
 	if (fieldName === "extensions") {
-		return options.extensions.filter((extension) => isProtectedMultiAgentExtensionName(extension));
+		return [
+			...options.extensions.filter((extension) => isProtectedMultiAgentExtensionName(extension)),
+			...(options.disabledExtensions ?? []),
+		];
 	}
 	return [];
 }
@@ -341,8 +344,13 @@ export function getOptionColumnSelectedValues(
 			);
 		}
 		if (fieldName === "extensions") {
+			const disabledExtensions = new Set(options.disabledExtensions ?? []);
+			const selectableValues =
+				raw === undefined || raw === null
+					? selectedValues.filter((value) => !disabledExtensions.has(value))
+					: selectedValues;
 			const mappedSelectedValues: string[] = [];
-			for (const value of selectedValues) {
+			for (const value of selectableValues) {
 				addUnique(mappedSelectedValues, mapExtensionStorageValueToOptionValue(options, String(value)));
 			}
 			for (const extensionName of protectedAvailableExtensions(options)) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	discoverAllAgentNames,
-	discoverExtensions,
+	discoverConfiguredExtensions,
 	discoverModels,
 	discoverPiRuntimeResources,
 	discoverPromptParts,
@@ -48,6 +48,7 @@ export function useOptionDiscovery(): {
 		tools: [],
 		toolExtensionNames: {},
 		extensions: [],
+		disabledExtensions: [],
 		extensionAliases: {},
 		models: [],
 		defaultModel: "",
@@ -84,12 +85,17 @@ export function useOptionDiscovery(): {
 				});
 
 			const piRuntimeResourcesPromise = discoverPiRuntimeResources(agentDir, toolLists);
-			const discoveredExtensions = discoverExtensions(agentDir);
+			const configuredExtensions = discoverConfiguredExtensions(agentDir);
+			const discoveredExtensions = configuredExtensions.extensions;
 			const discovered: DiscoveredOptions = {
 				tools: discoverTools(agentDir, toolLists),
 				toolExtensionNames: {},
 				extensions: discoveredExtensions,
-				extensionAliases: buildExtensionAliasMap(discoveredExtensions),
+				disabledExtensions: configuredExtensions.disabledExtensions,
+				extensionAliases: {
+					...buildExtensionAliasMap(discoveredExtensions),
+					...configuredExtensions.extensionAliases,
+				},
 				models: [],
 				defaultModel: "",
 				modelDiscovery: {
@@ -140,12 +146,19 @@ export function useOptionDiscovery(): {
 						setAgents([...scanned]);
 						return;
 					}
+					const runtimeExtensions = [
+						...new Set([...piRuntimeResources.extensions, ...configuredExtensions.extensions]),
+					].sort();
 					const runtimeDiscovered = {
 						...discovered,
 						tools: piRuntimeResources.tools,
 						toolExtensionNames: piRuntimeResources.toolExtensionNames,
-						extensions: piRuntimeResources.extensions,
-						extensionAliases: piRuntimeResources.extensionAliases ?? discovered.extensionAliases,
+						extensions: runtimeExtensions,
+						disabledExtensions: configuredExtensions.disabledExtensions,
+						extensionAliases: {
+							...(piRuntimeResources.extensionAliases ?? discovered.extensionAliases),
+							...configuredExtensions.extensionAliases,
+						},
 						skills: piRuntimeResources.skills,
 					};
 					detectStaleItems(
@@ -163,6 +176,7 @@ export function useOptionDiscovery(): {
 						tools: runtimeDiscovered.tools,
 						toolExtensionNames: runtimeDiscovered.toolExtensionNames,
 						extensions: runtimeDiscovered.extensions,
+						disabledExtensions: runtimeDiscovered.disabledExtensions,
 						extensionAliases: runtimeDiscovered.extensionAliases,
 						skills: runtimeDiscovered.skills,
 					}));

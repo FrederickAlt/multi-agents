@@ -118,6 +118,12 @@ function getExtensionNameCandidates(extension: {
 
 export type ExtensionAliasMap = Record<string, string[]>;
 
+export interface ConfiguredExtensionDiscovery {
+	extensions: string[];
+	disabledExtensions: string[];
+	extensionAliases: ExtensionAliasMap;
+}
+
 function addUniqueNameToAliasSet(
 	aliasesByExtension: ExtensionAliasMap,
 	extensionName: string | undefined,
@@ -425,6 +431,169 @@ export function discoverExtensions(agentDir: string): string[] {
 		}
 	}
 	return [...new Set(names)].sort();
+}
+
+function readJsonObject(filePath: string): Record<string, unknown> | undefined {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function normalizeConfiguredPath(input: string, baseDir: string): string {
+	const trimmed = input.trim();
+	if (trimmed.startsWith("~")) return path.join(process.env.HOME || "", trimmed.slice(1));
+	return path.isAbsolute(trimmed) ? trimmed : path.resolve(baseDir, trimmed);
+}
+
+function configuredSourceDisplayName(source: string, baseDir: string): string | undefined {
+	const trimmed = source.trim();
+	if (!trimmed) return undefined;
+	if (trimmed.startsWith("npm:") || trimmed.startsWith("git:") || /^https?:\/\//.test(trimmed)) {
+		return displayNameFromPackageSource(trimmed);
+	}
+	const resolved = normalizeConfiguredPath(trimmed, baseDir);
+	try {
+		const packageName = readPackageName(fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved));
+		if (packageName) return packageName;
+	} catch {
+		// Fall through to path-derived display name for missing/stale local package entries.
+	}
+	return path.basename(resolved, path.extname(resolved));
+}
+
+function readManifestExtensionEntries(packageRoot: string): string[] {
+	const packageJsonPath = path.join(packageRoot, "package.json");
+	const packageJson = readJsonObject(packageJsonPath) as { pi?: { extensions?: unknown } } | undefined;
+	const entries = packageJson?.pi?.extensions;
+	if (!Array.isArray(entries)) return [];
+	return entries.map(String).filter((entry) => entry.trim() && !/^[!+-]/.test(entry.trim()));
+}
+
+function collectKnownPackageExtensionEntries(source: string, baseDir: string): string[] {
+	const resolved = normalizeConfiguredPath(source, baseDir);
+	try {
+		const stats = fs.statSync(resolved);
+		if (stats.isFile()) return [resolved];
+		if (!stats.isDirectory()) return [];
+
+		const manifestEntries = readManifestExtensionEntries(resolved).map((entry) => path.resolve(resolved, entry));
+		if (manifestEntries.length > 0) return manifestEntries;
+
+		const indexTs = path.join(resolved, "index.ts");
+		const indexJs = path.join(resolved, "index.js");
+		return [indexTs, indexJs].filter((entry) => fs.existsSync(entry));
+	} catch {
+		return [];
+	}
+}
+
+function packageExtensionPatternDisablesPath(extensionPath: string, packageRoot: string, rawPattern: string): boolean {
+	const pattern = rawPattern.trim();
+	if (!pattern.startsWith("-")) return false;
+	const value = pattern.slice(1).replace(/\\/g, "/");
+	const relativePath = path.relative(packageRoot, extensionPath).replace(/\\/g, "/");
+	const basename = path.basename(extensionPath);
+	return value === relativePath || value === basename || value === extensionPath.replace(/\\/g, "/");
+}
+
+function packageExtensionFiltersDisableAll(source: string, baseDir: string, filters: string[]): boolean {
+	if (filters.length === 0) return true;
+	if (filters.some((filter) => !/^[!-]/.test(filter.trim()))) return false;
+
+	const knownEntries = collectKnownPackageExtensionEntries(source, baseDir);
+	if (knownEntries.length === 0) return filters.every((filter) => /^[!-]/.test(filter.trim()));
+
+	const packageRoot = normalizeConfiguredPath(source, baseDir);
+	return knownEntries.every((entry) =>
+		filters.some((filter) => packageExtensionPatternDisablesPath(entry, packageRoot, filter)),
+	);
+}
+
+function addConfiguredExtension(
+	result: ConfiguredExtensionDiscovery,
+	name: string | undefined,
+	aliases: Array<string | undefined>,
+	disabled: boolean,
+): void {
+	if (!name) return;
+	addUniqueName(result.extensions, name);
+	if (disabled) addUniqueName(result.disabledExtensions, name);
+	const merged = result.extensionAliases[name] ?? [];
+	for (const alias of [name, ...aliases]) addUniqueName(merged, alias);
+	result.extensionAliases[name] = merged;
+}
+
+function collectConfiguredExtensionsFromSettings(
+	settings: Record<string, unknown> | undefined,
+	baseDir: string,
+	result: ConfiguredExtensionDiscovery,
+): void {
+	const packages = settings?.packages;
+	if (Array.isArray(packages)) {
+		for (const entry of packages) {
+			const source =
+				typeof entry === "string"
+					? entry
+					: entry && typeof entry === "object"
+						? String((entry as { source?: unknown }).source ?? "")
+						: "";
+			if (!source) continue;
+			const filters =
+				entry && typeof entry === "object" && Array.isArray((entry as { extensions?: unknown }).extensions)
+					? (entry as { extensions: unknown[] }).extensions.map(String)
+					: undefined;
+			const name = configuredSourceDisplayName(source, baseDir);
+			addConfiguredExtension(
+				result,
+				name,
+				[source, path.basename(source)],
+				filters ? packageExtensionFiltersDisableAll(source, baseDir, filters) : false,
+			);
+		}
+	}
+
+	const extensions = settings?.extensions;
+	if (Array.isArray(extensions)) {
+		for (const raw of extensions) {
+			const value = String(raw).trim();
+			if (!value || /^[!+-]/.test(value)) continue;
+			const resolved = normalizeConfiguredPath(value, baseDir);
+			addConfiguredExtension(result, path.basename(resolved, path.extname(resolved)), [value, resolved], false);
+		}
+	}
+}
+
+/**
+ * Discover extension option names from both auto-discovered extension files and
+ * configured package entries. Disabled package entries are included in
+ * `extensions` and listed in `disabledExtensions` so stale settings do not hide
+ * from the TUI.
+ */
+export function discoverConfiguredExtensions(agentDir: string, cwd = process.cwd()): ConfiguredExtensionDiscovery {
+	const result: ConfiguredExtensionDiscovery = {
+		extensions: discoverExtensions(agentDir),
+		disabledExtensions: [],
+		extensionAliases: {},
+	};
+	for (const name of result.extensions) {
+		result.extensionAliases[name] = [name];
+	}
+
+	collectConfiguredExtensionsFromSettings(readJsonObject(path.join(agentDir, "settings.json")), agentDir, result);
+	collectConfiguredExtensionsFromSettings(
+		readJsonObject(path.join(cwd, ".pi", "settings.json")),
+		path.join(cwd, ".pi"),
+		result,
+	);
+
+	result.extensions.sort();
+	result.disabledExtensions.sort();
+	return result;
 }
 
 // ---------------------------------------------------------------------------

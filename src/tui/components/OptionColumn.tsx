@@ -138,7 +138,7 @@ export function OptionColumn({
 						wrap="truncate"
 					>
 						{isFocusedItem ? ">" : " "} {mark} {item}
-						{isMissing ? " (missing)" : ""}
+						{isMissing ? " (missing)" : isDisabledItem ? " (disabled)" : ""}
 					</Text>
 				);
 			})}
