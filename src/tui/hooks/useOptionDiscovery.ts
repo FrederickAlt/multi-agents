@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	discoverAllAgentNames,
+	discoverCachedPiRuntimeResources,
 	discoverConfiguredExtensions,
 	discoverModels,
 	discoverPiRuntimeResources,
@@ -28,6 +29,20 @@ function buildExtensionAliasMap(discoveredExtensions: string[]): Record<string, 
 		extensionAliases[extensionName] = [extensionName];
 	}
 	return extensionAliases;
+}
+
+function mergeAliasMaps(...maps: Array<Record<string, string[]> | undefined>): Record<string, string[]> {
+	const merged: Record<string, string[]> = {};
+	for (const map of maps) {
+		for (const [extensionName, aliases] of Object.entries(map ?? {})) {
+			const values = merged[extensionName] ?? [];
+			for (const alias of aliases) {
+				if (!values.includes(alias)) values.push(alias);
+			}
+			merged[extensionName] = values;
+		}
+	}
+	return merged;
 }
 
 /**
@@ -85,17 +100,21 @@ export function useOptionDiscovery(): {
 				});
 
 			const piRuntimeResourcesPromise = discoverPiRuntimeResources(agentDir, toolLists);
+			const cachedRuntimeResources = discoverCachedPiRuntimeResources(agentDir);
 			const configuredExtensions = discoverConfiguredExtensions(agentDir);
-			const discoveredExtensions = configuredExtensions.extensions;
+			const discoveredExtensions = [
+				...new Set([...configuredExtensions.extensions, ...cachedRuntimeResources.extensions]),
+			].sort();
 			const discovered: DiscoveredOptions = {
-				tools: discoverTools(agentDir, toolLists),
-				toolExtensionNames: {},
+				tools: [...new Set([...discoverTools(agentDir, toolLists), ...cachedRuntimeResources.tools])].sort(),
+				toolExtensionNames: cachedRuntimeResources.toolExtensionNames,
 				extensions: discoveredExtensions,
 				disabledExtensions: configuredExtensions.disabledExtensions,
-				extensionAliases: {
-					...buildExtensionAliasMap(discoveredExtensions),
-					...configuredExtensions.extensionAliases,
-				},
+				extensionAliases: mergeAliasMaps(
+					buildExtensionAliasMap(discoveredExtensions),
+					cachedRuntimeResources.extensionAliases,
+					configuredExtensions.extensionAliases,
+				),
 				models: [],
 				defaultModel: "",
 				modelDiscovery: {
@@ -155,10 +174,10 @@ export function useOptionDiscovery(): {
 						toolExtensionNames: piRuntimeResources.toolExtensionNames,
 						extensions: runtimeExtensions,
 						disabledExtensions: configuredExtensions.disabledExtensions,
-						extensionAliases: {
-							...(piRuntimeResources.extensionAliases ?? discovered.extensionAliases),
-							...configuredExtensions.extensionAliases,
-						},
+						extensionAliases: mergeAliasMaps(
+							piRuntimeResources.extensionAliases ?? discovered.extensionAliases,
+							configuredExtensions.extensionAliases,
+						),
 						skills: piRuntimeResources.skills,
 					};
 					detectStaleItems(

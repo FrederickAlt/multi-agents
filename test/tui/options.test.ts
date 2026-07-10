@@ -4,13 +4,16 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	discoverAllAgentNames,
+	discoverCachedPiRuntimeResources,
 	discoverCanSpawn,
 	discoverConfiguredExtensions,
 	discoverExtensions,
+	discoverModels,
 	discoverModelsFromPiCli,
 	discoverPromptParts,
 	discoverSkills,
 	discoverTools,
+	mergePiRuntimeDiscoveries,
 	parsePiListModelsOutput,
 } from "../../src/tui/discovery/options.js";
 
@@ -130,6 +133,53 @@ describe("discoverExtensions", () => {
 	});
 });
 
+describe("runtime tool-extension cache", () => {
+	it("loads cached extension-provided tools for TUI discovery", () => {
+		fs.writeFileSync(
+			path.join(tempDir, "tool-extension-cache.json"),
+			JSON.stringify({
+				version: 1,
+				tools: {
+					config_tool: { extensions: ["config-ext", "../../extensions/config-ext"] },
+				},
+				extensions: ["config-ext"],
+				extensionAliases: { "config-ext": ["config-ext", "../../extensions/config-ext"] },
+			}),
+		);
+
+		const cached = discoverCachedPiRuntimeResources(tempDir);
+
+		expect(cached.tools).toEqual(["config_tool"]);
+		expect(cached.toolExtensionNames.config_tool).toEqual(["../../extensions/config-ext", "config-ext"]);
+		expect(cached.extensions).toEqual(["../../extensions/config-ext", "config-ext"]);
+		expect(cached.extensionAliases?.["config-ext"]).toEqual(["../../extensions/config-ext", "config-ext"]);
+	});
+
+	it("merges cached and fresh runtime tool-extension mappings", () => {
+		const merged = mergePiRuntimeDiscoveries(
+			{
+				tools: ["cached_tool"],
+				toolExtensionNames: { cached_tool: ["config-ext"] },
+				extensions: ["config-ext"],
+				extensionAliases: { "config-ext": ["config-ext"] },
+				skills: [],
+			},
+			{
+				tools: ["fresh_tool"],
+				toolExtensionNames: { fresh_tool: ["config-ext"] },
+				extensions: ["config-ext"],
+				extensionAliases: { "config-ext": ["../../extensions/config-ext"] },
+				skills: ["fresh-skill"],
+			},
+		);
+
+		expect(merged?.tools).toEqual(["cached_tool", "fresh_tool"]);
+		expect(merged?.toolExtensionNames).toEqual({ cached_tool: ["config-ext"], fresh_tool: ["config-ext"] });
+		expect(merged?.extensionAliases?.["config-ext"]).toEqual(["config-ext", "../../extensions/config-ext"]);
+		expect(merged?.skills).toEqual(["fresh-skill"]);
+	});
+});
+
 describe("discoverCanSpawn", () => {
 	it("includes self in spawnable agents", () => {
 		writeFile("agents", "self.md");
@@ -239,27 +289,35 @@ printf 'local-b             llama-3.1-8b          8.2K     4.1K     no        no
 		expect(result.models.map((m) => m.canonicalRef)).toEqual(["local-a/llama-3.1-8b", "local-b/llama-3.1-8b"]);
 	});
 
-	it("uses pi --list-models as a real fallback source", () => {
+	it("uses only the installed pi model list", async () => {
 		const fakePi = path.join(tempDir, "pi");
 		fs.writeFileSync(
 			fakePi,
 			`#!/usr/bin/env bash
 if [[ "$1" != "--list-models" ]]; then exit 2; fi
 printf 'provider            model                 context  max-out  thinking  images\\n'
-printf 'openrouter          openai/gpt-5.2        400K     128K     yes       yes\\n'
+printf 'openai-codex        gpt-5.6-sol           372K     128K     yes       yes\\n'
 printf 'local-llama-server  llama-3.1-8b          8.2K     4.1K     no        no\\n'
 `,
 		);
 		fs.chmodSync(fakePi, 0o755);
 
-		const result = discoverModelsFromPiCli(tempDir, fakePi);
+		const result = await discoverModels(tempDir, fakePi);
 
 		expect(result.status).toBe("ready");
 		expect(result.models.map((m) => `${m.provider}/${m.modelId}`)).toEqual([
 			"local-llama-server/llama-3.1-8b",
-			"openrouter/openai/gpt-5.2",
+			"openai-codex/gpt-5.6-sol",
 		]);
 		expect(result.defaultModelDisplayName).toBe("llama-3.1-8b");
+	});
+
+	it("does not substitute stale built-in models when pi discovery fails", async () => {
+		const result = await discoverModels(tempDir, path.join(tempDir, "missing-pi"));
+
+		expect(result.status).toBe("degraded");
+		expect(result.models).toEqual([]);
+		expect(result.error).toContain("pi --list-models failed");
 	});
 });
 

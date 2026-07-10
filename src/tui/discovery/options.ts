@@ -168,6 +168,168 @@ export interface PiRuntimeDiscovery {
 	skills: string[];
 }
 
+const TOOL_EXTENSION_CACHE_FILE = "tool-extension-cache.json";
+const TOOL_EXTENSION_CACHE_VERSION = 1;
+
+type ToolExtensionCacheFile = {
+	version?: number;
+	updatedAt?: string;
+	tools?: Record<string, { extensions?: unknown; updatedAt?: unknown }>;
+	extensions?: unknown;
+	extensionAliases?: unknown;
+};
+
+function addUniqueNames(target: string[], values: Iterable<string | undefined>): void {
+	for (const value of values) {
+		addUniqueName(target, value);
+	}
+}
+
+function sortedUnique(values: Iterable<string | undefined>): string[] {
+	return [
+		...new Set([...values].filter((value): value is string => typeof value === "string" && value.length > 0)),
+	].sort();
+}
+
+function cacheFilePath(agentDir: string): string {
+	return path.join(agentDir, TOOL_EXTENSION_CACHE_FILE);
+}
+
+function readStringArray(value: unknown): string[] {
+	return Array.isArray(value) ? sortedUnique(value.map((item) => String(item))) : [];
+}
+
+/**
+ * Reads the last successfully observed mapping between runtime tools and the
+ * extensions that provided them. This lets the TUI show and filter tools from
+ * config-dependent extensions even before/without a successful runtime scan.
+ */
+export function discoverCachedPiRuntimeResources(agentDir: string): PiRuntimeDiscovery {
+	const parsed = readJsonObject(cacheFilePath(agentDir)) as ToolExtensionCacheFile | undefined;
+	const toolExtensionNames: Record<string, string[]> = {};
+	const toolNames: string[] = [];
+	if (parsed?.version === TOOL_EXTENSION_CACHE_VERSION && parsed.tools && typeof parsed.tools === "object") {
+		for (const [toolName, entry] of Object.entries(parsed.tools)) {
+			const extensions = readStringArray(entry?.extensions);
+			if (toolName && extensions.length > 0) {
+				addUniqueName(toolNames, toolName);
+				toolExtensionNames[toolName] = extensions;
+			}
+		}
+	}
+
+	const extensionAliases: ExtensionAliasMap = {};
+	if (
+		parsed?.extensionAliases &&
+		typeof parsed.extensionAliases === "object" &&
+		!Array.isArray(parsed.extensionAliases)
+	) {
+		for (const [extensionName, aliases] of Object.entries(parsed.extensionAliases)) {
+			const values = readStringArray(aliases);
+			if (extensionName && values.length > 0) extensionAliases[extensionName] = values;
+		}
+	}
+
+	const extensions = sortedUnique([
+		...readStringArray(parsed?.extensions),
+		...Object.keys(extensionAliases),
+		...Object.values(toolExtensionNames).flat(),
+	]);
+
+	return {
+		tools: sortedUnique(toolNames),
+		toolExtensionNames,
+		extensions,
+		extensionAliases,
+		skills: [],
+	};
+}
+
+function mergeExtensionAliases(...maps: Array<ExtensionAliasMap | undefined>): ExtensionAliasMap {
+	const merged: ExtensionAliasMap = {};
+	for (const map of maps) {
+		for (const [extensionName, aliases] of Object.entries(map ?? {})) {
+			const values = merged[extensionName] ?? [];
+			addUniqueNames(values, aliases);
+			merged[extensionName] = values;
+		}
+	}
+	return merged;
+}
+
+function mergeToolExtensionNames(...maps: Array<Record<string, string[]> | undefined>): Record<string, string[]> {
+	const merged: Record<string, string[]> = {};
+	for (const map of maps) {
+		for (const [toolName, extensions] of Object.entries(map ?? {})) {
+			const values = merged[toolName] ?? [];
+			addUniqueNames(values, extensions);
+			merged[toolName] = values;
+		}
+	}
+	return merged;
+}
+
+export function mergePiRuntimeDiscoveries(
+	base: PiRuntimeDiscovery | undefined,
+	override: PiRuntimeDiscovery | undefined,
+): PiRuntimeDiscovery | undefined {
+	if (!base) return override;
+	if (!override) return base;
+	return {
+		tools: sortedUnique([...base.tools, ...override.tools]),
+		toolExtensionNames: mergeToolExtensionNames(base.toolExtensionNames, override.toolExtensionNames),
+		extensions: sortedUnique([...base.extensions, ...override.extensions]),
+		extensionAliases: mergeExtensionAliases(base.extensionAliases, override.extensionAliases),
+		skills: sortedUnique([...base.skills, ...override.skills]),
+	};
+}
+
+function writeToolExtensionCache(agentDir: string, discovery: PiRuntimeDiscovery): void {
+	const existing = discoverCachedPiRuntimeResources(agentDir);
+	const merged = mergePiRuntimeDiscoveries(existing, discovery) ?? discovery;
+	const now = new Date().toISOString();
+	const tools: NonNullable<ToolExtensionCacheFile["tools"]> = {};
+	for (const [toolName, extensions] of Object.entries(merged.toolExtensionNames)) {
+		if (BUILTIN_TOOLS.includes(toolName) || extensions.length === 0) continue;
+		tools[toolName] = { extensions: sortedUnique(extensions), updatedAt: now };
+	}
+	try {
+		fs.mkdirSync(agentDir, { recursive: true });
+		fs.writeFileSync(
+			cacheFilePath(agentDir),
+			`${JSON.stringify(
+				{
+					version: TOOL_EXTENSION_CACHE_VERSION,
+					updatedAt: now,
+					tools,
+					extensions: sortedUnique(merged.extensions),
+					extensionAliases: mergeExtensionAliases(merged.extensionAliases),
+				},
+				null,
+				2,
+			)}\n`,
+		);
+	} catch {
+		// Cache writes are best-effort; runtime discovery should still succeed.
+	}
+}
+
+async function importPiCodingAgent(): Promise<PiCodingAgentApi> {
+	const piPath = execFileSync("which", ["pi"], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	})
+		.trim()
+		.split(/\r?\n/)[0];
+	if (!piPath) throw new Error("Pi executable not found");
+
+	const realPiPath = fs.realpathSync(piPath);
+	const packageRoot = path.dirname(path.dirname(realPiPath));
+	const indexPath = path.join(packageRoot, "dist", "index.js");
+	if (!fs.existsSync(indexPath)) throw new Error(`Pi package entry point not found: ${indexPath}`);
+	return (await import(pathToFileURL(indexPath).href)) as PiCodingAgentApi;
+}
+
 /**
  * Discover enabled resources the same way Pi does for `pi config`/startup.
  * Falls back silently when the Pi package is unavailable so the standalone TUI
@@ -178,13 +340,14 @@ export async function discoverPiRuntimeResources(
 	_agentToolLists: string[][],
 	cwd = process.cwd(),
 ): Promise<PiRuntimeDiscovery | undefined> {
+	const cached = discoverCachedPiRuntimeResources(agentDir);
 	let pi: PiCodingAgentApi;
 	try {
 		pi = (await importPiCodingAgent()) as PiCodingAgentApi;
 	} catch {
-		return undefined;
+		return cached.tools.length > 0 ? cached : undefined;
 	}
-	if (!pi.DefaultResourceLoader) return undefined;
+	if (!pi.DefaultResourceLoader) return cached.tools.length > 0 ? cached : undefined;
 
 	const settingsManager = pi.SettingsManager?.create?.(cwd, agentDir);
 	let loader: PiResourceLoader | undefined;
@@ -267,13 +430,16 @@ export async function discoverPiRuntimeResources(
 		if (skill.name) skillSet.add(String(skill.name));
 	}
 
-	return {
+	const runtimeDiscovery: PiRuntimeDiscovery = {
 		tools: [...toolSet].sort(),
 		toolExtensionNames,
 		extensions: [...extensionSet].sort(),
 		extensionAliases,
 		skills: [...skillSet].sort(),
 	};
+	const mergedDiscovery = mergePiRuntimeDiscoveries(cached, runtimeDiscovery) ?? runtimeDiscovery;
+	writeToolExtensionCache(agentDir, mergedDiscovery);
+	return mergedDiscovery;
 }
 
 // ---------------------------------------------------------------------------
@@ -600,12 +766,7 @@ export function discoverConfiguredExtensions(agentDir: string, cwd = process.cwd
 // Models Discovery
 // ---------------------------------------------------------------------------
 
-/**
- * Discover models using Pi's ModelRegistry. The config TUI is standalone, so
- * the Pi package may not be locally installed next to this extension. In that
- * case, fall back to the installed `pi --list-models` command before using the
- * tiny static built-in list.
- */
+/** Discover models exclusively from the installed `pi` executable. */
 export interface DiscoveredModelsResult {
 	models: ModelOption[];
 	defaultModelDisplayName: string;
@@ -613,128 +774,17 @@ export interface DiscoveredModelsResult {
 	error?: string;
 }
 
-type PiCodingAgentModule = {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	AuthStorage?: any;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	ModelRegistry?: any;
-};
-
-export async function discoverModels(agentDir: string): Promise<DiscoveredModelsResult> {
+export async function discoverModels(agentDir: string, piCommand = "pi"): Promise<DiscoveredModelsResult> {
 	try {
-		const pcg = await importPiCodingAgent();
-		return discoverModelsFromPiPackage(pcg, agentDir);
-	} catch (packageErr) {
-		try {
-			return discoverModelsFromPiCli(agentDir);
-		} catch (cliErr) {
-			const builtin = getBuiltInModels();
-			return {
-				models: builtin,
-				defaultModelDisplayName: builtin[0]?.displayName ?? "",
-				status: "degraded",
-				error: `Pi model discovery failed: ${formatError(packageErr)}; pi --list-models failed: ${formatError(cliErr)}`,
-			};
-		}
+		return discoverModelsFromPiCli(agentDir, piCommand);
+	} catch (err) {
+		return {
+			models: [],
+			defaultModelDisplayName: "",
+			status: "degraded",
+			error: `pi --list-models failed: ${formatError(err)}`,
+		};
 	}
-}
-
-async function importPiCodingAgent(): Promise<PiCodingAgentModule> {
-	const errors: string[] = [];
-	for (const specifier of ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"]) {
-		try {
-			return await import(specifier);
-		} catch (err) {
-			errors.push(`${specifier}: ${formatError(err)}`);
-		}
-	}
-
-	const installedIndex = resolveInstalledPiIndex();
-	if (installedIndex) {
-		try {
-			return await import(pathToFileURL(installedIndex).href);
-		} catch (err) {
-			errors.push(`${installedIndex}: ${formatError(err)}`);
-		}
-	}
-
-	throw new Error(errors.join("; ") || "Pi package not found");
-}
-
-function resolveInstalledPiIndex(): string | undefined {
-	try {
-		const piPath = execFileSync("which", ["pi"], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		})
-			.trim()
-			.split(/\r?\n/)[0];
-		if (!piPath) return undefined;
-
-		const realPiPath = fs.realpathSync(piPath);
-		const packageRoot = path.dirname(path.dirname(realPiPath));
-		const indexPath = path.join(packageRoot, "dist", "index.js");
-		return fs.existsSync(indexPath) ? indexPath : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function discoverModelsFromPiPackage(pcg: PiCodingAgentModule, agentDir: string): DiscoveredModelsResult {
-	const AuthStorage = pcg.AuthStorage;
-	const ModelRegistry = pcg.ModelRegistry;
-	if (!AuthStorage || !ModelRegistry) {
-		throw new Error("Pi package does not export AuthStorage and ModelRegistry");
-	}
-
-	const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
-	const modelsJsonPath = path.join(agentDir, "models.json");
-	const registry =
-		typeof ModelRegistry.create === "function"
-			? ModelRegistry.create(authStorage, modelsJsonPath)
-			: new ModelRegistry(authStorage, modelsJsonPath);
-	registry.refresh?.();
-
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const allModels: ModelOption[] = registry
-		.getAll()
-		.map((m: any) => ({
-			provider: m.provider ?? "",
-			modelId: m.id ?? m.modelId ?? "",
-			displayName: m.name ?? m.id ?? `${m.provider}/${m.id}`,
-			canonicalRef: "", // populated below
-		}))
-		.filter((m: ModelOption) => m.modelId.length > 0);
-	computeCanonicalModelRefs(allModels);
-	disambiguateModelDisplayNames(allModels);
-	orderModelsByProvider(allModels);
-
-	let defaultModelDisplayName = "";
-	try {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const available = registry.getAvailable?.() as any[] | undefined;
-		if (available && available.length > 0) {
-			const firstProvider: string = available[0].provider ?? "";
-			const firstId: string = available[0].id ?? available[0].modelId;
-			const match =
-				allModels.find((m) => m.provider === firstProvider && m.modelId === firstId) ??
-				allModels.find((m) => m.modelId === firstId);
-			if (match) defaultModelDisplayName = match.displayName;
-		}
-	} catch {
-		// getAvailable may not exist on older registry versions
-	}
-
-	if (!defaultModelDisplayName && allModels.length > 0) {
-		defaultModelDisplayName = allModels[0].displayName;
-	}
-
-	return {
-		models: allModels,
-		defaultModelDisplayName,
-		status: "ready",
-		error: undefined,
-	};
 }
 
 export function discoverModelsFromPiCli(agentDir: string, piCommand = "pi"): DiscoveredModelsResult {
@@ -786,24 +836,6 @@ export function parsePiListModelsOutput(output: string): ModelOption[] {
 
 function formatError(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
-}
-
-function getBuiltInModels(): ModelOption[] {
-	const models: ModelOption[] = [
-		{ provider: "anthropic", modelId: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4", canonicalRef: "" },
-		{ provider: "anthropic", modelId: "claude-opus-4-20250514", displayName: "Claude Opus 4", canonicalRef: "" },
-		{
-			provider: "anthropic",
-			modelId: "claude-haiku-4-5-20250514",
-			displayName: "Claude Haiku 4.5",
-			canonicalRef: "",
-		},
-		{ provider: "openai", modelId: "gpt-5", displayName: "GPT-5", canonicalRef: "" },
-	];
-	computeCanonicalModelRefs(models);
-	disambiguateModelDisplayNames(models);
-	orderModelsByProvider(models);
-	return models;
 }
 
 // ---------------------------------------------------------------------------

@@ -143,6 +143,55 @@ describe("useOptionDiscovery", () => {
 		}
 	});
 
+	it("uses cached runtime tool-extension mappings before runtime discovery completes", async () => {
+		discoverPiRuntimeResourcesMock.mockImplementationOnce(() => {
+			return new Promise<PiRuntimeDiscovery | undefined>((resolve, reject) => {
+				pendingRuntimeDiscoveries.push({ resolve, reject });
+			});
+		});
+		fs.mkdirSync(path.join(tempAgentDir, "agents"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tempAgentDir, "tool-extension-cache.json"),
+			JSON.stringify({
+				version: 1,
+				tools: { cached_runtime_tool: { extensions: ["config-ext"] } },
+				extensions: ["config-ext"],
+				extensionAliases: { "config-ext": ["config-ext"] },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(tempAgentDir, "agents", "coder.md"),
+			["---", "description: coder", "tools:", "  - read", "  - cached_runtime_tool", "---", "body"].join("\n"),
+		);
+		const frames: ProbeFrame[] = [];
+		const stdout = new Writable({
+			write(_chunk, _encoding, callback) {
+				callback();
+			},
+		});
+		const flush = async () => {
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+		};
+
+		let app: ReturnType<typeof render> | null = null;
+		try {
+			app = render(<OptionDiscoveryProbe triggerRescan={false} onFrame={(frame) => frames.push({ ...frame })} />, {
+				stdout: stdout as unknown as NodeJS.WriteStream,
+				patchConsole: false,
+			});
+			await flush();
+
+			const initialLoadedFrame = frames.find((frame) => !frame.loading);
+			expect(initialLoadedFrame?.tools).toContain("cached_runtime_tool");
+			expect(initialLoadedFrame?.staleTools).toEqual([]);
+		} finally {
+			pendingRuntimeDiscoveries[0]?.resolve(undefined);
+			app?.unmount();
+		}
+	});
+
 	it("does not mark runtime-provided tools stale while runtime discovery is pending", async () => {
 		discoverPiRuntimeResourcesMock.mockImplementationOnce(() => {
 			return new Promise<PiRuntimeDiscovery | undefined>((resolve, reject) => {
