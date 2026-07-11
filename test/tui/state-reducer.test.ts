@@ -771,21 +771,6 @@ describe("OPEN_OVERLAY validation", () => {
 // ---------------------------------------------------------------------------
 
 describe("inline Option columns", () => {
-	it("switches model focus between fast and smart modes", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { model: "claude", smart_model: "gpt5" } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: FIELDS_ORDER.indexOf("model"), optionItemIndex: 0, mode: "fast" },
-		};
-
-		const smart = configReducer(state, { type: "FOCUS_MODE", direction: "next" });
-		expect(smart.focus.mode).toBe("smart");
-		expect(smart.focus.optionItemIndex).toBe(1);
-		expect(configReducer(smart, { type: "FOCUS_MODE", direction: "next" }).focus.mode).toBe("fast");
-	});
-
 	it("FOCUS_FIELD stops at the first and last rendered option columns", () => {
 		const state: ConfigState = {
 			...createInitialState(),
@@ -1142,10 +1127,14 @@ describe("model discovery options", () => {
 			},
 		});
 		const focusedState = configReducer(stateWithPendingModel, { type: "EXPAND" });
-		const withFocus = configReducer(focusedState, {
+		const smartFocus = configReducer(focusedState, {
 			type: "FOCUS_FIELD",
 			direction: "next",
-		}); // reasoning_effort -> depth
+		});
+		const withFocus = configReducer(smartFocus, {
+			type: "FOCUS_FIELD",
+			direction: "next",
+		}); // fast -> smart -> depth
 		const stable = configReducer(withFocus, {
 			type: "UPDATE_OPTIONS",
 			options: {
@@ -1156,7 +1145,7 @@ describe("model discovery options", () => {
 		});
 
 		expect(stable.focus.agentIndex).toBe(0);
-		expect(stable.focus.fieldIndex).toBe(3);
+		expect(stable.focus.fieldIndex).toBe(4);
 		expect(stable.focus.optionItemIndex).toBe(3); // depth value 3 remains selected
 	});
 });

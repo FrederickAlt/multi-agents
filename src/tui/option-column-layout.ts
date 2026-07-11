@@ -11,7 +11,8 @@ const FIELD_LABELS: Record<string, string> = {
 	prompt_parts: "prompt_parts",
 	reasoning_effort: "reasoning",
 	depth: "depth",
-	model: "model",
+	model: "fast",
+	smart_model: "smart",
 };
 
 interface OptionColumnWidthArgs {
@@ -73,7 +74,7 @@ export function getOptionColumnWidth({
 
 	const contentWidth = Math.max(...lines.map(displayWidth));
 	// The combined model column shows two mode summaries with effort circles.
-	const minimumContentWidth = fieldName === "model" ? 34 : OPTION_COLUMN_WIDTH - OPTION_COLUMN_HORIZONTAL_CHROME;
+	const minimumContentWidth = OPTION_COLUMN_WIDTH - OPTION_COLUMN_HORIZONTAL_CHROME;
 	return Math.max(
 		OPTION_COLUMN_WIDTH,
 		minimumContentWidth + OPTION_COLUMN_HORIZONTAL_CHROME,

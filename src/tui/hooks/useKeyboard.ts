@@ -8,7 +8,6 @@ export interface KeyboardActions {
 	focusPrevField: () => void;
 	focusNextOptionItem: () => void;
 	focusPrevOptionItem: () => void;
-	focusNextMode?: () => void;
 	openOverlay: (agentIndex: number, fieldName: string) => void;
 	focusAgentAt: (index: number) => void;
 	closeOverlay: () => void;
@@ -146,8 +145,8 @@ export function handleKeyboardInput(
 			return;
 		}
 
-		if (key.tab && state.fieldName === "model") {
-			actions.focusNextMode?.();
+		if (key.tab) {
+			actions.focusNextField();
 			return;
 		}
 

@@ -337,7 +337,8 @@ describe("renderToText", () => {
 
 		expect(text).toContain("default — default description");
 		expect(text).toContain("tools");
-		expect(text).toContain("model");
+		expect(text).toContain("fast");
+		expect(text).toContain("smart");
 		expect(text).toContain("←/→ columns");
 	});
 

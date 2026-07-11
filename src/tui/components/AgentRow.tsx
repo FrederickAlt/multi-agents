@@ -25,7 +25,6 @@ interface AgentRowProps {
 	isExpanded: boolean;
 	focusedField: number;
 	focusedOptionItem: number;
-	focusedMode?: "fast" | "smart";
 	optionColumnScrollOffset: number;
 	options: DiscoveredOptions;
 	status: StatusInfo | undefined;
@@ -81,7 +80,6 @@ export function AgentRow({
 	isExpanded,
 	focusedField,
 	focusedOptionItem,
-	focusedMode = "fast",
 	optionColumnScrollOffset,
 	options,
 	status,
@@ -105,7 +103,7 @@ export function AgentRow({
 		const isFocusedFieldInline = isOptionColumnField(focusedFieldName);
 		const focusedFieldHint = isFocusedFieldInline ? (
 			<Text dimColor wrap="truncate">
-				←/→ columns · Tab fast/smart · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse
+				←/→ columns · Tab next column · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse
 			</Text>
 		) : (
 			<Text dimColor wrap="truncate">
@@ -117,23 +115,11 @@ export function AgentRow({
 			const isDisabled = isOptionColumnDisabledForAgent(agent, fieldName);
 			const isFocusedField = !isDisabled && isFocused && getFieldName(focusedField) === fieldName;
 			const isInlineCheckbox = isCheckboxOptionColumnField(fieldName);
-			const selectedValues = getOptionColumnSelectedValues(
-				agent,
-				options,
-				fieldName,
-				agent.name,
-				fieldName === "model" ? focusedMode : "fast",
-			);
+			const mode = fieldName === "smart_model" ? "smart" : "fast";
+			const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agent.name, mode);
 			const columnFilter = isFocusedField ? optionColumnFilter : "";
 			const items = applyOptionColumnItemOrder(
-				getOptionColumnItems(
-					agent,
-					options,
-					fieldName,
-					agent.name,
-					columnFilter,
-					fieldName === "model" ? focusedMode : "fast",
-				),
+				getOptionColumnItems(agent, options, fieldName, agent.name, columnFilter, mode),
 				optionColumnItemOrder,
 				agentIndex,
 				fieldName,
@@ -150,15 +136,7 @@ export function AgentRow({
 			});
 			const optionFocusedItemIndex = isFocusedField
 				? focusedOptionItem
-				: getOptionColumnItemIndex(
-						agent,
-						options,
-						fieldName,
-						undefined,
-						agent.name,
-						"",
-						fieldName === "model" ? focusedMode : "fast",
-					);
+				: getOptionColumnItemIndex(agent, options, fieldName, undefined, agent.name, "", mode);
 			return {
 				fieldName,
 				isDisabled,
@@ -215,36 +193,39 @@ export function AgentRow({
 				<Box flexDirection="row" height={EXPANDED_COLUMNS_HEIGHT} overflow="hidden">
 					{hasMoreLeft && <Text dimColor>◀ </Text>}
 					{visibleColumns.map((column) => (
-						<OptionColumn
-							key={column.fieldName}
-							fieldName={column.fieldName}
-							items={column.items}
-							selectedValues={column.selectedValues}
-							focusedItemIndex={column.optionFocusedItemIndex}
-							isFocused={column.isFocusedField}
-							mode={focusedMode}
-							modeSelection={
-								column.fieldName === "model"
-									? {
-											fast: getModeSelection(agent, options, "fast"),
-											smart: getModeSelection(agent, options, "smart"),
-										}
-									: undefined
-							}
-							isSmartLinked={
-								column.fieldName === "model" &&
+						<Box key={column.fieldName} flexDirection="row">
+							{column.fieldName === "smart_model" &&
 								agent.frontmatter?.smart_model === undefined &&
-								agent.frontmatter?.smart_reasoning_effort === undefined
-							}
-							isModeFocused={column.isFocusedField && column.fieldName === "model"}
-							disabled={column.isDisabled}
-							disabledItems={column.disabledItems}
-							filterText={column.isFocusedField ? column.columnFilter : undefined}
-							isCheckbox={column.isInlineCheckbox}
-							staleItems={agent.staleItems[column.fieldName] ?? []}
-							maxVisibleItems={MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW}
-							width={column.width}
-						/>
+								agent.frontmatter?.smart_reasoning_effort === undefined && (
+									<Box width={3} justifyContent="center" alignItems="center">
+										<Text dimColor>🔗</Text>
+									</Box>
+								)}
+							<OptionColumn
+								fieldName={column.fieldName}
+								items={column.items}
+								selectedValues={column.selectedValues}
+								focusedItemIndex={column.optionFocusedItemIndex}
+								isFocused={column.isFocusedField}
+								modeSummary={
+									column.fieldName === "model" || column.fieldName === "smart_model"
+										? getModeSelection(agent, options, column.fieldName === "smart_model" ? "smart" : "fast")
+										: undefined
+								}
+								linked={
+									column.fieldName === "smart_model" &&
+									agent.frontmatter?.smart_model === undefined &&
+									agent.frontmatter?.smart_reasoning_effort === undefined
+								}
+								disabled={column.isDisabled}
+								disabledItems={column.disabledItems}
+								filterText={column.isFocusedField ? column.columnFilter : undefined}
+								isCheckbox={column.isInlineCheckbox}
+								staleItems={agent.staleItems[column.fieldName] ?? []}
+								maxVisibleItems={MAX_VISIBLE_OPTION_ITEMS_IN_EXPANDED_ROW}
+								width={column.width}
+							/>
+						</Box>
 					))}
 					{hasMoreRight && <Text dimColor> ▶</Text>}
 				</Box>

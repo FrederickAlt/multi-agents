@@ -63,7 +63,6 @@ export function Board({ state, height }: BoardProps) {
 						isExpanded={isExpanded}
 						focusedField={isExpanded ? state.focus.fieldIndex : -1}
 						focusedOptionItem={isExpanded ? state.focus.optionItemIndex : -1}
-						focusedMode={isExpanded ? state.focus.mode : "fast"}
 						optionColumnScrollOffset={state.optionColumnScrollOffset}
 						options={state.options}
 						status={state.statuses.get(agent.filePath)}

@@ -299,7 +299,8 @@ export function getOptionColumnAvailableItems(
 			return getToolsAvailableForAgent(options, agent);
 		case "extensions":
 			return options.extensions;
-		case "model": {
+		case "model":
+		case "smart_model": {
 			const modelItems = options.models.map((m) => m.displayName);
 			if (options.modelDiscovery.status === "loading") {
 				return [MODEL_OPTION_LOADING_ITEM];
@@ -325,7 +326,8 @@ export function getOptionColumnDefaultValue(options: DiscoveredOptions, fieldNam
 	switch (fieldName) {
 		case "depth":
 			return "0";
-		case "model": {
+		case "model":
+		case "smart_model": {
 			if (options.defaultModel) {
 				return options.defaultModel;
 			}
@@ -345,10 +347,9 @@ export function getOptionColumnCurrentValue(
 	agent: AgentConfigState,
 	options: DiscoveredOptions,
 	fieldName: OptionColumnFieldName,
-	mode: AgentMode = "fast",
+	_mode: AgentMode = "fast",
 ): string | undefined {
-	const raw =
-		fieldName === "model" && mode === "smart" ? agent.frontmatter?.smart_model : agent.frontmatter?.[fieldName];
+	const raw = fieldName === "smart_model" ? agent.frontmatter?.smart_model : agent.frontmatter?.[fieldName];
 	if (raw === undefined || raw === null || Array.isArray(raw)) return undefined;
 	const value = String(raw);
 	if (fieldName === "model") {
@@ -400,8 +401,8 @@ export function getOptionColumnSelectedValues(
 	}
 
 	const currentValue =
-		fieldName === "model"
-			? getModeSelection(agent, options, mode).model
+		fieldName === "model" || fieldName === "smart_model"
+			? getModeSelection(agent, options, fieldName === "smart_model" ? "smart" : "fast").model
 			: getOptionColumnCurrentValue(agent, options, fieldName, mode);
 	if (currentValue === undefined) {
 		return [getOptionColumnDefaultValue(options, fieldName)];
@@ -444,7 +445,7 @@ export function getOptionColumnItems(
 			return items;
 		}
 
-		if (fieldName === "model") {
+		if (fieldName === "model" || fieldName === "smart_model") {
 			if (options.modelDiscovery.status === "loading") {
 				if (selectedValue === undefined || availableItems.includes(selectedValue)) {
 					return availableItems;
@@ -465,7 +466,7 @@ export function getOptionColumnItems(
 		return availableItems;
 	})();
 
-	if (fieldName === "model") {
+	if (fieldName === "model" || fieldName === "smart_model") {
 		const [firstItem, ...rest] = unfilteredItems;
 		if (!isModelStatusValue(firstItem)) {
 			return filterItems(unfilteredItems, columnFilter);

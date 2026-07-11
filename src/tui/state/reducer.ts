@@ -18,7 +18,6 @@ import {
 } from "./option-columns.js";
 import type {
 	AgentConfigState,
-	AgentMode,
 	ConfigAction,
 	ConfigState,
 	DiscoveredOptions,
@@ -113,7 +112,7 @@ export function createInitialState(): ConfigState {
 			skills: [],
 			promptParts: [],
 		},
-		focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0, mode: "fast" },
+		focus: { agentIndex: 0, fieldIndex: 0, optionItemIndex: 0 },
 		expandedAgentIndex: null,
 		overlay: null,
 		statuses: new Map(),
@@ -180,13 +179,12 @@ function getFocusedOptionItemIndex(
 	fieldIndex: number,
 	focusedItemValue?: string,
 	columnFilter = "",
-	mode: AgentMode = "fast",
 ): number {
 	if (!agent) return 0;
 	const fieldName = getFieldName(fieldIndex);
 	if (!isOptionColumnField(fieldName)) return 0;
-	const items = getOptionColumnItems(agent, options, fieldName, agent.name, columnFilter, mode);
-	const index = getOptionColumnItemIndex(agent, options, fieldName, focusedItemValue, agent.name, columnFilter, mode);
+	const items = getOptionColumnItems(agent, options, fieldName, agent.name, columnFilter);
+	const index = getOptionColumnItemIndex(agent, options, fieldName, focusedItemValue, agent.name, columnFilter);
 	return getNearestEnabledOptionItemIndex(agent, options, fieldName, items, index);
 }
 
@@ -233,14 +231,7 @@ function getEffectiveOptionColumnItems(
 	fieldName: ReturnType<typeof getFieldName>,
 ): string[] {
 	if (!isOptionColumnField(fieldName)) return [];
-	const items = getOptionColumnItems(
-		agent,
-		state.options,
-		fieldName,
-		agent.name,
-		state.optionColumnFilter,
-		state.focus.mode ?? "fast",
-	);
+	const items = getOptionColumnItems(agent, state.options, fieldName, agent.name, state.optionColumnFilter);
 	return applyOptionColumnItemOrder(
 		items,
 		state.optionColumnItemOrder,
@@ -339,8 +330,7 @@ function expandAgent(state: ConfigState, idx: number, agent: AgentConfigState): 
 		focus: {
 			agentIndex: idx,
 			fieldIndex,
-			optionItemIndex: getFocusedOptionItemIndex(agent, state.options, fieldIndex, undefined, "", "fast"),
-			mode: "fast",
+			optionItemIndex: getFocusedOptionItemIndex(agent, state.options, fieldIndex),
 		},
 		optionColumnScrollOffset: syncOptionColumnScrollOffset(
 			0,
@@ -454,26 +444,6 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					null,
 					state.focus.agentIndex,
 				),
-			};
-		}
-
-		case "FOCUS_MODE": {
-			if (getFieldName(state.focus.fieldIndex) !== "model") return state;
-			const nextMode: AgentMode = state.focus.mode === "smart" ? "fast" : "smart";
-			return {
-				...state,
-				focus: {
-					...state.focus,
-					mode: nextMode,
-					optionItemIndex: getFocusedOptionItemIndex(
-						state.agents[state.focus.agentIndex],
-						state.options,
-						state.focus.fieldIndex,
-						undefined,
-						state.optionColumnFilter,
-						nextMode,
-					),
-				},
 			};
 		}
 

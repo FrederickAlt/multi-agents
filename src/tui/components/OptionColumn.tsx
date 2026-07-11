@@ -15,13 +15,8 @@ interface OptionColumnProps {
 	filterText?: string;
 	maxVisibleItems?: number;
 	width?: number;
-	mode?: "fast" | "smart";
-	modeSelection?: {
-		fast: { model: string; reasoningEffort: string };
-		smart: { model: string; reasoningEffort: string };
-	};
-	isSmartLinked?: boolean;
-	isModeFocused?: boolean;
+	modeSummary?: { model: string; reasoningEffort: string };
+	linked?: boolean;
 }
 
 const DEFAULT_MAX_VISIBLE_ITEMS = 5;
@@ -70,10 +65,8 @@ export function OptionColumn({
 	filterText,
 	maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
 	width,
-	mode = "fast",
-	modeSelection,
-	isSmartLinked = false,
-	isModeFocused = false,
+	modeSummary,
+	linked = false,
 }: OptionColumnProps) {
 	const label = getOptionColumnLabel(fieldName);
 	const effectiveSelectedValues = selectedValues ?? (selectedValueProp !== undefined ? [selectedValueProp] : []);
@@ -96,7 +89,7 @@ export function OptionColumn({
 			staleItems,
 			filterText,
 		});
-	const pinnedStatus = fieldName === "model" ? getModelPinnedStatus(items) : undefined;
+	const pinnedStatus = fieldName === "model" || fieldName === "smart_model" ? getModelPinnedStatus(items) : undefined;
 	const reservedLines = (showFilterBar ? 1 : 0) + (pinnedStatus ? 1 : 0);
 	const scrollableItems = pinnedStatus ? items.slice(1) : items;
 	const visibleItemWindow = Math.max(0, visibleItemCount - reservedLines);
@@ -104,6 +97,7 @@ export function OptionColumn({
 		pinnedStatus && focusedItemIndex > 0 ? focusedItemIndex - 1 : Math.max(0, focusedItemIndex);
 	const { start, end } = getVisibleRange(scrollableItems.length, focusedInScrollable, visibleItemWindow);
 	const visibleItems = scrollableItems.slice(start, end);
+	const isLinkedInactive = linked && !isFocused;
 
 	return (
 		<Box
@@ -111,33 +105,21 @@ export function OptionColumn({
 			width={columnWidth}
 			flexShrink={0}
 			borderStyle={isFocused ? "bold" : "single"}
-			borderColor={disabled ? "gray" : isFocused ? "cyan" : "gray"}
+			borderColor={disabled || isLinkedInactive ? "gray" : isFocused ? "cyan" : "gray"}
 			paddingX={1}
 		>
-			<Text bold color={!disabled && isFocused ? "cyan" : undefined} dimColor={disabled} wrap="truncate">
+			<Text
+				bold
+				color={!disabled && !isLinkedInactive && isFocused ? "cyan" : undefined}
+				dimColor={disabled || isLinkedInactive}
+				wrap="truncate"
+			>
 				{label}
 			</Text>
-			{fieldName === "model" && modeSelection && (
-				<>
-					<Text
-						color={isModeFocused && mode === "fast" ? "cyan" : undefined}
-						bold={isModeFocused && mode === "fast"}
-						wrap="truncate"
-					>
-						{isModeFocused && mode === "fast" ? ">" : " "} fast {modeSelection.fast.model}{" "}
-						{formatEffort(modeSelection.fast.reasoningEffort)}
-					</Text>
-					<Text
-						dimColor={isSmartLinked && !(isModeFocused && mode === "smart")}
-						color={isModeFocused && mode === "smart" ? "cyan" : undefined}
-						bold={isModeFocused && mode === "smart"}
-						wrap="truncate"
-					>
-						{isModeFocused && mode === "smart" ? ">" : " "} {isSmartLinked ? "↳" : " "} smart{" "}
-						{isSmartLinked ? "linked" : "      "} {modeSelection.smart.model}{" "}
-						{formatEffort(modeSelection.smart.reasoningEffort)}
-					</Text>
-				</>
+			{modeSummary && (
+				<Text dimColor={linked} wrap="truncate">
+					{modeSummary.model} {formatEffort(modeSummary.reasoningEffort)}
+				</Text>
 			)}
 			{showFilterBar && (
 				<Text dimColor wrap="truncate">
@@ -165,14 +147,13 @@ export function OptionColumn({
 				const isSelected = selectedSet.has(item);
 				const isMissing = staleSet.has(item);
 				const isDisabledItem = disabled || disabledSet.has(item);
+				const isDimmed = isDisabledItem || isLinkedInactive;
 				const mark = isCheckbox ? (isSelected ? "☑" : "☐") : isSelected ? "●" : "○";
 				return (
 					<Text
 						key={`${fieldName}-${item}-${absoluteIndex}`}
-						color={
-							!isDisabledItem && isFocusedItem ? "cyan" : !isDisabledItem && isSelected ? "green" : undefined
-						}
-						dimColor={isDisabledItem}
+						color={!isDisabledItem && isFocusedItem ? "cyan" : !isDimmed && isSelected ? "green" : undefined}
+						dimColor={isDimmed}
 						bold={!isDisabledItem && isFocusedItem}
 						wrap="truncate"
 					>

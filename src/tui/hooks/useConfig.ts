@@ -190,10 +190,6 @@ export function useConfig() {
 		dispatch({ type: "FOCUS_OPTION_ITEM", direction: "prev" });
 	}, []);
 
-	const focusNextMode = useCallback(() => {
-		dispatch({ type: "FOCUS_MODE", direction: "next" });
-	}, []);
-
 	const expand = useCallback(() => {
 		dispatch({ type: "EXPAND" });
 	}, []);
@@ -454,14 +450,7 @@ export function useConfig() {
 		if (!isOptionColumnField(fieldName)) return;
 
 		const items = applyOptionColumnItemOrder(
-			getOptionColumnItems(
-				agent,
-				state.options,
-				fieldName,
-				agent.name,
-				state.optionColumnFilter,
-				fieldName === "model" ? (state.focus.mode ?? "fast") : "fast",
-			),
+			getOptionColumnItems(agent, state.options, fieldName, agent.name, state.optionColumnFilter),
 			state.optionColumnItemOrder,
 			state.focus.agentIndex,
 			fieldName,
@@ -522,7 +511,7 @@ export function useConfig() {
 			return;
 		}
 
-		if (fieldName === "model") {
+		if (fieldName === "model" || fieldName === "smart_model") {
 			const canonicalRef = modelDisplayNameToCanonicalRef(item, state.options.models);
 			if (!canonicalRef) {
 				dispatch({
@@ -532,7 +521,7 @@ export function useConfig() {
 				});
 				return;
 			}
-			const mode = state.focus.mode ?? "fast";
+			const mode = fieldName === "smart_model" ? "smart" : "fast";
 			const current = getModeSelection(agent, state.options, mode);
 			const fast = getModeSelection(agent, state.options, "fast");
 			const effortIndex = state.options.reasoningEfforts.indexOf(current.reasoningEffort);
@@ -576,6 +565,7 @@ export function useConfig() {
 			}
 			return;
 		}
+
 		const currentRaw = agent.frontmatter?.[fieldName];
 		const nextValue = getOptionColumnSaveValue(fieldName, item);
 		if (currentRaw !== undefined && String(currentRaw) === String(nextValue)) return;
@@ -649,7 +639,6 @@ export function useConfig() {
 		focusPrevField,
 		focusNextOptionItem,
 		focusPrevOptionItem,
-		focusNextMode,
 		focusAgentAt,
 		expand,
 		collapse,

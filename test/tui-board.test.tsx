@@ -164,7 +164,6 @@ describe("Board", () => {
 
 		const text = collectText(result);
 		expect(text).toContain("Saved default.md");
-		expect(text).toContain("model");
 		expect(text).toContain("fast");
 		expect(text).toContain("smart");
 		expect(children.length).toBeGreaterThan(0);
@@ -284,7 +283,7 @@ describe("Board", () => {
 		const s = state({
 			focus: {
 				agentIndex: 0,
-				fieldIndex: 3,
+				fieldIndex: 4,
 				optionItemIndex: 10,
 			},
 			expandedAgentIndex: 0,
