@@ -7,7 +7,6 @@
 
 import { realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
 	DefaultResourceLoader,
 	type ExtensionAPI,
@@ -219,7 +218,6 @@ export default function (pi: ExtensionAPI) {
 	let lastRootPromptParts: PromptParts | undefined;
 	let rootFinalResponseGuardActive = false;
 	let rootFinalResponseGuardAttempts = 0;
-	const selfPath = path.resolve(fileURLToPath(import.meta.url));
 	const mainRuntime: RuntimeContext = {
 		treeDepth: 0,
 		depthPolicy: defaultRootPolicy(),
@@ -447,7 +445,11 @@ export default function (pi: ExtensionAPI) {
 					});
 					onWarnings?.(extensionSelection.warnings);
 				}
-				const additionalExtensionPaths = [...new Set([...extensionSelection.paths, selfPath])];
+				// The inline factory below provides the sub-agent-specific multi-agents
+				// runtime. Do not also load this root extension path into the child:
+				// its session_shutdown handler disposes the shared session manager and
+				// can deadlock while the parent is already disposing this child session.
+				const additionalExtensionPaths = [...new Set(extensionSelection.paths)];
 				const loader = new DefaultResourceLoader({
 					cwd: effectiveCwd,
 					agentDir,

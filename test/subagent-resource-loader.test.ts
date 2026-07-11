@@ -239,8 +239,11 @@ Explicit context:
 		expect(subagentLoader.options.noContextFiles).toBe(true);
 		expect(subagentLoader.options.noExtensions).toBe(true);
 		expect(subagentLoader.options.extensionsOverride).toBeUndefined();
-		expect(subagentLoader.options.additionalExtensionPaths).toHaveLength(1);
-		expect(subagentLoader.options.additionalExtensionPaths[0]).toMatch(/subagent\/index\.(?:ts|js)$/);
+		// The inline factory below supplies the sub-agent runtime. Loading the
+		// full multi-agents extension path inside the child registers root
+		// session_shutdown cleanup and can recursively dispose the parent
+		// session manager while the parent is already disposing this child.
+		expect(subagentLoader.options.additionalExtensionPaths).toEqual([]);
 		expect(subagentLoader.options.settingsManager.isProjectTrusted()).toBe(true);
 		expect(createAgentSessionMock.mock.calls.at(-1)?.[0].settingsManager).toBe(
 			subagentLoader.options.settingsManager,
