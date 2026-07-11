@@ -18,6 +18,7 @@ import {
 	AgentRegistry,
 	discoverAgents,
 	formatAgentList,
+	resolveAgentMode,
 } from "../src/subagent/agents.js";
 
 // ---------------------------------------------------------------------------
@@ -139,6 +140,22 @@ describe("discoverAgents", () => {
 		expect(agent.skills).toEqual(["tdd", "diagnose"]);
 		expect(agent.source).toBe("user");
 		expect(agent.systemPrompt).toContain("You are FullAgent");
+	});
+
+	it("resolves smart mode from explicit overrides or fast fallback", () => {
+		writeAgent(agentsDir, "Modes", "Mode-aware agent", {
+			model: "fast-model",
+			reasoning_effort: "low",
+			smart_model: "smart-model",
+			smart_reasoning_effort: "high",
+		});
+		const agent = discoverAgents().agents.find((candidate) => candidate.name === "modes")!;
+		expect(resolveAgentMode(agent)).toEqual({ model: "fast-model", reasoningEffort: "low" });
+		expect(resolveAgentMode(agent, "smart")).toEqual({ model: "smart-model", reasoningEffort: "high" });
+		expect(resolveAgentMode({ ...agent, smartModel: undefined, smartReasoningEffort: undefined }, "smart")).toEqual({
+			model: "fast-model",
+			reasoningEffort: "low",
+		});
 	});
 
 	it("parses checkbox fields as YAML arrays", () => {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgent } from "../../src/tui/file-io/read-agent.js";
-import { writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
+import { writeFieldsToFile, writeFieldToFile } from "../../src/tui/file-io/write-agent.js";
 
 const mockWriteFile = vi.hoisted(() => ({ shouldFail: false }));
 
@@ -47,6 +47,20 @@ function readTempFile(filePath: string): string {
 // ---------------------------------------------------------------------------
 
 describe("writeFieldToFile", () => {
+	it("writes smart overrides atomically and can remove both fields", () => {
+		const p = writeTempFile(
+			["---", "description: test", "model: fast", "reasoning_effort: low", "---", "", "body"].join("\n"),
+		);
+		expect(writeFieldsToFile(p, { smart_model: "smart", smart_reasoning_effort: "high" }).success).toBe(true);
+		let agent = readAgent(p);
+		expect(agent.frontmatter).toMatchObject({ smart_model: "smart", smart_reasoning_effort: "high" });
+		expect(writeFieldsToFile(p, { smart_model: undefined, smart_reasoning_effort: undefined }).success).toBe(true);
+		agent = readAgent(p);
+		expect(agent.frontmatter?.smart_model).toBeUndefined();
+		expect(agent.frontmatter?.smart_reasoning_effort).toBeUndefined();
+		expect(agent.body).toBe("body");
+	});
+
 	describe("scalar fields", () => {
 		it("writes a new scalar field to frontmatter", () => {
 			const p = writeTempFile(["---", "description: test", "---", "", "body"].join("\n"));

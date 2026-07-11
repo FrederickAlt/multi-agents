@@ -12,10 +12,13 @@ export interface AgentConfigState {
 	staleItems: Record<string, string[]>; // fieldName → stale value names
 }
 
+export type AgentMode = "fast" | "smart";
+
 export interface FocusState {
 	agentIndex: number;
 	fieldIndex: number; // index into FIELDS_ORDER while expanded
 	optionItemIndex: number; // index into focused inline option column when focused field is inline
+	mode?: AgentMode; // active mode within the combined model/effort column; omitted = fast
 }
 
 export type OverlayState =
@@ -138,16 +141,7 @@ export interface ConfigState {
 }
 
 // Field order for navigation (matches column layout)
-export const FIELDS_ORDER = [
-	"tools",
-	"extensions",
-	"reasoning_effort",
-	"depth",
-	"model",
-	"can_spawn",
-	"skills",
-	"prompt_parts",
-] as const;
+export const FIELDS_ORDER = ["tools", "extensions", "model", "depth", "can_spawn", "skills", "prompt_parts"] as const;
 
 export type FieldName = (typeof FIELDS_ORDER)[number];
 
@@ -155,7 +149,6 @@ export const OPTION_COLUMN_FIELDS = [
 	"tools",
 	"extensions",
 	"model",
-	"reasoning_effort",
 	"depth",
 	"can_spawn",
 	"skills",
@@ -180,6 +173,7 @@ export type ConfigAction =
 	| { type: "FOCUS_AGENT_AT"; agentIndex: number }
 	| { type: "FOCUS_FIELD"; direction: "next" | "prev" }
 	| { type: "FOCUS_OPTION_ITEM"; direction: "next" | "prev" }
+	| { type: "FOCUS_MODE"; direction: "next" | "prev" }
 	| { type: "OPEN_OVERLAY"; agentIndex: number; fieldName: string }
 	| { type: "CLOSE_OVERLAY" }
 	| { type: "TOGGLE_CHECKBOX"; item: string }

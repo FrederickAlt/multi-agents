@@ -23,6 +23,12 @@ import {
  * `"user"` is the only source returned at runtime; `"builtin"` and
  * `"project"` are reserved for future seeding/registration. */
 export type AgentSource = "builtin" | "user" | "project";
+export type AgentMode = "fast" | "smart";
+
+export interface AgentModeConfig {
+	model?: string;
+	reasoningEffort?: string;
+}
 
 export interface AgentConfig {
 	name: string;
@@ -31,9 +37,14 @@ export interface AgentConfig {
 	tools?: string[];
 	/** Extension allowlist. Missing or blank field means unrestricted; explicit [] means no extensions. */
 	extensions?: string[];
+	/** Fast mode model override. */
 	model?: string;
-	/** Thinking/reasoning effort level for the model. Maps to ThinkingLevel from pi-ai. */
+	/** Fast mode thinking/reasoning effort level. */
 	reasoningEffort?: string;
+	/** Optional smart mode model override; absent means inherit fast mode. */
+	smartModel?: string;
+	/** Optional smart mode thinking/reasoning effort override; absent means inherit fast mode. */
+	smartReasoningEffort?: string;
 	depth?: number;
 	/**
 	 * Spawn allowlist with tri-state semantics.
@@ -154,9 +165,23 @@ function parseAgentDepth(rawDepth: unknown, filePath: string, warnings: AgentDia
 /**
  * Map a generic RawMarkdownDefinition to an agent-specific AgentConfig.
  *
- * Parses agent-specific frontmatter fields (tools, extensions, model,
- * reasoning_effort, depth, can_spawn, skills, prompt_parts) from the raw frontmatter map.
+ * Parses agent-specific frontmatter fields (tools, extensions, fast/smart
+ * model and reasoning effort, depth, can_spawn, skills, prompt_parts) from the raw frontmatter map.
  */
+export function resolveAgentMode(agent: AgentConfig, mode: AgentMode = "fast"): AgentModeConfig {
+	if (mode === "smart") {
+		return {
+			model: agent.smartModel ?? agent.model,
+			reasoningEffort: agent.smartReasoningEffort ?? agent.reasoningEffort,
+		};
+	}
+	return { model: agent.model, reasoningEffort: agent.reasoningEffort };
+}
+
+export function hasExplicitSmartMode(agent: AgentConfig): boolean {
+	return agent.smartModel !== undefined || agent.smartReasoningEffort !== undefined;
+}
+
 function mapToAgentConfig(raw: RawMarkdownDefinition, warnings: AgentDiagnostic[]): AgentConfig {
 	const fm = raw.frontmatter;
 
@@ -176,6 +201,8 @@ function mapToAgentConfig(raw: RawMarkdownDefinition, warnings: AgentDiagnostic[
 		tools,
 		extensions,
 		model: fm.model ? String(fm.model) : undefined,
+		smartModel: fm.smart_model ? String(fm.smart_model) : undefined,
+		smartReasoningEffort: fm.smart_reasoning_effort ? String(fm.smart_reasoning_effort) : undefined,
 		depth,
 		can_spawn,
 		skills,

@@ -15,6 +15,13 @@ interface OptionColumnProps {
 	filterText?: string;
 	maxVisibleItems?: number;
 	width?: number;
+	mode?: "fast" | "smart";
+	modeSelection?: {
+		fast: { model: string; reasoningEffort: string };
+		smart: { model: string; reasoningEffort: string };
+	};
+	isSmartLinked?: boolean;
+	isModeFocused?: boolean;
 }
 
 const DEFAULT_MAX_VISIBLE_ITEMS = 5;
@@ -22,6 +29,12 @@ const DEFAULT_MAX_VISIBLE_ITEMS = 5;
 function clamp(index: number, len: number): number {
 	if (len <= 0) return 0;
 	return Math.max(0, Math.min(index, len));
+}
+
+function formatEffort(effort: string): string {
+	const levels = ["low", "medium", "high", "maximum"];
+	const index = Math.max(0, levels.indexOf(effort));
+	return levels.map((_level, itemIndex) => (itemIndex === index ? "●" : "○")).join("");
 }
 
 function getVisibleRange(
@@ -57,6 +70,10 @@ export function OptionColumn({
 	filterText,
 	maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
 	width,
+	mode = "fast",
+	modeSelection,
+	isSmartLinked = false,
+	isModeFocused = false,
 }: OptionColumnProps) {
 	const label = getOptionColumnLabel(fieldName);
 	const effectiveSelectedValues = selectedValues ?? (selectedValueProp !== undefined ? [selectedValueProp] : []);
@@ -100,6 +117,28 @@ export function OptionColumn({
 			<Text bold color={!disabled && isFocused ? "cyan" : undefined} dimColor={disabled} wrap="truncate">
 				{label}
 			</Text>
+			{fieldName === "model" && modeSelection && (
+				<>
+					<Text
+						color={isModeFocused && mode === "fast" ? "cyan" : undefined}
+						bold={isModeFocused && mode === "fast"}
+						wrap="truncate"
+					>
+						{isModeFocused && mode === "fast" ? ">" : " "} fast {modeSelection.fast.model}{" "}
+						{formatEffort(modeSelection.fast.reasoningEffort)}
+					</Text>
+					<Text
+						dimColor={isSmartLinked && !(isModeFocused && mode === "smart")}
+						color={isModeFocused && mode === "smart" ? "cyan" : undefined}
+						bold={isModeFocused && mode === "smart"}
+						wrap="truncate"
+					>
+						{isModeFocused && mode === "smart" ? ">" : " "} {isSmartLinked ? "↳" : " "} smart{" "}
+						{isSmartLinked ? "linked" : "      "} {modeSelection.smart.model}{" "}
+						{formatEffort(modeSelection.smart.reasoningEffort)}
+					</Text>
+				</>
+			)}
 			{showFilterBar && (
 				<Text dimColor wrap="truncate">
 					filter: {filterValue}

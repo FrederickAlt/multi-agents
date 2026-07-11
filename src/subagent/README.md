@@ -95,8 +95,10 @@ Frontmatter fields:
 | `description` | string | Required. Short description for agent lists |
 | `tools` | YAML list or comma-separated | Tool whitelist. Missing/blank = Pi defaults; `[]` = no tools |
 | `extensions` | YAML list or comma-separated | Filter for extensions to load. Missing/blank = unrestricted; `[]` = no extensions |
-| `model` | string | Model override |
-| `reasoning_effort` | string | Thinking/reasoning effort level |
+| `model` | string | Fast-mode model override |
+| `reasoning_effort` | string | Fast-mode thinking/reasoning effort level |
+| `smart_model` | string | Smart-mode model override; omitted inherits `model` |
+| `smart_reasoning_effort` | string | Smart-mode effort override; omitted inherits `reasoning_effort` |
 | `depth` | number | Spawn allowance — how many more Task levels this agent permits |
 | `can_spawn` | YAML list | Spawn allowlist tri-state: missing = unrestricted, blank = spawn none, values = only listed agent types |
 | `skills` | YAML list | Skill prompt filtering (tri-state: missing=all, blank=none, values=filter) |

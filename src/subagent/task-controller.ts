@@ -16,8 +16,8 @@
 import { readFileSync } from "node:fs";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DefaultResourceLoader } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig, AgentDiagnostic } from "./agents.js";
-import { formatAgentList } from "./agents.js";
+import type { AgentConfig, AgentDiagnostic, AgentMode } from "./agents.js";
+import { formatAgentList, resolveAgentMode } from "./agents.js";
 import { formatContextUsageLine, readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
 import { createRunCorrelationId, makeNoopDebugLogger } from "./debug-logger.js";
 import { checkTaskAllowed, childPolicy, type DepthPolicyState } from "./depth-policy.js";
@@ -141,6 +141,8 @@ export interface TaskExecuteParams {
 	subagent_type: string;
 	resume?: string;
 	cwd?: string;
+	/** Optional execution mode. Omitted values use fast mode. */
+	mode?: AgentMode;
 	/** When false, spawns the sub-agent and returns immediately with agent details. Default true. */
 	blocking?: boolean;
 }
@@ -655,6 +657,7 @@ export class TaskController {
 			parentAgentId: runtime.parentAgentId,
 			subagentType: params.subagent_type,
 			resumed: Boolean(params.resume),
+			mode: params.mode ?? "fast",
 			blocking: params.blocking !== false,
 			cwdLength: requestedCwd.length,
 		});
@@ -727,6 +730,15 @@ export class TaskController {
 			hasParent: Boolean(runtime.parentAgentId),
 		});
 		const { agent } = resolved;
+		const mode = params.mode ?? "fast";
+		const modeConfig = resolveAgentMode(agent, mode);
+		// Keep the discovered definition immutable, but pass the selected mode to
+		// session creation as the effective model/effort pair.
+		const sessionAgent: AgentConfig = {
+			...agent,
+			model: modeConfig.model,
+			reasoningEffort: modeConfig.reasoningEffort,
+		};
 		let record = resolved.record;
 		const effectiveCwd = record
 			? record.cwd || readSessionHeaderCwd(record.sessionFile) || requestedCwd
@@ -868,11 +880,13 @@ export class TaskController {
 				runLogger.debug("task_session_setup_started", {
 					recordId: record?.id,
 					hadOpenSession: hadOpenSessionBeforeSetup,
-					agentModel: agent.model || "default",
-					agentToolNames: agent.tools ? agent.tools.length : undefined,
+					agentModel: sessionAgent.model || "default",
+					agentReasoningEffort: sessionAgent.reasoningEffort,
+					mode,
+					agentToolNames: sessionAgent.tools ? sessionAgent.tools.length : undefined,
 				});
 				try {
-					session = await sessionManager.getOrCreateSession(record!, agent, warnings, {
+					session = await sessionManager.getOrCreateSession(record!, sessionAgent, warnings, {
 						metadataStore,
 						cwd: effectiveCwd,
 						fallbackModel,

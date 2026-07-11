@@ -4,6 +4,7 @@ import { getOptionColumnWidth } from "../option-column-layout.js";
 import {
 	applyOptionColumnItemOrder,
 	getFieldName,
+	getModeSelection,
 	getOptionColumnDisabledItems,
 	getOptionColumnItemIndex,
 	getOptionColumnItems,
@@ -24,6 +25,7 @@ interface AgentRowProps {
 	isExpanded: boolean;
 	focusedField: number;
 	focusedOptionItem: number;
+	focusedMode?: "fast" | "smart";
 	optionColumnScrollOffset: number;
 	options: DiscoveredOptions;
 	status: StatusInfo | undefined;
@@ -79,6 +81,7 @@ export function AgentRow({
 	isExpanded,
 	focusedField,
 	focusedOptionItem,
+	focusedMode = "fast",
 	optionColumnScrollOffset,
 	options,
 	status,
@@ -102,7 +105,7 @@ export function AgentRow({
 		const isFocusedFieldInline = isOptionColumnField(focusedFieldName);
 		const focusedFieldHint = isFocusedFieldInline ? (
 			<Text dimColor wrap="truncate">
-				←/→ columns · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse
+				←/→ columns · Tab fast/smart · ↑/↓ items · type to filter · Enter/Space select · Esc clear/collapse
 			</Text>
 		) : (
 			<Text dimColor wrap="truncate">
@@ -114,10 +117,23 @@ export function AgentRow({
 			const isDisabled = isOptionColumnDisabledForAgent(agent, fieldName);
 			const isFocusedField = !isDisabled && isFocused && getFieldName(focusedField) === fieldName;
 			const isInlineCheckbox = isCheckboxOptionColumnField(fieldName);
-			const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agent.name);
+			const selectedValues = getOptionColumnSelectedValues(
+				agent,
+				options,
+				fieldName,
+				agent.name,
+				fieldName === "model" ? focusedMode : "fast",
+			);
 			const columnFilter = isFocusedField ? optionColumnFilter : "";
 			const items = applyOptionColumnItemOrder(
-				getOptionColumnItems(agent, options, fieldName, agent.name, columnFilter),
+				getOptionColumnItems(
+					agent,
+					options,
+					fieldName,
+					agent.name,
+					columnFilter,
+					fieldName === "model" ? focusedMode : "fast",
+				),
 				optionColumnItemOrder,
 				agentIndex,
 				fieldName,
@@ -134,7 +150,15 @@ export function AgentRow({
 			});
 			const optionFocusedItemIndex = isFocusedField
 				? focusedOptionItem
-				: getOptionColumnItemIndex(agent, options, fieldName, undefined, agent.name);
+				: getOptionColumnItemIndex(
+						agent,
+						options,
+						fieldName,
+						undefined,
+						agent.name,
+						"",
+						fieldName === "model" ? focusedMode : "fast",
+					);
 			return {
 				fieldName,
 				isDisabled,
@@ -198,6 +222,21 @@ export function AgentRow({
 							selectedValues={column.selectedValues}
 							focusedItemIndex={column.optionFocusedItemIndex}
 							isFocused={column.isFocusedField}
+							mode={focusedMode}
+							modeSelection={
+								column.fieldName === "model"
+									? {
+											fast: getModeSelection(agent, options, "fast"),
+											smart: getModeSelection(agent, options, "smart"),
+										}
+									: undefined
+							}
+							isSmartLinked={
+								column.fieldName === "model" &&
+								agent.frontmatter?.smart_model === undefined &&
+								agent.frontmatter?.smart_reasoning_effort === undefined
+							}
+							isModeFocused={column.isFocusedField && column.fieldName === "model"}
 							disabled={column.isDisabled}
 							disabledItems={column.disabledItems}
 							filterText={column.isFocusedField ? column.columnFilter : undefined}

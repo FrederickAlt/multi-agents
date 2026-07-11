@@ -72,7 +72,13 @@ export function getOptionColumnWidth({
 	}
 
 	const contentWidth = Math.max(...lines.map(displayWidth));
-	return Math.max(OPTION_COLUMN_WIDTH, contentWidth + OPTION_COLUMN_HORIZONTAL_CHROME);
+	// The combined model column shows two mode summaries with effort circles.
+	const minimumContentWidth = fieldName === "model" ? 34 : OPTION_COLUMN_WIDTH - OPTION_COLUMN_HORIZONTAL_CHROME;
+	return Math.max(
+		OPTION_COLUMN_WIDTH,
+		minimumContentWidth + OPTION_COLUMN_HORIZONTAL_CHROME,
+		contentWidth + OPTION_COLUMN_HORIZONTAL_CHROME,
+	);
 }
 
 export function getModelPinnedStatus(items: string[]): string | undefined {

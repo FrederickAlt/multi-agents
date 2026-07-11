@@ -29,6 +29,14 @@ export function writeFieldToFile(
 	fieldName: string,
 	value: string[] | string | number | undefined,
 ): WriteResult {
+	return writeFieldsToFile(filePath, { [fieldName]: value });
+}
+
+/** Write multiple frontmatter fields in one filesystem operation. */
+export function writeFieldsToFile(
+	filePath: string,
+	values: Record<string, string[] | string | number | undefined>,
+): WriteResult {
 	let content: string;
 	try {
 		content = fs.readFileSync(filePath, "utf-8");
@@ -51,28 +59,21 @@ export function writeFieldToFile(
 		body = fmMatch[2];
 	}
 
-	// Build the new field value in YAML text
-	let newFmText: string;
-
-	if (value === undefined) {
-		// Remove the field entirely
-		newFmText = removeFieldFromYamlText(fmText, fieldName);
-	} else if (Array.isArray(value) && value.length === 0) {
-		// Empty array: write `field: []`
-		newFmText = setFieldInYamlText(fmText, fieldName, `${fieldName}: []`);
-	} else if (Array.isArray(value)) {
-		// YAML list
-		const lines = [`${fieldName}:`];
-		for (const item of value) {
-			lines.push(`  - ${item}`);
+	let newFmText = fmText;
+	for (const [fieldName, value] of Object.entries(values)) {
+		if (value === undefined) {
+			newFmText = removeFieldFromYamlText(newFmText, fieldName);
+		} else if (Array.isArray(value) && value.length === 0) {
+			newFmText = setFieldInYamlText(newFmText, fieldName, `${fieldName}: []`);
+		} else if (Array.isArray(value)) {
+			const lines = [`${fieldName}:`];
+			for (const item of value) lines.push(`  - ${item}`);
+			newFmText = setFieldInYamlText(newFmText, fieldName, lines.join("\n"));
+		} else if (typeof value === "number") {
+			newFmText = setFieldInYamlText(newFmText, fieldName, `${fieldName}: ${value}`);
+		} else {
+			newFmText = setFieldInYamlText(newFmText, fieldName, `${fieldName}: ${yamlSafeString(value)}`);
 		}
-		newFmText = setFieldInYamlText(fmText, fieldName, lines.join("\n"));
-	} else if (typeof value === "number") {
-		newFmText = setFieldInYamlText(fmText, fieldName, `${fieldName}: ${value}`);
-	} else {
-		// Scalar string (may need quoting if contains special chars)
-		const safe = yamlSafeString(value as string);
-		newFmText = setFieldInYamlText(fmText, fieldName, `${fieldName}: ${safe}`);
 	}
 
 	// Reconstruct file

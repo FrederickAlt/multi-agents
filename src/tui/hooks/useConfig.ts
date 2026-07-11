@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { modelDisplayNameToCanonicalRef } from "../discovery/options.js";
-import { writeFieldToFile } from "../file-io/write-agent.js";
+import { writeFieldsToFile, writeFieldToFile } from "../file-io/write-agent.js";
 import {
 	applyOptionColumnItemOrder,
 	getFieldName,
+	getModeSelection,
 	getOptionColumnAvailableItems,
 	getOptionColumnItems,
 	getOptionColumnSaveValue,
@@ -187,6 +188,10 @@ export function useConfig() {
 
 	const focusPrevOptionItem = useCallback(() => {
 		dispatch({ type: "FOCUS_OPTION_ITEM", direction: "prev" });
+	}, []);
+
+	const focusNextMode = useCallback(() => {
+		dispatch({ type: "FOCUS_MODE", direction: "next" });
 	}, []);
 
 	const expand = useCallback(() => {
@@ -449,7 +454,14 @@ export function useConfig() {
 		if (!isOptionColumnField(fieldName)) return;
 
 		const items = applyOptionColumnItemOrder(
-			getOptionColumnItems(agent, state.options, fieldName, agent.name, state.optionColumnFilter),
+			getOptionColumnItems(
+				agent,
+				state.options,
+				fieldName,
+				agent.name,
+				state.optionColumnFilter,
+				fieldName === "model" ? (state.focus.mode ?? "fast") : "fast",
+			),
 			state.optionColumnItemOrder,
 			state.focus.agentIndex,
 			fieldName,
@@ -510,31 +522,63 @@ export function useConfig() {
 			return;
 		}
 
-		const currentRaw = agent.frontmatter?.[fieldName];
-		let nextValue: string | number;
 		if (fieldName === "model") {
 			const canonicalRef = modelDisplayNameToCanonicalRef(item, state.options.models);
 			if (!canonicalRef) {
 				dispatch({
 					type: "SAVE_COMPLETE",
 					agentIndex: state.focus.agentIndex,
-					status: {
-						type: "error",
-						message: `Cannot resolve model "${item}"`,
-						timestamp: Date.now(),
-					},
+					status: { type: "error", message: `Cannot resolve model "${item}"`, timestamp: Date.now() },
 				});
 				return;
 			}
-			nextValue = canonicalRef;
-		} else {
-			nextValue = getOptionColumnSaveValue(fieldName, item);
-		}
-
-		if (currentRaw !== undefined && String(currentRaw) === String(nextValue)) {
+			const mode = state.focus.mode ?? "fast";
+			const current = getModeSelection(agent, state.options, mode);
+			const fast = getModeSelection(agent, state.options, "fast");
+			const effortIndex = state.options.reasoningEfforts.indexOf(current.reasoningEffort);
+			const nextEffort =
+				item === current.model
+					? (state.options.reasoningEfforts[
+							(Math.max(0, effortIndex) + 1) % state.options.reasoningEfforts.length
+						] ?? current.reasoningEffort)
+					: current.reasoningEffort;
+			const fastCanonicalRef = modelDisplayNameToCanonicalRef(fast.model, state.options.models) ?? fast.model;
+			const values =
+				mode === "fast"
+					? { model: canonicalRef, reasoning_effort: nextEffort }
+					: canonicalRef === fastCanonicalRef && nextEffort === fast.reasoningEffort
+						? { smart_model: undefined, smart_reasoning_effort: undefined }
+						: { smart_model: canonicalRef, smart_reasoning_effort: nextEffort };
+			dispatch({
+				type: "SAVE_COMPLETE",
+				agentIndex: state.focus.agentIndex,
+				status: { type: "saving", message: "Saving...", timestamp: Date.now() },
+			});
+			const result = writeFieldsToFile(agent.filePath, values);
+			if (result.success && result.frontmatter) {
+				dispatch({
+					type: "UPDATE_AGENT_FRONTMATTER",
+					agentIndex: state.focus.agentIndex,
+					frontmatter: result.frontmatter,
+					staleItems: agent.staleItems,
+				});
+				dispatch({
+					type: "SAVE_COMPLETE",
+					agentIndex: state.focus.agentIndex,
+					status: { type: "saved", message: `Saved ${agent.name}.md`, timestamp: Date.now() },
+				});
+			} else {
+				dispatch({
+					type: "SAVE_COMPLETE",
+					agentIndex: state.focus.agentIndex,
+					status: { type: "error", message: `Save failed: ${result.error}`, timestamp: Date.now() },
+				});
+			}
 			return;
 		}
-
+		const currentRaw = agent.frontmatter?.[fieldName];
+		const nextValue = getOptionColumnSaveValue(fieldName, item);
+		if (currentRaw !== undefined && String(currentRaw) === String(nextValue)) return;
 		saveFieldValue(agent, state.focus.agentIndex, fieldName, nextValue);
 	}, [
 		state.agents,
@@ -605,6 +649,7 @@ export function useConfig() {
 		focusPrevField,
 		focusNextOptionItem,
 		focusPrevOptionItem,
+		focusNextMode,
 		focusAgentAt,
 		expand,
 		collapse,

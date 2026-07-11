@@ -3,6 +3,7 @@ import { isProtectedMultiAgentExtensionName } from "../../subagent/protected-ext
 import { resolveModelDisplayName } from "../discovery/options.js";
 import type {
 	AgentConfigState,
+	AgentMode,
 	DiscoveredOptions,
 	FieldName,
 	OptionColumnFieldName,
@@ -12,6 +13,44 @@ import { FIELDS_ORDER, OPTION_COLUMN_FIELDS } from "./types.js";
 
 export const MODEL_OPTION_LOADING_ITEM = "(loading models...)";
 export const MODEL_OPTION_DEGRADED_STATUS = "(model discovery unavailable)";
+
+export interface ModeSelection {
+	model: string;
+	reasoningEffort: string;
+}
+
+export function isSmartModeLinked(agent: AgentConfigState): boolean {
+	const fm = agent.frontmatter ?? {};
+	return fm.smart_model === undefined && fm.smart_reasoning_effort === undefined;
+}
+
+export function getModeSelection(
+	agent: AgentConfigState,
+	options: DiscoveredOptions,
+	mode: AgentMode = "fast",
+): ModeSelection {
+	const fm = agent.frontmatter ?? {};
+	const fastModel = getStoredModelDisplayName(fm.model, options);
+	const fastEffort = fm.reasoning_effort == null ? getDefaultReasoningEffort(options) : String(fm.reasoning_effort);
+	if (mode === "smart") {
+		return {
+			model: getStoredModelDisplayName(fm.smart_model ?? fm.model, options),
+			reasoningEffort: fm.smart_reasoning_effort == null ? fastEffort : String(fm.smart_reasoning_effort),
+		};
+	}
+	return { model: fastModel, reasoningEffort: fastEffort };
+}
+
+function getDefaultReasoningEffort(options: DiscoveredOptions): string {
+	return options.reasoningEfforts.includes("medium") ? "medium" : (options.reasoningEfforts[0] ?? "");
+}
+
+function getStoredModelDisplayName(raw: unknown, options: DiscoveredOptions): string {
+	if (raw !== undefined && raw !== null && String(raw) !== "") {
+		return resolveModelDisplayName(String(raw), options.models) ?? String(raw);
+	}
+	return getOptionColumnDefaultValue(options, "model");
+}
 
 function normalizeFilter(text: string): string {
 	return text.trim().toLowerCase();
@@ -270,8 +309,6 @@ export function getOptionColumnAvailableItems(
 			}
 			return modelItems;
 		}
-		case "reasoning_effort":
-			return options.reasoningEfforts;
 		case "depth":
 			return options.depths.map(String);
 		case "can_spawn":
@@ -286,8 +323,6 @@ export function getOptionColumnAvailableItems(
 
 export function getOptionColumnDefaultValue(options: DiscoveredOptions, fieldName: OptionColumnFieldName): string {
 	switch (fieldName) {
-		case "reasoning_effort":
-			return "medium";
 		case "depth":
 			return "0";
 		case "model": {
@@ -310,8 +345,10 @@ export function getOptionColumnCurrentValue(
 	agent: AgentConfigState,
 	options: DiscoveredOptions,
 	fieldName: OptionColumnFieldName,
+	mode: AgentMode = "fast",
 ): string | undefined {
-	const raw = agent.frontmatter?.[fieldName];
+	const raw =
+		fieldName === "model" && mode === "smart" ? agent.frontmatter?.smart_model : agent.frontmatter?.[fieldName];
 	if (raw === undefined || raw === null || Array.isArray(raw)) return undefined;
 	const value = String(raw);
 	if (fieldName === "model") {
@@ -325,6 +362,7 @@ export function getOptionColumnSelectedValues(
 	options: DiscoveredOptions,
 	fieldName: OptionColumnFieldName,
 	agentName?: string,
+	mode: AgentMode = "fast",
 ): string[] {
 	if (isCheckboxOptionColumnField(fieldName)) {
 		const raw = agent.frontmatter?.[fieldName];
@@ -361,7 +399,10 @@ export function getOptionColumnSelectedValues(
 		return selectedValues;
 	}
 
-	const currentValue = getOptionColumnCurrentValue(agent, options, fieldName);
+	const currentValue =
+		fieldName === "model"
+			? getModeSelection(agent, options, mode).model
+			: getOptionColumnCurrentValue(agent, options, fieldName, mode);
 	if (currentValue === undefined) {
 		return [getOptionColumnDefaultValue(options, fieldName)];
 	}
@@ -373,8 +414,9 @@ export function getOptionColumnSelectedValue(
 	options: DiscoveredOptions,
 	fieldName: OptionColumnFieldName,
 	agentName?: string,
+	mode: AgentMode = "fast",
 ): string {
-	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
+	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName, mode);
 	return selectedValues[0] ?? "";
 }
 
@@ -384,9 +426,10 @@ export function getOptionColumnItems(
 	fieldName: OptionColumnFieldName,
 	agentName?: string,
 	columnFilter = "",
+	mode: AgentMode = "fast",
 ): string[] {
 	const availableItems = getOptionColumnAvailableItems(options, fieldName, agentName, agent);
-	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
+	const selectedValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName, mode);
 	const selectedValue = selectedValues[0];
 
 	const unfilteredItems = (() => {
@@ -464,12 +507,13 @@ export function getOptionColumnItemIndex(
 	itemValue?: string,
 	agentName?: string,
 	columnFilter = "",
+	mode: AgentMode = "fast",
 ): number {
-	const items = getOptionColumnItems(agent, options, fieldName, agentName, columnFilter);
+	const items = getOptionColumnItems(agent, options, fieldName, agentName, columnFilter, mode);
 	if (items.length === 0) {
 		return 0;
 	}
-	const fallbackValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName);
+	const fallbackValues = getOptionColumnSelectedValues(agent, options, fieldName, agentName, mode);
 	const fallback = itemValue ?? fallbackValues[0] ?? items[0];
 	const index = items.indexOf(fallback);
 	return index >= 0 ? index : 0;

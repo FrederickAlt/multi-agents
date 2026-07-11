@@ -115,6 +115,11 @@ export function configureTaskToolForRuntime(
 					description: "Short hex ID of a previous sub-agent to continue.",
 				}),
 			),
+			mode: Type.Optional(
+				Type.Enum(["fast", "smart"], {
+					description: "Execution mode. Defaults to fast.",
+				}),
+			),
 			cwd: Type.Optional(
 				Type.String({
 					description: "Working directory for the sub-agent. Defaults to the parent agent's cwd.",
