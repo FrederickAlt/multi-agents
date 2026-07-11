@@ -333,6 +333,29 @@ printf 'local-b             llama-3.1-8b          8.2K     4.1K     no        no
 		expect(result.models.map((m) => m.canonicalRef)).toEqual(["local-a/llama-3.1-8b", "local-b/llama-3.1-8b"]);
 	});
 
+	it("canonicalizes visible models against hidden runtime registry duplicates", () => {
+		const fakePi = path.join(tempDir, "pi");
+		fs.writeFileSync(
+			fakePi,
+			`#!/usr/bin/env bash
+if [[ "$1" != "--list-models" ]]; then exit 2; fi
+printf 'provider            model                 context  max-out  thinking  images\\n'
+printf 'uni-muenster        gpt-oss-120b          131.1K   12.3K    no        no\\n'
+`,
+		);
+		fs.chmodSync(fakePi, 0o755);
+
+		const result = discoverModelsFromPiCli(tempDir, fakePi, [
+			{ provider: "cerebras", modelId: "gpt-oss-120b" },
+			{ provider: "uni-muenster", modelId: "gpt-oss-120b" },
+		]);
+
+		expect(result.models[0]).toMatchObject({
+			displayName: "gpt-oss-120b (uni-muenster)",
+			canonicalRef: "uni-muenster/gpt-oss-120b",
+		});
+	});
+
 	it("uses only the installed pi model list", async () => {
 		const fakePi = path.join(tempDir, "pi");
 		fs.writeFileSync(

@@ -298,6 +298,16 @@ describe("computeCanonicalModelRefs", () => {
 		expect(models[1].canonicalRef).toBe("opencode-go/deepseek-v4");
 	});
 
+	it("uses provider/modelId when a hidden runtime provider shares a visible model ID", () => {
+		const models = [mo("uni-muenster", "gpt-oss-120b")];
+		computeCanonicalModelRefs(models, [
+			{ provider: "cerebras", modelId: "gpt-oss-120b" },
+			{ provider: "uni-muenster", modelId: "gpt-oss-120b" },
+		]);
+
+		expect(models[0].canonicalRef).toBe("uni-muenster/gpt-oss-120b");
+	});
+
 	it("handles mix of unique and duplicate IDs", () => {
 		const models = [
 			mo("anthropic", "claude-sonnet"),

@@ -39,6 +39,15 @@ type PiSession = {
 	dispose?(): void;
 };
 
+type PiModelReference = {
+	provider?: string;
+	id?: string;
+};
+
+type PiModelRegistry = {
+	getAll(): PiModelReference[];
+};
+
 type PiCodingAgentApi = {
 	DefaultResourceLoader?: new (options: {
 		cwd: string;
@@ -63,6 +72,10 @@ type PiCodingAgentApi = {
 		settingsManager?: unknown;
 		sessionManager?: unknown;
 	}) => Promise<{ session: PiSession; extensionsResult?: { extensions?: LoadedPiExtension[] } }>;
+	AuthStorage?: { inMemory(data?: Record<string, unknown>): unknown };
+	ModelRegistry?: {
+		create(authStorage: unknown, modelsJsonPath?: string): PiModelRegistry;
+	};
 };
 
 export function createTrustAwareDiscoverySettings(pi: PiCodingAgentApi, cwd: string, agentDir: string): unknown {
@@ -466,14 +479,36 @@ export async function discoverPiRuntimeResources(
 // Model reference helpers
 // ---------------------------------------------------------------------------
 
+export type ModelReferenceEntry = Pick<ModelOption, "provider" | "modelId">;
+
+function modelReferenceKey(model: ModelReferenceEntry): string {
+	return `${model.provider}\0${model.modelId}`;
+}
+
 /** Compute canonical runtime-reference for every model.
- *  Bare modelId when unique across providers, otherwise `provider/modelId`. */
-export function computeCanonicalModelRefs(models: ModelOption[]): void {
-	// Count how many providers expose each modelId
+ *  Bare modelId when unique across the runtime model registry, otherwise `provider/modelId`. */
+export function computeCanonicalModelRefs(
+	models: ModelOption[],
+	runtimeModelReferences: ModelReferenceEntry[] = models,
+): void {
+	// Count unique provider/modelId pairs, not rows. The optional runtime universe
+	// includes unauthenticated models omitted by `pi --list-models` but still seen
+	// by the Task resolver's ModelRegistry ambiguity check.
+	const seenReferences = new Set<string>();
 	const idCounts = new Map<string, number>();
-	for (const m of models) {
-		idCounts.set(m.modelId, (idCounts.get(m.modelId) ?? 0) + 1);
-	}
+	const addReference = (model: ModelReferenceEntry): void => {
+		if (!model.provider || !model.modelId) return;
+		const key = modelReferenceKey(model);
+		if (seenReferences.has(key)) return;
+		seenReferences.add(key);
+		idCounts.set(model.modelId, (idCounts.get(model.modelId) ?? 0) + 1);
+	};
+
+	for (const model of runtimeModelReferences) addReference(model);
+	// Keep CLI-only/dynamic models in the universe if the registry snapshot did not
+	// contain them.
+	for (const model of models) addReference(model);
+
 	for (const m of models) {
 		const isUnique = idCounts.get(m.modelId) === 1;
 		m.canonicalRef = isUnique ? m.modelId : `${m.provider}/${m.modelId}`;
@@ -488,7 +523,7 @@ function modelDisplayBase(model: ModelOption): string {
 
 function withModelQualifier(base: string, qualifier: string): string {
 	const trimmedQualifier = qualifier.trim();
-	if (!trimmedQualifier || base === trimmedQualifier) return base;
+	if (!trimmedQualifier || base === trimmedQualifier || base.startsWith(`${trimmedQualifier}/`)) return base;
 	return `${base} (${trimmedQualifier})`;
 }
 
@@ -517,8 +552,13 @@ export function disambiguateModelDisplayNames(models: ModelOption[]): void {
 		baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
 	}
 
+	const needsProviderQualifier = baseNames.map((base, index) => {
+		const model = models[index];
+		return baseCounts.get(base) !== 1 || Boolean(model?.canonicalRef && model.canonicalRef !== model.modelId);
+	});
+
 	const providerQualified = baseNames.map((base, index) => {
-		if (baseCounts.get(base) === 1) return base;
+		if (!needsProviderQualifier[index]) return base;
 		const model = models[index];
 		return withModelQualifier(base, model?.provider ?? "");
 	});
@@ -532,7 +572,7 @@ export function disambiguateModelDisplayNames(models: ModelOption[]): void {
 		const model = models[index];
 		const base = baseNames[index] ?? "";
 		let displayName = providerQualified[index] ?? base;
-		if (baseCounts.get(base)! > 1 && providerQualifiedCounts.get(displayName)! > 1) {
+		if (needsProviderQualifier[index] && providerQualifiedCounts.get(displayName)! > 1) {
 			const qualifier =
 				model.provider && model.modelId
 					? `${model.provider}/${model.modelId}`
@@ -786,7 +826,7 @@ export function discoverConfiguredExtensions(agentDir: string, cwd = process.cwd
 // Models Discovery
 // ---------------------------------------------------------------------------
 
-/** Discover models exclusively from the installed `pi` executable. */
+/** Discover models from the installed `pi` executable and canonicalize them against Pi's runtime registry. */
 export interface DiscoveredModelsResult {
 	models: ModelOption[];
 	defaultModelDisplayName: string;
@@ -796,7 +836,8 @@ export interface DiscoveredModelsResult {
 
 export async function discoverModels(agentDir: string, piCommand = "pi"): Promise<DiscoveredModelsResult> {
 	try {
-		return discoverModelsFromPiCli(agentDir, piCommand);
+		const runtimeModelReferences = await discoverRuntimeModelReferences(agentDir, piCommand);
+		return discoverModelsFromPiCli(agentDir, piCommand, runtimeModelReferences);
 	} catch (err) {
 		return {
 			models: [],
@@ -807,7 +848,36 @@ export async function discoverModels(agentDir: string, piCommand = "pi"): Promis
 	}
 }
 
-export function discoverModelsFromPiCli(agentDir: string, piCommand = "pi"): DiscoveredModelsResult {
+async function discoverRuntimeModelReferences(
+	agentDir: string,
+	piCommand: string,
+): Promise<ModelReferenceEntry[] | undefined> {
+	// Tests and callers may pass a fake `pi`; do not mix its list-models output
+	// with the developer machine's installed Pi registry.
+	if (piCommand !== "pi") return undefined;
+
+	try {
+		const pi = await importPiCodingAgent();
+		const authStorage = pi.AuthStorage?.inMemory({});
+		if (!authStorage || !pi.ModelRegistry) return undefined;
+
+		const registry = pi.ModelRegistry.create(authStorage, path.join(agentDir, "models.json"));
+		return registry
+			.getAll()
+			.map((model) => ({ provider: String(model.provider ?? ""), modelId: String(model.id ?? "") }))
+			.filter((model) => model.provider.length > 0 && model.modelId.length > 0);
+	} catch {
+		// Registry refinement is best-effort. `pi --list-models` remains the source of
+		// selectable models if the installed package cannot be imported here.
+		return undefined;
+	}
+}
+
+export function discoverModelsFromPiCli(
+	agentDir: string,
+	piCommand = "pi",
+	runtimeModelReferences?: ModelReferenceEntry[],
+): DiscoveredModelsResult {
 	const result = spawnSync(piCommand, ["--list-models"], {
 		encoding: "utf8",
 		env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
@@ -824,7 +894,7 @@ export function discoverModelsFromPiCli(agentDir: string, piCommand = "pi"): Dis
 	if (models.length === 0) {
 		throw new Error("pi --list-models returned no parseable models");
 	}
-	computeCanonicalModelRefs(models);
+	computeCanonicalModelRefs(models, runtimeModelReferences ?? models);
 	disambiguateModelDisplayNames(models);
 	orderModelsByProvider(models);
 	return {
