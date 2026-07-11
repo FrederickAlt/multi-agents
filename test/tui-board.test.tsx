@@ -164,8 +164,9 @@ describe("Board", () => {
 
 		const text = collectText(result);
 		expect(text).toContain("Saved default.md");
-		expect(text).toContain("reasoning");
 		expect(text).toContain("model");
+		expect(text).toContain("fast");
+		expect(text).toContain("smart");
 		expect(children.length).toBeGreaterThan(0);
 	});
 

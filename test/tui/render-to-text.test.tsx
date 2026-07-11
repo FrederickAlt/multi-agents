@@ -460,7 +460,7 @@ describe("renderToText", () => {
 		const text = await renderToText(
 			<Board
 				state={state({
-					focus: { agentIndex: 0, fieldIndex: 4, optionItemIndex: 10 },
+					focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 10 },
 					expandedAgentIndex: 0,
 					optionColumnScrollOffset: 0,
 					options: {

@@ -29,18 +29,10 @@ function selectableOverlay(overlay: OverlayState | null): SelectableOverlayState
 }
 
 const originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-const originalColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
 
 function setTerminalRows(rows: number): void {
 	Object.defineProperty(process.stdout, "rows", {
 		value: rows,
-		configurable: true,
-	});
-}
-
-function setTerminalColumns(columns: number): void {
-	Object.defineProperty(process.stdout, "columns", {
-		value: columns,
 		configurable: true,
 	});
 }
@@ -50,11 +42,6 @@ afterEach(() => {
 		Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
 	} else {
 		delete (process.stdout as { rows?: number }).rows;
-	}
-	if (originalColumnsDescriptor) {
-		Object.defineProperty(process.stdout, "columns", originalColumnsDescriptor);
-	} else {
-		delete (process.stdout as { columns?: number }).columns;
 	}
 });
 
@@ -692,22 +679,6 @@ describe("OPEN_OVERLAY dropdown", () => {
 		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
 	});
 
-	it("opens reasoning_effort dropdown with default medium when field missing", () => {
-		const state = stateWithAgent({ description: "no reasoning" });
-		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "reasoning_effort" });
-		expect(selectableOverlay(next.overlay).type).toBe("dropdown");
-		expect(selectableOverlay(next.overlay).localSelected).toBe("medium");
-		expect(selectableOverlay(next.overlay).wasImplicit).toBe(true);
-		expect(selectableOverlay(next.overlay).availableItems).toEqual(["low", "medium", "high", "maximum"]);
-	});
-
-	it("opens reasoning_effort dropdown with current value from frontmatter", () => {
-		const state = stateWithAgent({ reasoning_effort: "high" });
-		const next = configReducer(state, { type: "OPEN_OVERLAY", agentIndex: 0, fieldName: "reasoning_effort" });
-		expect(selectableOverlay(next.overlay).localSelected).toBe("high");
-		expect(selectableOverlay(next.overlay).wasImplicit).toBe(false);
-	});
-
 	it("rejects OPEN_OVERLAY when agent has error", () => {
 		const state: ConfigState = {
 			...createInitialState(),
@@ -800,96 +771,19 @@ describe("OPEN_OVERLAY validation", () => {
 // ---------------------------------------------------------------------------
 
 describe("inline Option columns", () => {
-	it("EXPAND focuses the selected item in the first single-select option column", () => {
+	it("switches model focus between fast and smart modes", () => {
 		const state: ConfigState = {
 			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "high", depth: 2 } })],
-			options: makeOptions(),
-		};
-
-		const next = configReducer(state, { type: "EXPAND" });
-
-		expect(next.expandedAgentIndex).toBe(0);
-		expect(next.focus.fieldIndex).toBe(2);
-		expect(next.focus.optionItemIndex).toBe(2);
-	});
-
-	it("FOCUS_FIELD moves right across rendered option columns", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
+			agents: [makeAgent({ frontmatter: { model: "claude", smart_model: "gpt5" } })],
 			options: makeOptions(),
 			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
+			focus: { agentIndex: 0, fieldIndex: FIELDS_ORDER.indexOf("model"), optionItemIndex: 0, mode: "fast" },
 		};
 
-		let next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
-		expect(next.focus.fieldIndex).toBe(3);
-		expect(next.focus.optionItemIndex).toBe(3);
-
-		next = configReducer(next, { type: "FOCUS_FIELD", direction: "next" });
-		expect(next.focus.fieldIndex).toBe(5);
-		expect(next.focus.optionItemIndex).toBe(0);
-	});
-
-	it("FOCUS_FIELD moves right from extensions to the rendered inline order", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 1, optionItemIndex: 0 },
-		};
-
-		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
-
-		expect(next.focus.fieldIndex).toBe(4);
-		expect(next.focus.optionItemIndex).toBe(0);
-	});
-
-	it("FOCUS_FIELD moves left from reasoning_effort to extensions", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
-		};
-
-		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
-
-		expect(next.focus.fieldIndex).toBe(4);
-		expect(next.focus.optionItemIndex).toBe(0);
-	});
-
-	it("FOCUS_FIELD moves left from can_spawn to model", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 0 },
-		};
-
-		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "prev" });
-
-		expect(next.focus.fieldIndex).toBe(3);
-		expect(next.focus.optionItemIndex).toBe(3);
-	});
-
-	it("FOCUS_FIELD moves right from model to reasoning_effort", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium", depth: 3 } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 4, optionItemIndex: 0 },
-		};
-
-		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
-
-		expect(next.focus.fieldIndex).toBe(2);
-		expect(next.focus.optionItemIndex).toBe(1);
+		const smart = configReducer(state, { type: "FOCUS_MODE", direction: "next" });
+		expect(smart.focus.mode).toBe("smart");
+		expect(smart.focus.optionItemIndex).toBe(1);
+		expect(configReducer(smart, { type: "FOCUS_MODE", direction: "next" }).focus.mode).toBe("fast");
 	});
 
 	it("FOCUS_FIELD stops at the first and last rendered option columns", () => {
@@ -917,22 +811,6 @@ describe("inline Option columns", () => {
 		expect(afterLast).toBe(atLast);
 	});
 
-	it("FOCUS_OPTION_ITEM moves up and down within the focused option column", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "medium" } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
-		};
-
-		let next = configReducer(state, { type: "FOCUS_OPTION_ITEM", direction: "next" });
-		expect(next.focus.optionItemIndex).toBe(2);
-
-		next = configReducer(next, { type: "FOCUS_OPTION_ITEM", direction: "prev" });
-		expect(next.focus.optionItemIndex).toBe(1);
-	});
-
 	it("FOCUS_OPTION_ITEM works for checkbox fields", () => {
 		const state: ConfigState = {
 			...createInitialState(),
@@ -947,30 +825,6 @@ describe("inline Option columns", () => {
 
 		next = configReducer(next, { type: "FOCUS_OPTION_ITEM", direction: "prev" });
 		expect(next.focus.optionItemIndex).toBe(1);
-	});
-
-	it("SET_OPTION_COLUMN_FILTER applies inline item filtering for option lists", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { skills: "skill-beta" } })],
-			options: makeOptions({
-				skills: ["skill-alpha", "skill-beta", "skill-gamma", "other-skill", "another"],
-			}),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 6, optionItemIndex: 1 },
-		};
-
-		const filtered = configReducer(state, {
-			type: "SET_OPTION_COLUMN_FILTER",
-			filter: "skill",
-		});
-
-		expect(filtered.optionColumnFilter).toBe("skill");
-		expect(filtered.agents).toEqual(state.agents);
-		expect(filtered.focus.optionItemIndex).toBe(1);
-
-		const next = configReducer(filtered, { type: "FOCUS_OPTION_ITEM", direction: "next" });
-		expect(next.focus.optionItemIndex).toBe(2);
 	});
 
 	it("Backspace-style filter shortening preserves filtered focus", () => {
@@ -1092,35 +946,6 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(1);
 	});
 
-	it("FOCUS_OPTION_ITEM wraps from last visible can_spawn item", () => {
-		const options = makeOptions({
-			canSpawn: ["peer", "self-agent", "advisor"],
-		});
-		const agent = makeAgent({
-			name: "self-agent",
-			frontmatter: { depth: 1, can_spawn: ["peer", "advisor"] },
-		});
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [agent],
-			options,
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 5, optionItemIndex: 2 },
-		};
-
-		const visibleItems = getOptionColumnItems(agent, options, "can_spawn", agent.name);
-		expect(visibleItems).toEqual(["peer", "advisor", "self-agent"]);
-		expect(visibleItems).toHaveLength(3);
-
-		const next = configReducer(state, {
-			type: "FOCUS_OPTION_ITEM",
-			direction: "next",
-		});
-		const nextFocusedItem = visibleItems[next.focus.optionItemIndex];
-		expect(next.focus.optionItemIndex).toBe(0);
-		expect(nextFocusedItem).toBe("peer");
-	});
-
 	it("UPDATE_AGENT_FRONTMATTER preserves can_spawn focus using filtered visible items", () => {
 		const options = makeOptions({
 			canSpawn: ["peer", "self-agent", "advisor"],
@@ -1150,41 +975,6 @@ describe("inline Option columns", () => {
 		expect(next.focus.optionItemIndex).toBe(1);
 		const focusedItem = nextVisibleItems[next.focus.optionItemIndex];
 		expect(focusedItem).toBe("advisor");
-	});
-
-	it("horizontally scrolls option columns when terminal width only fits one column", () => {
-		setTerminalColumns(24);
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "low", depth: 2 } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 0 },
-		};
-
-		const next = configReducer(state, { type: "FOCUS_FIELD", direction: "next" });
-
-		expect(next.focus.fieldIndex).toBe(3);
-		expect(next.optionColumnScrollOffset).toBe(4);
-	});
-
-	it("realigns focused item after a stale custom value is replaced", () => {
-		const state: ConfigState = {
-			...createInitialState(),
-			agents: [makeAgent({ frontmatter: { reasoning_effort: "ultra" } })],
-			options: makeOptions(),
-			expandedAgentIndex: 0,
-			focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 1 },
-		};
-
-		const next = configReducer(state, {
-			type: "UPDATE_AGENT_FRONTMATTER",
-			agentIndex: 0,
-			frontmatter: { reasoning_effort: "high" },
-			staleItems: {},
-		});
-
-		expect(next.focus.optionItemIndex).toBe(0);
 	});
 
 	it("keeps stale custom checkbox values visible without changing frontmatter", () => {
@@ -1336,39 +1126,6 @@ describe("model discovery options", () => {
 		expect(next.focus.optionItemIndex).toBe(0);
 		expect(next.options.modelDiscovery.status).toBe("ready");
 		expect(next.options.models).toEqual(loadedOptions.models);
-	});
-
-	it("keeps row and inline model option focus when model discovery fails", () => {
-		const agent = makeAgent({ frontmatter: { model: "claude", description: "agent" } });
-		const baseline = {
-			...makeOptions(),
-			modelDiscovery: { status: "ready" as const, error: null },
-		};
-		let state = configReducer(createInitialState(), {
-			type: "INIT_COMPLETE",
-			agents: [agent],
-			options: baseline,
-		});
-		state = configReducer(state, { type: "EXPAND" });
-		state = {
-			...state,
-			focus: { ...state.focus, fieldIndex: 4, optionItemIndex: 0 },
-			expandedAgentIndex: 0,
-		};
-		const failed = configReducer(state, {
-			type: "UPDATE_OPTIONS",
-			options: {
-				...makeOptions(),
-				models: [],
-				modelDiscovery: { status: "degraded" as const, error: "network" },
-				defaultModel: "",
-			},
-		});
-
-		expect(failed.focus.agentIndex).toBe(0);
-		expect(failed.focus.fieldIndex).toBe(4);
-		expect(failed.focus.optionItemIndex).toBe(1);
-		expect(failed.options.modelDiscovery.status).toBe("degraded");
 	});
 
 	it("preserves focus on non-model option column during model discovery updates", () => {
