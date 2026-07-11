@@ -169,6 +169,35 @@ describe("Board", () => {
 		expect(children.length).toBeGreaterThan(0);
 	});
 
+	it("keeps linked smart mode empty until its column is focused", () => {
+		const linkedAgent = {
+			...agent("default"),
+			frontmatter: { model: "alpha", reasoning_effort: "low" },
+		};
+		const props = {
+			agent: linkedAgent,
+			isFocused: true,
+			isExpanded: true,
+			focusedOptionItem: 0,
+			optionColumnScrollOffset: 2,
+			options: {
+				...options,
+				models: [
+					{ provider: "test", modelId: "alpha", displayName: "alpha", canonicalRef: "alpha" },
+					{ provider: "test", modelId: "beta", displayName: "beta", canonicalRef: "beta" },
+				],
+				reasoningEfforts: ["low", "medium"],
+			},
+			status: undefined,
+		};
+		const linked = AgentRow({ ...props, focusedField: 2 }) as React.ReactElement;
+		expect(collectText(linked)).toContain("🔗");
+		expect(collectText(linked)).toContain("smart-mode🔗 LINKEDdepth");
+
+		const focusedSmart = AgentRow({ ...props, focusedField: 3 }) as React.ReactElement;
+		expect(collectText(focusedSmart)).toContain("smart-mode🔗 LINKEDdepth");
+	});
+
 	it("shows current inline option keyboard hint in expanded rows", () => {
 		const result = AgentRow({
 			agent: agent("default"),

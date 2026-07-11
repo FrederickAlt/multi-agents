@@ -11,8 +11,8 @@ const FIELD_LABELS: Record<string, string> = {
 	prompt_parts: "prompt_parts",
 	reasoning_effort: "reasoning",
 	depth: "depth",
-	model: "fast",
-	smart_model: "smart",
+	model: "fast-mode",
+	smart_model: "smart-mode",
 };
 
 interface OptionColumnWidthArgs {

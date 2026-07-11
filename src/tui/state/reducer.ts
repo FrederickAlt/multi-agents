@@ -14,6 +14,7 @@ import {
 	isOptionColumnDisabledForAgent,
 	isOptionColumnField,
 	isOptionColumnItemDisabled,
+	isSmartModeLinked,
 	MODEL_OPTION_DEGRADED_STATUS,
 	MODEL_OPTION_LOADING_ITEM,
 } from "./option-columns.js";
@@ -121,6 +122,7 @@ export function createInitialState(): ConfigState {
 		optionColumnScrollOffset: 0,
 		optionColumnItemOrder: null,
 		optionColumnFilter: "",
+		smartModelPickerOpen: false,
 		globalError: null,
 	};
 }
@@ -346,6 +348,7 @@ function expandAgent(state: ConfigState, idx: number, agent: AgentConfigState): 
 		...state,
 		expandedAgentIndex: idx,
 		overlay: null,
+		smartModelPickerOpen: false,
 		optionColumnFilter: "",
 		optionColumnItemOrder: null,
 		focus: {
@@ -450,6 +453,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				...state,
 				optionColumnFilter: "",
 				optionColumnItemOrder: null,
+				smartModelPickerOpen: false,
 				focus: {
 					...state.focus,
 					fieldIndex,
@@ -475,6 +479,9 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			if (!isOptionColumnField(fieldName)) {
 				return state;
 			}
+			if (fieldName === "smart_model" && isSmartModeLinked(agent) && !state.smartModelPickerOpen) {
+				return state;
+			}
 			const items = getEffectiveOptionColumnItems(state, agent, fieldName);
 			if (items.length === 0) return state;
 			return {
@@ -491,6 +498,10 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 					),
 				},
 			};
+		}
+
+		case "OPEN_SMART_MODEL_PICKER": {
+			return { ...state, smartModelPickerOpen: true };
 		}
 
 		case "OPEN_OVERLAY": {
@@ -706,6 +717,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				return {
 					...state,
 					agents,
+					smartModelPickerOpen: false,
 					optionColumnItemOrder: shouldPreserveOrder
 						? {
 								agentIndex: action.agentIndex,
@@ -729,7 +741,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 				};
 			}
 
-			return { ...state, agents };
+			return { ...state, agents, smartModelPickerOpen: false };
 		}
 
 		case "RESCAN": {
@@ -870,7 +882,7 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			if (state.optionColumnFilter) {
 				return { ...state, optionColumnFilter: "", optionColumnItemOrder: null };
 			}
-			return { ...state, expandedAgentIndex: null, optionColumnItemOrder: null };
+			return { ...state, expandedAgentIndex: null, optionColumnItemOrder: null, smartModelPickerOpen: false };
 		}
 
 		default:

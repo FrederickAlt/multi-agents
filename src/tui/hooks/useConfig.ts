@@ -13,6 +13,7 @@ import {
 	isOptionColumnDisabledForAgent,
 	isOptionColumnField,
 	isOptionColumnItemDisabled,
+	isSmartModeLinked,
 	MODEL_OPTION_DEGRADED_STATUS,
 	MODEL_OPTION_LOADING_ITEM,
 	normalizeOptionCheckboxSaveValues,
@@ -448,6 +449,10 @@ export function useConfig() {
 
 		const fieldName = getFieldName(state.focus.fieldIndex);
 		if (!isOptionColumnField(fieldName)) return;
+		if (fieldName === "smart_model" && isSmartModeLinked(agent) && !state.smartModelPickerOpen) {
+			dispatch({ type: "OPEN_SMART_MODEL_PICKER" });
+			return;
+		}
 
 		const items = applyOptionColumnItemOrder(
 			getOptionColumnItems(agent, state.options, fieldName, agent.name, state.optionColumnFilter),
@@ -532,9 +537,18 @@ export function useConfig() {
 						] ?? current.reasoningEffort)
 					: current.reasoningEffort;
 			const fastCanonicalRef = modelDisplayNameToCanonicalRef(fast.model, state.options.models) ?? fast.model;
+			const smart = getModeSelection(agent, state.options, "smart");
+			const smartCanonicalRef = modelDisplayNameToCanonicalRef(smart.model, state.options.models) ?? smart.model;
 			const values =
 				mode === "fast"
-					? { model: canonicalRef, reasoning_effort: nextEffort }
+					? canonicalRef === smartCanonicalRef && nextEffort === smart.reasoningEffort
+						? {
+								model: canonicalRef,
+								reasoning_effort: nextEffort,
+								smart_model: undefined,
+								smart_reasoning_effort: undefined,
+							}
+						: { model: canonicalRef, reasoning_effort: nextEffort }
 					: canonicalRef === fastCanonicalRef && nextEffort === fast.reasoningEffort
 						? { smart_model: undefined, smart_reasoning_effort: undefined }
 						: { smart_model: canonicalRef, smart_reasoning_effort: nextEffort };
@@ -576,6 +590,7 @@ export function useConfig() {
 		state.options,
 		state.optionColumnFilter,
 		state.optionColumnItemOrder,
+		state.smartModelPickerOpen,
 		saveFieldValue,
 	]);
 

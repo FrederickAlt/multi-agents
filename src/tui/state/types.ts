@@ -136,6 +136,8 @@ export interface ConfigState {
 	 * Cleared when focus moves to another column or actions require an unfiltered view.
 	 */
 	optionColumnFilter: string;
+	/** Whether the linked Smart model picker has been explicitly opened with Enter/Space. */
+	smartModelPickerOpen?: boolean;
 	globalError: string | null;
 }
 
@@ -182,6 +184,7 @@ export type ConfigAction =
 	| { type: "FOCUS_AGENT_AT"; agentIndex: number }
 	| { type: "FOCUS_FIELD"; direction: "next" | "prev" }
 	| { type: "FOCUS_OPTION_ITEM"; direction: "next" | "prev" }
+	| { type: "OPEN_SMART_MODEL_PICKER" }
 	| { type: "OPEN_OVERLAY"; agentIndex: number; fieldName: string }
 	| { type: "CLOSE_OVERLAY" }
 	| { type: "TOGGLE_CHECKBOX"; item: string }

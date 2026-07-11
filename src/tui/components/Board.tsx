@@ -68,6 +68,7 @@ export function Board({ state, height }: BoardProps) {
 						status={state.statuses.get(agent.filePath)}
 						optionColumnFilter={state.optionColumnFilter}
 						optionColumnItemOrder={state.optionColumnItemOrder}
+						smartModelPickerOpen={state.smartModelPickerOpen ?? false}
 						agentIndex={globalIdx}
 					/>
 				);

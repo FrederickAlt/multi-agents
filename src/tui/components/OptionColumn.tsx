@@ -18,6 +18,7 @@ interface OptionColumnProps {
 	width?: number;
 	modeSummary?: { model: string; reasoningEffort: string };
 	linked?: boolean;
+	centerLinked?: boolean;
 }
 
 const DEFAULT_MAX_VISIBLE_ITEMS = 5;
@@ -68,6 +69,7 @@ export function OptionColumn({
 	width,
 	modeSummary,
 	linked = false,
+	centerLinked = false,
 }: OptionColumnProps) {
 	const label = getOptionColumnLabel(fieldName);
 	const effectiveSelectedValues = selectedValues ?? (selectedValueProp !== undefined ? [selectedValueProp] : []);
@@ -118,9 +120,16 @@ export function OptionColumn({
 				{label}
 			</Text>
 			{modeSummary && (
-				<Text dimColor={linked} wrap="truncate">
+				<Text dimColor wrap="truncate">
 					{modeSummary.model} {formatEffort(modeSummary.reasoningEffort)}
 				</Text>
+			)}
+			{linked && (
+				<Box width="100%" flexGrow={centerLinked ? 1 : undefined} justifyContent="center" alignItems="center">
+					<Text bold dimColor>
+						🔗 LINKED
+					</Text>
+				</Box>
 			)}
 			{showFilterBar && (
 				<Text dimColor wrap="truncate">

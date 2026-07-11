@@ -88,6 +88,14 @@ const scenarios: Array<{ name: string; state: ConfigState }> = [
 		}),
 	},
 	{
+		name: "expanded row, Smart picker opened",
+		state: state({
+			focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
+			optionColumnScrollOffset: 0,
+			smartModelPickerOpen: true,
+		}),
+	},
+	{
 		name: "expanded row, horizontally scrolled columns",
 		state: state({
 			focus: { agentIndex: 0, fieldIndex: 7, optionItemIndex: 2 },

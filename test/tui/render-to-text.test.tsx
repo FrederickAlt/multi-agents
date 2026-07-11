@@ -342,6 +342,131 @@ describe("renderToText", () => {
 		expect(text).toContain("←/→ columns");
 	});
 
+	it("keeps linked Smart centered while focused and only shows choices after activation", async () => {
+		const linkedAgent = {
+			...agent("default"),
+			frontmatter: { ...agent("default").frontmatter, model: "alpha", reasoning_effort: "low" },
+		};
+		const modelOptions = {
+			...options,
+			models: [
+				{ provider: "p", modelId: "alpha", displayName: "Alpha", canonicalRef: "alpha" },
+				{ provider: "p", modelId: "beta", displayName: "Beta", canonicalRef: "beta" },
+			],
+		};
+		const frame = async (fieldIndex: number, smartModelPickerOpen = false) =>
+			renderToText(
+				<Board
+					state={state({
+						agents: [linkedAgent],
+						options: modelOptions,
+						focus: { agentIndex: 0, fieldIndex, optionItemIndex: 0 },
+						expandedAgentIndex: 0,
+						optionColumnScrollOffset: 2,
+						smartModelPickerOpen,
+					})}
+				/>,
+				{ columns: 120, rows: 30 },
+			);
+		const smartColumnStart = (text: string) => {
+			const start = text
+				.split("\n")
+				.find((line) => line.includes(" smart"))
+				?.indexOf("smart");
+			if (start === undefined || start < 2) throw new Error("Smart column not rendered");
+			return start - 2;
+		};
+		const smartColumn = (text: string) => {
+			const start = smartColumnStart(text);
+			return text
+				.split("\n")
+				.map((line) => line.slice(start, start + 22))
+				.join("\n");
+		};
+
+		const [fastFocused, smartFocused, pickerOpen] = await Promise.all([frame(2), frame(3), frame(3, true)]);
+		const fastSmartColumn = smartColumn(fastFocused);
+		const focusedSmartColumn = smartColumn(smartFocused);
+		const pickerSmartColumn = smartColumn(pickerOpen);
+
+		expect(smartColumnStart(fastFocused)).toBe(smartColumnStart(smartFocused));
+		expect(fastSmartColumn).toContain("🔗 LINKED");
+		expect(fastSmartColumn).not.toContain("Alpha");
+		expect(focusedSmartColumn).toContain("🔗 LINKED");
+		expect(focusedSmartColumn).not.toContain("Alpha");
+		expect(pickerSmartColumn).toContain("🔗 LINKED");
+		expect(pickerSmartColumn).toContain("○ Alpha");
+	});
+
+	it("retains mode headings after selecting a Smart model in a live Ink redraw", async () => {
+		const modelOptions = {
+			...options,
+			models: [
+				{ provider: "p", modelId: "alpha", displayName: "Alpha", canonicalRef: "alpha" },
+				{ provider: "p", modelId: "beta", displayName: "Beta", canonicalRef: "beta" },
+			],
+		};
+		const linkedAgent = {
+			...agent("default"),
+			frontmatter: { ...agent("default").frontmatter, model: "alpha", reasoning_effort: "low" },
+		};
+		const selectedAgent = {
+			...linkedAgent,
+			frontmatter: { ...linkedAgent.frontmatter, smart_model: "beta", smart_reasoning_effort: "low" },
+		};
+		const board = (agentState: AgentConfigState) => (
+			<Board
+				state={state({
+					agents: [agentState],
+					options: modelOptions,
+					focus: { agentIndex: 0, fieldIndex: 3, optionItemIndex: 0 },
+					expandedAgentIndex: 0,
+					optionColumnScrollOffset: 2,
+					smartModelPickerOpen: agentState === linkedAgent,
+				})}
+			/>
+		);
+
+		const text = await renderSequenceToTerminalText([board(linkedAgent), board(selectedAgent)], {
+			columns: 120,
+			rows: 30,
+		});
+
+		expect(text).toContain("fast-mode");
+		expect(text).toContain("smart-mode");
+		expect(text).toContain("Beta");
+		expect(text).not.toContain("LINKED");
+	});
+
+	it("keeps the Fast heading visible with a full model viewport", async () => {
+		const models = Array.from({ length: 12 }, (_, index) => ({
+			provider: "p",
+			modelId: `model-${index}`,
+			displayName: `model-${index}`,
+			canonicalRef: `model-${index}`,
+		}));
+		const text = await renderToText(
+			<Board
+				state={state({
+					agents: [
+						{
+							...agent("default"),
+							frontmatter: { ...agent("default").frontmatter, model: "model-10" },
+						},
+					],
+					options: { ...options, models },
+					focus: { agentIndex: 0, fieldIndex: 2, optionItemIndex: 10 },
+					expandedAgentIndex: 0,
+					optionColumnScrollOffset: 2,
+				})}
+			/>,
+			{ columns: 120, rows: 30 },
+		);
+
+		expect(text).toContain("fast-mode");
+		expect(text).toContain("model-10");
+	});
+
 	it("keeps expanded-row save status and keyboard hint on one terminal line", async () => {
 		const text = await renderToText(
 			<Board

@@ -406,6 +406,10 @@ export function getOptionColumnSelectedValues(
 		return selectedValues;
 	}
 
+	if (fieldName === "smart_model" && isSmartModeLinked(agent)) {
+		return [];
+	}
+
 	const currentValue =
 		fieldName === "model" || fieldName === "smart_model"
 			? getModeSelection(agent, options, fieldName === "smart_model" ? "smart" : "fast").model

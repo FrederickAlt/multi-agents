@@ -5,10 +5,12 @@ import { computeInlineCheckboxSaveValue, useConfig } from "../../src/tui/hooks/u
 import type { AgentConfigState, DiscoveredOptions } from "../../src/tui/state/types.js";
 
 const writeFieldToFileMock = vi.hoisted(() => vi.fn());
+const writeFieldsToFileMock = vi.hoisted(() => vi.fn());
 const useOptionDiscoveryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/tui/file-io/write-agent.js", () => ({
 	writeFieldToFile: writeFieldToFileMock,
+	writeFieldsToFile: writeFieldsToFileMock,
 }));
 
 vi.mock("../../src/tui/hooks/useOptionDiscovery.js", () => ({
@@ -163,6 +165,118 @@ describe("useConfig", () => {
 		expect(writeFieldToFileMock.mock.calls[0]?.[2]).toEqual([]);
 		expect(writeFieldToFileMock.mock.calls[1]?.[1]).toBe("extensions");
 		expect(writeFieldToFileMock.mock.calls[1]?.[2]).toBeUndefined();
+	});
+
+	it("opens a linked Smart picker before saving a Smart selection", async () => {
+		writeFieldsToFileMock.mockReset();
+		const frontmatter = { description: "A test agent", model: "alpha", reasoning_effort: "low" };
+		writeFieldsToFileMock.mockImplementation((_filePath: string, values: Record<string, unknown>) => ({
+			success: true,
+			frontmatter: { ...frontmatter, ...values },
+		}));
+		useOptionDiscoveryMock.mockReturnValue({
+			options: makeOptions({
+				models: [
+					{ provider: "test", modelId: "alpha", displayName: "alpha", canonicalRef: "alpha" },
+					{ provider: "test", modelId: "beta", displayName: "beta", canonicalRef: "beta" },
+				],
+				reasoningEfforts: ["low", "medium"],
+			}),
+			agents: [makeAgent({ frontmatter })],
+			loading: false,
+			error: null,
+			rescan: async () => undefined,
+		});
+
+		const apiRef = { current: undefined as ReturnType<typeof useConfig> | undefined };
+		const Probe = () => {
+			apiRef.current = useConfig();
+			return null;
+		};
+		const app = render(<Probe />, { patchConsole: false });
+		await flush();
+		await act(async () => {
+			apiRef.current?.expand();
+			apiRef.current?.focusNextField();
+		});
+		await flush();
+		await act(async () => {
+			apiRef.current?.selectFocusedOption();
+		});
+		await flush();
+
+		expect(apiRef.current?.state.smartModelPickerOpen).toBe(true);
+		expect(writeFieldsToFileMock).not.toHaveBeenCalled();
+
+		await act(async () => {
+			apiRef.current?.focusNextOptionItem();
+		});
+		await flush();
+		await act(async () => {
+			apiRef.current?.selectFocusedOption();
+		});
+		await flush();
+		app.unmount();
+
+		expect(writeFieldsToFileMock).toHaveBeenCalledWith("/tmp/agent-a.md", {
+			smart_model: "beta",
+			smart_reasoning_effort: "low",
+		});
+	});
+
+	it("relinks smart mode when a fast selection matches it", async () => {
+		writeFieldsToFileMock.mockReset();
+		const frontmatter = {
+			description: "A test agent",
+			model: "alpha",
+			reasoning_effort: "low",
+			smart_model: "beta",
+			smart_reasoning_effort: "low",
+		};
+		writeFieldsToFileMock.mockImplementation((_filePath: string, values: Record<string, unknown>) => ({
+			success: true,
+			frontmatter: { ...frontmatter, ...values },
+		}));
+		useOptionDiscoveryMock.mockReturnValue({
+			options: makeOptions({
+				models: [
+					{ provider: "test", modelId: "alpha", displayName: "alpha", canonicalRef: "alpha" },
+					{ provider: "test", modelId: "beta", displayName: "beta", canonicalRef: "beta" },
+				],
+				reasoningEfforts: ["low", "medium"],
+			}),
+			agents: [makeAgent({ frontmatter })],
+			loading: false,
+			error: null,
+			rescan: async () => undefined,
+		});
+
+		const apiRef = { current: undefined as ReturnType<typeof useConfig> | undefined };
+		const Probe = () => {
+			apiRef.current = useConfig();
+			return null;
+		};
+		const app = render(<Probe />, { patchConsole: false });
+		await flush();
+
+		await act(async () => {
+			apiRef.current?.expand();
+			apiRef.current?.focusNextOptionItem();
+		});
+		await flush();
+		expect(apiRef.current?.state.focus).toMatchObject({ fieldIndex: 2, optionItemIndex: 1 });
+		await act(async () => {
+			apiRef.current?.selectFocusedOption();
+		});
+		await flush();
+		app.unmount();
+
+		expect(writeFieldsToFileMock).toHaveBeenCalledWith("/tmp/agent-a.md", {
+			model: "beta",
+			reasoning_effort: "low",
+			smart_model: undefined,
+			smart_reasoning_effort: undefined,
+		});
 	});
 
 	it("removes explicit Task tool when saving depth zero", async () => {
