@@ -1,11 +1,47 @@
 import { describe, expect, it } from "vitest";
 import {
+	getModeSelection,
 	getOptionColumnDisabledItems,
 	getOptionColumnItems,
 	getOptionColumnSelectedValues,
 	normalizeOptionCheckboxSaveValues,
 } from "../../src/tui/state/option-columns.js";
 import type { AgentConfigState } from "../../src/tui/state/types.js";
+
+describe("reasoning effort compatibility", () => {
+	it("normalizes legacy maximum effort for fast and smart mode selection", () => {
+		const agent: AgentConfigState = {
+			name: "legacy-agent",
+			description: "legacy",
+			filePath: "/tmp/legacy-agent.md",
+			frontmatter: {
+				description: "legacy",
+				model: "fast-model",
+				reasoning_effort: "maximum",
+				smart_model: "smart-model",
+				smart_reasoning_effort: "maximum",
+			},
+			body: "",
+			error: null,
+			staleItems: {},
+		};
+		const options = {
+			tools: [],
+			extensions: [],
+			models: [],
+			defaultModel: "",
+			modelDiscovery: { status: "ready" as const, error: null },
+			reasoningEfforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+			depths: [],
+			canSpawn: [],
+			skills: [],
+			promptParts: [],
+		};
+
+		expect(getModeSelection(agent, options, "fast").reasoningEffort).toBe("max");
+		expect(getModeSelection(agent, options, "smart").reasoningEffort).toBe("max");
+	});
+});
 
 describe("normalizeOptionCheckboxSaveValues", () => {
 	it("normalizes extension values to a wrapper-compatible alias", () => {

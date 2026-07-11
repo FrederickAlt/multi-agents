@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import { normalizeReasoningEffort, PI_REASONING_EFFORTS } from "../../subagent/reasoning-effort.js";
 import { getModelPinnedStatus, getOptionColumnLabel, getOptionColumnWidth } from "../option-column-layout.js";
 
 interface OptionColumnProps {
@@ -27,9 +28,9 @@ function clamp(index: number, len: number): number {
 }
 
 function formatEffort(effort: string): string {
-	const levels = ["low", "medium", "high", "maximum"];
-	const index = Math.max(0, levels.indexOf(effort));
-	return levels.map((_level, itemIndex) => (itemIndex === index ? "●" : "○")).join("");
+	const normalized = normalizeReasoningEffort(effort);
+	const index = Math.max(0, normalized === undefined ? -1 : PI_REASONING_EFFORTS.indexOf(normalized));
+	return PI_REASONING_EFFORTS.map((_level, itemIndex) => (itemIndex === index ? "●" : "○")).join("");
 }
 
 function getVisibleRange(

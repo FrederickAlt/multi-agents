@@ -162,7 +162,7 @@ export function useConfig() {
 		if (latestDiscoveredAgents.current === agents) return;
 
 		latestDiscoveredAgents.current = agents;
-		dispatch({ type: "UPDATE_AGENTS", agents });
+		dispatch({ type: "UPDATE_AGENT_STALE_ITEMS", agents });
 	}, [loading, agents]);
 
 	// Focus navigation

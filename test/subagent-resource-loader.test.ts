@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 function makeDir(p: string) {
@@ -47,7 +48,7 @@ describe("Task sub-agent resource loading", () => {
 	});
 
 	afterEach(() => {
-		vi.doUnmock("@mariozechner/pi-coding-agent");
+		vi.doUnmock("@earendil-works/pi-coding-agent");
 		vi.restoreAllMocks();
 		vi.resetModules();
 		delete process.env.PI_CODING_AGENT_DIR;
@@ -81,8 +82,8 @@ Default Root Agent
 		};
 		const createAgentSessionMock = vi.fn().mockResolvedValue({ session: fakeSession });
 
-		vi.doMock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-			const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+		vi.doMock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+			const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
 			class MockDefaultResourceLoader {
 				options: any;
 				constructor(options: any) {
@@ -173,8 +174,8 @@ Explicit context:
 		};
 		const createAgentSessionMock = vi.fn().mockResolvedValue({ session: fakeSession });
 
-		vi.doMock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-			const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+		vi.doMock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+			const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
 			class MockDefaultResourceLoader {
 				options: any;
 				constructor(options: any) {
@@ -228,6 +229,7 @@ Explicit context:
 			undefined,
 			{
 				cwd: projectDir,
+				isProjectTrusted: () => true,
 				sessionManager: makeSessionManager(sessionDir, "root-session"),
 				modelRegistry: {},
 			},
@@ -235,6 +237,14 @@ Explicit context:
 
 		const subagentLoader = constructedLoaders.at(-1)!;
 		expect(subagentLoader.options.noContextFiles).toBe(true);
+		expect(subagentLoader.options.noExtensions).toBe(true);
+		expect(subagentLoader.options.extensionsOverride).toBeUndefined();
+		expect(subagentLoader.options.additionalExtensionPaths).toHaveLength(1);
+		expect(subagentLoader.options.additionalExtensionPaths[0]).toMatch(/subagent\/index\.(?:ts|js)$/);
+		expect(subagentLoader.options.settingsManager.isProjectTrusted()).toBe(true);
+		expect(createAgentSessionMock.mock.calls.at(-1)?.[0].settingsManager).toBe(
+			subagentLoader.options.settingsManager,
+		);
 		expect(subagentLoader.options.appendSystemPromptOverride(["APPEND_SYSTEM content"])).toEqual([]);
 
 		const childHandlers = new Map<string, any>();
@@ -262,5 +272,111 @@ Explicit context:
 		expect(rendered.systemPrompt).toContain("only receive your final assistant message");
 		expect(rendered.systemPrompt).not.toContain("Native Pi prompt");
 		expect(rendered.systemPrompt).not.toContain("APPEND_SYSTEM content");
+
+		await taskTool.execute(
+			"call-untrusted",
+			{
+				description: "Read context untrusted",
+				prompt: "Return ok",
+				subagent_type: "contextreader",
+				cwd: projectDir,
+			},
+			undefined,
+			undefined,
+			{
+				cwd: projectDir,
+				isProjectTrusted: () => false,
+				sessionManager: makeSessionManager(sessionDir, "root-session"),
+				modelRegistry: {},
+			},
+		);
+		const untrustedLoader = constructedLoaders.at(-1)!;
+		expect(untrustedLoader.options.settingsManager.isProjectTrusted()).toBe(false);
+		expect(createAgentSessionMock.mock.calls.at(-1)?.[0].settingsManager).toBe(
+			untrustedLoader.options.settingsManager,
+		);
+
+		const childProjectDir = join(projectDir, "packages", "child");
+		writeFile(join(childProjectDir, ".pi", "settings.json"), "{}\n");
+		await taskTool.execute(
+			"call-child-cwd",
+			{
+				description: "Read trusted child project",
+				prompt: "Return ok",
+				subagent_type: "contextreader",
+				cwd: childProjectDir,
+			},
+			undefined,
+			undefined,
+			{
+				cwd: projectDir,
+				isProjectTrusted: () => true,
+				sessionManager: makeSessionManager(sessionDir, "root-session"),
+				modelRegistry: {},
+			},
+		);
+		expect(constructedLoaders.at(-1)?.options.settingsManager.isProjectTrusted()).toBe(true);
+
+		new ProjectTrustStore(agentDiscoveryDir).set(childProjectDir, false);
+		await taskTool.execute(
+			"call-denied-child-cwd",
+			{
+				description: "Read denied child project",
+				prompt: "Return ok",
+				subagent_type: "contextreader",
+				cwd: childProjectDir,
+			},
+			undefined,
+			undefined,
+			{
+				cwd: projectDir,
+				isProjectTrusted: () => true,
+				sessionManager: makeSessionManager(sessionDir, "root-session"),
+				modelRegistry: {},
+			},
+		);
+		expect(constructedLoaders.at(-1)?.options.settingsManager.isProjectTrusted()).toBe(false);
+
+		new ProjectTrustStore(agentDiscoveryDir).set(childProjectDir, true);
+		await taskTool.execute(
+			"call-session-denied-child-cwd",
+			{
+				description: "Read session-denied child project",
+				prompt: "Return ok",
+				subagent_type: "contextreader",
+				cwd: childProjectDir,
+			},
+			undefined,
+			undefined,
+			{
+				cwd: projectDir,
+				isProjectTrusted: () => false,
+				sessionManager: makeSessionManager(sessionDir, "root-session"),
+				modelRegistry: {},
+			},
+		);
+		expect(constructedLoaders.at(-1)?.options.settingsManager.isProjectTrusted()).toBe(false);
+
+		const otherProjectDir = join(tempDir, "other-project");
+		makeDir(otherProjectDir);
+		writeFile(join(otherProjectDir, ".pi", "settings.json"), "{}\n");
+		await taskTool.execute(
+			"call-other-cwd",
+			{
+				description: "Read other project",
+				prompt: "Return ok",
+				subagent_type: "contextreader",
+				cwd: otherProjectDir,
+			},
+			undefined,
+			undefined,
+			{
+				cwd: projectDir,
+				isProjectTrusted: () => true,
+				sessionManager: makeSessionManager(sessionDir, "root-session"),
+				modelRegistry: {},
+			},
+		);
+		expect(constructedLoaders.at(-1)?.options.settingsManager.isProjectTrusted()).toBe(false);
 	});
 });

@@ -318,6 +318,19 @@ describe("Board", () => {
 		expect(text).not.toMatch(/(?:^|\s)0(?:\s|$)/);
 	});
 
+	it("formats legacy maximum mode summaries using Pi's current effort scale", () => {
+		const result = OptionColumn({
+			fieldName: "model",
+			items: ["model-a"],
+			selectedValue: "model-a",
+			focusedItemIndex: 0,
+			isFocused: false,
+			modeSummary: { model: "model-a", reasoningEffort: "maximum" },
+		}) as React.ReactElement;
+
+		expect(collectText(result)).toContain("model-a ○○○○○○●");
+	});
+
 	it("shows filter bar only for focused option columns with active filter", () => {
 		const filteredFocused = OptionColumn({
 			fieldName: "depth",

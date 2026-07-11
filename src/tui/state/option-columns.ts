@@ -1,5 +1,6 @@
 import { aliasesMatchSelector } from "../../subagent/extension-filter.js";
 import { isProtectedMultiAgentExtensionName } from "../../subagent/protected-extension.js";
+import { normalizeReasoningEffort } from "../../subagent/reasoning-effort.js";
 import { resolveModelDisplayName } from "../discovery/options.js";
 import type {
 	AgentConfigState,
@@ -31,14 +32,19 @@ export function getModeSelection(
 ): ModeSelection {
 	const fm = agent.frontmatter ?? {};
 	const fastModel = getStoredModelDisplayName(fm.model, options);
-	const fastEffort = fm.reasoning_effort == null ? getDefaultReasoningEffort(options) : String(fm.reasoning_effort);
+	const fastEffort = getStoredReasoningEffort(fm.reasoning_effort, getDefaultReasoningEffort(options));
 	if (mode === "smart") {
 		return {
 			model: getStoredModelDisplayName(fm.smart_model ?? fm.model, options),
-			reasoningEffort: fm.smart_reasoning_effort == null ? fastEffort : String(fm.smart_reasoning_effort),
+			reasoningEffort: getStoredReasoningEffort(fm.smart_reasoning_effort, fastEffort),
 		};
 	}
 	return { model: fastModel, reasoningEffort: fastEffort };
+}
+
+function getStoredReasoningEffort(raw: unknown, fallback: string): string {
+	if (raw === undefined || raw === null) return fallback;
+	return normalizeReasoningEffort(raw) ?? String(raw);
 }
 
 function getDefaultReasoningEffort(options: DiscoveredOptions): string {

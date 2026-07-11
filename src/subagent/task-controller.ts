@@ -14,8 +14,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { DefaultResourceLoader } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentDiagnostic, AgentMode } from "./agents.js";
 import { formatAgentList, resolveAgentMode } from "./agents.js";
 import { formatContextUsageLine, readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
@@ -85,13 +85,13 @@ export interface SessionAdapter {
 		context: SessionSetupContext,
 	): Promise<any>;
 	withRecordRunLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
-	disposeSession(id: string): void;
+	disposeSession(id: string): Promise<void>;
 	/**
 	 * Wait for a tracked session to reach `agent_end`, resolving when the
 	 * agent finishes. Resolves immediately if the session already ended
 	 * or is no longer tracked.
 	 */
-	waitForSessionEnd(id: string): Promise<void>;
+	waitForSessionEnd(id: string, signal?: AbortSignal): Promise<void>;
 	/** Store the output/error result of a completed async session. */
 	storeAsyncResult(id: string, result: AsyncRunResult): void;
 	/** Finalize async completion and apply lifecycle transitions and cleanup. */
@@ -118,7 +118,11 @@ export interface SessionAdapter {
 	/**
 	 * Request a bounded no-tools final summary before forced abort.
 	 */
-	requestAbortSummary?(id: string): Promise<AbortSummaryResult>;
+	requestAbortSummary?(
+		id: string,
+		timeoutOrSignal?: number | AbortSignal,
+		signal?: AbortSignal,
+	): Promise<AbortSummaryResult>;
 	/**
 	 * Forcibly abort a session immediately.
 	 * The transcript persists on disk for later resume.
@@ -179,7 +183,7 @@ export interface TaskExecuteContext {
 		childRuntime: RuntimeContext,
 		effectiveCwd: string,
 		onWarnings?: (warnings: string[]) => void,
-	) => Promise<DefaultResourceLoader>;
+	) => Promise<DefaultResourceLoader | TaskResourceLoaderSetup>;
 	/** Optional streaming update callback (used for progress emission). */
 	onUpdate?: (partial: TaskResult) => void;
 	/**
@@ -187,6 +191,12 @@ export interface TaskExecuteContext {
 	 * from external notification tracking systems.
 	 */
 	consumeWaitForAgentIds?: (agentIds: string[]) => void;
+}
+
+/** A child loader plus the Pi settings object that decided its project trust. */
+export interface TaskResourceLoaderSetup {
+	resourceLoader: DefaultResourceLoader;
+	settingsManager: SettingsManager;
 }
 
 /** Status of a single agent within a wait_for_agent result. */
@@ -851,8 +861,15 @@ export class TaskController {
 					warnings.push(...entries);
 				};
 				let resourceLoader: DefaultResourceLoader;
+				let childSettingsManager: SettingsManager | undefined;
 				try {
-					resourceLoader = await createResourceLoaderFactory(agent, childRuntime, effectiveCwd, reportWarnings);
+					const loaderSetup = await createResourceLoaderFactory(agent, childRuntime, effectiveCwd, reportWarnings);
+					if ("resourceLoader" in loaderSetup) {
+						resourceLoader = loaderSetup.resourceLoader;
+						childSettingsManager = loaderSetup.settingsManager;
+					} else {
+						resourceLoader = loaderSetup;
+					}
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					return {
@@ -892,6 +909,7 @@ export class TaskController {
 						fallbackModel,
 						modelResolver,
 						modelRegistry,
+						settingsManager: childSettingsManager,
 						createResourceLoader: async () => resourceLoader,
 					});
 					runLogger.info("task_session_setup_completed", {
@@ -930,7 +948,7 @@ export class TaskController {
 					runLogger.warn("task_run_blocked_unconsumed_result_after_setup", { recordId: record!.id });
 					if (!hadOpenSessionBeforeSetup) {
 						try {
-							sessionManager.disposeSession(record!.id);
+							await sessionManager.disposeSession(record!.id);
 						} catch {
 							/* best-effort cleanup for rejected setup */
 						}
@@ -1054,14 +1072,53 @@ export class TaskController {
 
 					let asyncAbortContextUsage: SubagentContextUsage | undefined;
 					let asyncAbortContextUsageCaptured = false;
+					let asyncAbortRequested = false;
+					let asyncPromptStarted = false;
 					const abort = () => {
 						runLogger.warn("task_async_signal_abort", { recordId: record!.id });
+						asyncAbortRequested = true;
 						asyncAbortContextUsage = readSubagentContextUsage(session);
 						asyncAbortContextUsageCaptured = true;
-						void session?.abort();
+						if (asyncPromptStarted) void session?.abort();
 					};
-					if (context.signal?.aborted) abort();
-					else context.signal?.addEventListener("abort", abort, { once: true });
+					if (context.signal?.aborted) {
+						abort();
+						const message = "Task execution was aborted.";
+						const baseRecord = metadataStore.findRecord(record!.id) ?? record!;
+						record = TaskController.persistTerminalOutcome(
+							metadataStore,
+							baseRecord,
+							"aborted",
+							message,
+							"parent_signal",
+							asyncAbortContextUsage,
+						);
+						sessionManager.finalizeAsyncRun(record.id, {
+							output: "",
+							error: message,
+							terminalOutcome: "aborted",
+							terminalError: message,
+							terminalAt: record.terminalAt,
+							abortReason: "parent_signal",
+							contextUsage: asyncAbortContextUsage,
+							warnings,
+						});
+						return {
+							content: [{ type: "text", text: message }],
+							details: {
+								id: record.id,
+								displayName: record.displayName,
+								agentType: record.agentType,
+								description: params.description,
+								resumed: Boolean(params.resume),
+								sessionFile: record.sessionFile,
+								warnings,
+								error: message,
+								terminalOutcome: "aborted",
+							},
+						};
+					}
+					context.signal?.addEventListener("abort", abort, { once: true });
 
 					const finish = (
 						resolved: boolean,
@@ -1144,7 +1201,11 @@ export class TaskController {
 					};
 
 					Promise.resolve()
-						.then(() => session.prompt(params.prompt))
+						.then(() => {
+							if (asyncAbortRequested) throw new Error("Task execution was aborted.");
+							asyncPromptStarted = true;
+							return session.prompt(params.prompt);
+						})
 						.then(() => TaskController._ensureFinalResponse(session))
 						.then(
 							(terminal) => finish(true, undefined, terminal),
@@ -1496,7 +1557,7 @@ export class TaskController {
 						/* best-effort */
 					}
 					try {
-						sessionManager.disposeSession(record!.id);
+						await sessionManager.disposeSession(record!.id);
 					} catch {
 						/* may already be disposed */
 					}
@@ -1634,6 +1695,17 @@ export class TaskController {
 
 		/** Deduplicate IDs while preserving order. */
 		const uniqueIds = [...new Set(agentIds)];
+		const cancelledWaitResult = (): TaskResult => ({
+			content: [
+				{ type: "text", text: "wait_for_agent was cancelled; no further timeout escalation will be started." },
+			],
+			details: {
+				warnings,
+				error: "wait_cancelled",
+				agents: uniqueIds.map(buildResult),
+			},
+		});
+		if (context.signal?.aborted) return cancelledWaitResult();
 
 		const persistAgentTerminalResult = (agent: AgentWaitResult): void => {
 			if (agent.status !== "completed" && agent.status !== "killed") {
@@ -1737,7 +1809,7 @@ export class TaskController {
 			const waitForReady = (id: string) =>
 				(sessionManager.isAsyncRunning(id)
 					? sessionManager.waitForAsyncResult(id, waitAbortController.signal)
-					: sessionManager.waitForSessionEnd(id)
+					: sessionManager.waitForSessionEnd(id, waitAbortController.signal)
 				).then(() => id);
 
 			const waitPromises = runningIds.map(waitForReady);
@@ -1745,17 +1817,35 @@ export class TaskController {
 				? Promise.all(waitPromises).then(() => "__all_completed__")
 				: Promise.race(waitPromises);
 
+			let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 			const timeoutPromise = new Promise<string>((resolve) => {
-				setTimeout(() => resolve("__timeout__"), timeoutMs);
+				timeoutHandle = setTimeout(() => resolve("__timeout__"), timeoutMs);
+			});
+			let removeParentAbortListener = () => {};
+			const parentCancellation = new Promise<string>((resolve) => {
+				if (context.signal?.aborted) {
+					resolve("__cancelled__");
+					return;
+				}
+				const onAbort = () => resolve("__cancelled__");
+				context.signal?.addEventListener("abort", onAbort, { once: true });
+				removeParentAbortListener = () => context.signal?.removeEventListener("abort", onAbort);
 			});
 
-			const winner = await Promise.race([waitCompletion, timeoutPromise]);
+			let winner: string;
+			try {
+				winner = await Promise.race([waitCompletion, timeoutPromise, parentCancellation]);
+			} finally {
+				if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+				removeParentAbortListener();
+				waitAbortController.abort();
+			}
 			runLogger.debug("wait_for_agent_wait_race", {
 				winner,
 				waitAll,
 				ids: runningIds,
 			});
-			waitAbortController.abort();
+			if (winner === "__cancelled__") return cancelledWaitResult();
 
 			// Yield to the microtask queue so finish() can run storeAsyncResult
 			// before we re-classify.
@@ -1764,6 +1854,7 @@ export class TaskController {
 			});
 
 			if (winner === "__timeout__") {
+				if (context.signal?.aborted) return cancelledWaitResult();
 				runLogger.warn("wait_for_agent_timed_out", {
 					timeoutMs,
 					timedIds: runningIds,
@@ -1788,12 +1879,14 @@ export class TaskController {
 				// bounded final-summary/forced-abort fallback if the agent remains running.
 				const killOnTimeout = opts.kill_on_timeout === true;
 				if (killOnTimeout && timedOutIds.length > 0) {
+					if (context.signal?.aborted) return cancelledWaitResult();
 					runLogger.warn("wait_for_agent_kill_escalation_started", {
 						count: timedOutIds.length,
 						windowMinutes: timeoutMinutes,
 					});
 					// Send a finish request to each timed-out agent.
 					for (const id of timedOutIds) {
+						if (context.signal?.aborted) return cancelledWaitResult();
 						try {
 							runLogger.warn("wait_for_agent_soft_kill_sent", { agentId: id });
 							sessionManager.sendKillMessage(id, timeoutMinutes);
@@ -1814,28 +1907,46 @@ export class TaskController {
 					const killAbortController = new AbortController();
 					const waitForFinishResult = async (id: string) => {
 						await Promise.race([
-							sessionManager.waitForSessionEnd(id),
+							sessionManager.waitForSessionEnd(id, killAbortController.signal),
 							sessionManager.waitForAsyncResult(id, killAbortController.signal),
 						]);
 						const result = sessionManager.getAsyncResult(id);
 						if (result && result.terminalOutcome !== "abort_request_failed") {
 							return id;
 						}
-						await sessionManager.waitForSessionEnd(id);
+						await sessionManager.waitForSessionEnd(id, killAbortController.signal);
 						return id;
 					};
 					const killCompleted = Promise.all(timedOutIds.map(waitForFinishResult)).then(
 						() => "__kill_completed__" as const,
 					);
+					let killTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
 					const killTimeoutPromise = new Promise<"__kill_timeout__">((resolve) => {
-						setTimeout(() => resolve("__kill_timeout__"), timeoutMs);
+						killTimeoutHandle = setTimeout(() => resolve("__kill_timeout__"), timeoutMs);
+					});
+					let removeKillAbortListener = () => {};
+					const killCancellation = new Promise<"__cancelled__">((resolve) => {
+						if (context.signal?.aborted) {
+							resolve("__cancelled__");
+							return;
+						}
+						const onAbort = () => resolve("__cancelled__");
+						context.signal?.addEventListener("abort", onAbort, { once: true });
+						removeKillAbortListener = () => context.signal?.removeEventListener("abort", onAbort);
 					});
 
-					const killResult = await Promise.race([killCompleted, killTimeoutPromise]);
+					let killResult: "__kill_completed__" | "__kill_timeout__" | "__cancelled__";
+					try {
+						killResult = await Promise.race([killCompleted, killTimeoutPromise, killCancellation]);
+					} finally {
+						if (killTimeoutHandle !== undefined) clearTimeout(killTimeoutHandle);
+						removeKillAbortListener();
+						killAbortController.abort();
+					}
 					runLogger.debug("wait_for_agent_kill_wait_result", {
 						killResult,
 					});
-					killAbortController.abort();
+					if (killResult === "__cancelled__") return cancelledWaitResult();
 
 					// Track which agents were explicitly forcibly aborted.
 					const hardAbortedIds = new Set<string>();
@@ -1852,7 +1963,7 @@ export class TaskController {
 								(r.terminalOutcome === "abort_request_failed" && sessionManager.hasOpenSession(id))
 							);
 						});
-						const summaryResults = await Promise.all(
+						const pendingSummaryResults = Promise.all(
 							stillRunningIds.map(async (id) => {
 								if (!sessionManager.requestAbortSummary) {
 									return [
@@ -1861,7 +1972,10 @@ export class TaskController {
 									] as const;
 								}
 								try {
-									return [id, await sessionManager.requestAbortSummary(id)] as const;
+									const summary = context.signal
+										? await sessionManager.requestAbortSummary(id, context.signal)
+										: await sessionManager.requestAbortSummary(id);
+									return [id, summary] as const;
 								} catch (error) {
 									return [
 										id,
@@ -1874,6 +1988,25 @@ export class TaskController {
 								}
 							}),
 						);
+						let removeSummaryAbortListener = () => {};
+						const summaryCancellation = new Promise<"__cancelled__">((resolve) => {
+							if (context.signal?.aborted) {
+								resolve("__cancelled__");
+								return;
+							}
+							const onAbort = () => resolve("__cancelled__");
+							context.signal?.addEventListener("abort", onAbort, { once: true });
+							removeSummaryAbortListener = () => context.signal?.removeEventListener("abort", onAbort);
+						});
+						let summaryResults: Awaited<typeof pendingSummaryResults> | "__cancelled__";
+						try {
+							summaryResults = await Promise.race([pendingSummaryResults, summaryCancellation]);
+						} finally {
+							removeSummaryAbortListener();
+						}
+						if (summaryResults === "__cancelled__" || context.signal?.aborted) {
+							return cancelledWaitResult();
+						}
 
 						for (const [id, summary] of summaryResults) {
 							runLogger.warn("wait_for_agent_abort_summary_result", {
@@ -1885,6 +2018,7 @@ export class TaskController {
 								persistTimeoutOutcome(id, "aborted", undefined, "final_summary");
 								continue;
 							}
+							if (context.signal?.aborted) return cancelledWaitResult();
 							try {
 								runLogger.warn("wait_for_agent_hard_abort", { agentId: id });
 								sessionManager.abortSession(id);
@@ -1951,6 +2085,7 @@ export class TaskController {
 			});
 			return formatWaitResult(finalResults);
 		} catch (error) {
+			if (context.signal?.aborted) return cancelledWaitResult();
 			runLogger.error("wait_for_agent_failure", {
 				error: error instanceof Error ? error.message : String(error),
 			});

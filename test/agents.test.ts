@@ -158,6 +158,24 @@ describe("discoverAgents", () => {
 		});
 	});
 
+	it("normalizes legacy maximum effort and rejects unknown Pi thinking levels", () => {
+		writeAgent(agentsDir, "LegacyEffort", "Legacy effort", {
+			reasoning_effort: "maximum",
+			smart_reasoning_effort: "turbo",
+		});
+		const registry = new AgentRegistry().discover();
+		const agent = registry.find("legacyeffort")!;
+
+		expect(agent.reasoningEffort).toBe("max");
+		expect(agent.smartReasoningEffort).toBeUndefined();
+		expect(registry.diagnostics).toEqual([
+			expect.objectContaining({
+				level: "warn",
+				reason: expect.stringContaining("Invalid smart_reasoning_effort value"),
+			}),
+		]);
+	});
+
 	it("parses checkbox fields as YAML arrays", () => {
 		writeAgent(agentsDir, "ArrayAgent", "Agent with YAML arrays", {
 			tools: ["read", "bash", "edit"],

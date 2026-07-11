@@ -45,7 +45,17 @@ type PiCodingAgentApi = {
 		agentDir: string;
 		settingsManager?: unknown;
 	}) => PiResourceLoader;
-	SettingsManager?: { create(cwd?: string, agentDir?: string): unknown };
+	SettingsManager?: {
+		create(
+			cwd?: string,
+			agentDir?: string,
+			options?: { projectTrusted?: boolean },
+		): {
+			getDefaultProjectTrust?(): "ask" | "always" | "never";
+			setProjectTrusted?(trusted: boolean): void;
+		};
+	};
+	ProjectTrustStore?: new (agentDir: string) => { get(cwd: string): boolean | null };
 	SessionManager?: { create(cwd: string, sessionDir?: string): unknown };
 	createAgentSession?: (options: {
 		cwd: string;
@@ -54,6 +64,16 @@ type PiCodingAgentApi = {
 		sessionManager?: unknown;
 	}) => Promise<{ session: PiSession; extensionsResult?: { extensions?: LoadedPiExtension[] } }>;
 };
+
+export function createTrustAwareDiscoverySettings(pi: PiCodingAgentApi, cwd: string, agentDir: string): unknown {
+	const settingsManager = pi.SettingsManager?.create(cwd, agentDir, { projectTrusted: false });
+	if (!settingsManager) return undefined;
+	const savedDecision = pi.ProjectTrustStore ? new pi.ProjectTrustStore(agentDir).get(cwd) : null;
+	const projectTrusted =
+		savedDecision === null ? settingsManager.getDefaultProjectTrust?.() === "always" : savedDecision;
+	settingsManager.setProjectTrusted?.(projectTrusted);
+	return settingsManager;
+}
 
 // ---------------------------------------------------------------------------
 // Pi runtime resource helpers
@@ -349,7 +369,7 @@ export async function discoverPiRuntimeResources(
 	}
 	if (!pi.DefaultResourceLoader) return cached.tools.length > 0 ? cached : undefined;
 
-	const settingsManager = pi.SettingsManager?.create?.(cwd, agentDir);
+	const settingsManager = createTrustAwareDiscoverySettings(pi, cwd, agentDir);
 	let loader: PiResourceLoader | undefined;
 	let dynamicTools: Array<{ name: string; sourceInfo?: LoadedPiExtension["sourceInfo"] }> = [];
 
@@ -563,7 +583,7 @@ export function modelDisplayNameToCanonicalRef(displayName: string, models: Mode
 // ---------------------------------------------------------------------------
 
 /** Built-in Pi tool names (hardcoded from pi-coding-agent SDK). */
-const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "Task"];
+const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "Task", "wait_for_agent"];
 
 /**
  * Discover available tools.

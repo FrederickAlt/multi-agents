@@ -6,6 +6,7 @@ import { render } from "ink";
 import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscoveredModelsResult, PiRuntimeDiscovery } from "../../src/tui/discovery/options.js";
+import { useConfig } from "../../src/tui/hooks/useConfig.js";
 import { useOptionDiscovery } from "../../src/tui/hooks/useOptionDiscovery.js";
 import type { ModelDiscoveryState } from "../../src/tui/state/types.js";
 
@@ -83,6 +84,12 @@ function OptionDiscoveryProbe({
 	return null;
 }
 
+function ConfigDiscoveryProbe({ onFrame }: { onFrame: (config: ReturnType<typeof useConfig>) => void }) {
+	const config = useConfig();
+	onFrame(config);
+	return null;
+}
+
 describe("useOptionDiscovery", () => {
 	let originalAgentDir: string | undefined;
 	let tempAgentDir: string;
@@ -94,7 +101,8 @@ describe("useOptionDiscovery", () => {
 		pendingModelDiscoveries.length = 0;
 		pendingRuntimeDiscoveries.length = 0;
 		discoverModelsMock.mockClear();
-		discoverPiRuntimeResourcesMock.mockClear();
+		discoverPiRuntimeResourcesMock.mockReset();
+		discoverPiRuntimeResourcesMock.mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
@@ -239,6 +247,67 @@ describe("useOptionDiscovery", () => {
 			const finalFrame = frames.at(-1);
 			expect(finalFrame?.tools).toContain("runtime_tool");
 			expect(finalFrame?.staleTools).toEqual([]);
+		} finally {
+			app?.unmount();
+		}
+	});
+
+	it("preserves saved frontmatter when delayed runtime discovery updates derived options", async () => {
+		discoverPiRuntimeResourcesMock.mockImplementationOnce(() => {
+			return new Promise<PiRuntimeDiscovery | undefined>((resolve, reject) => {
+				pendingRuntimeDiscoveries.push({ resolve, reject });
+			});
+		});
+		fs.mkdirSync(path.join(tempAgentDir, "agents"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tempAgentDir, "agents", "coder.md"),
+			["---", "description: coder", "tools:", "  - read", "---", "body"].join("\n"),
+		);
+		let latest: ReturnType<typeof useConfig> | undefined;
+		const stdout = new Writable({
+			write(_chunk, _encoding, callback) {
+				callback();
+			},
+		});
+		const flush = async () => {
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+		};
+
+		let app: ReturnType<typeof render> | null = null;
+		try {
+			app = render(
+				<ConfigDiscoveryProbe
+					onFrame={(config) => {
+						latest = config;
+					}}
+				/>,
+				{
+					stdout: stdout as unknown as NodeJS.WriteStream,
+					patchConsole: false,
+				},
+			);
+			await flush();
+			await flush();
+
+			act(() => latest?.openOverlay(0, "tools"));
+			await flush();
+			act(() => latest?.instantSaveCheckbox("bash"));
+			await flush();
+			expect(latest?.state.agents[0]?.frontmatter?.tools).toEqual(["read", "bash"]);
+
+			pendingRuntimeDiscoveries[0]?.resolve({
+				tools: ["bash", "read"],
+				toolExtensionNames: {},
+				extensions: [],
+				skills: [],
+			});
+			await flush();
+			await flush();
+
+			expect(latest?.state.agents[0]?.frontmatter?.tools).toEqual(["read", "bash"]);
+			expect(latest?.state.options.tools).toEqual(["bash", "read"]);
 		} finally {
 			app?.unmount();
 		}

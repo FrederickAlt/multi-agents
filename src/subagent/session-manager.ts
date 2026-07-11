@@ -15,9 +15,13 @@
  */
 
 import * as fs from "node:fs";
-import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import { createAgentSession, type DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import {
+	createAgentSession,
+	type DefaultResourceLoader,
+	SessionManager,
+	type SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 
 export type ResolvedModel = Pick<Model<any>, "id" | "provider"> & Partial<Model<any>>;
 
@@ -25,7 +29,7 @@ import type { AgentConfig } from "./agents.js";
 import { readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
 import { type DebugLogger, makeNoopDebugLogger } from "./debug-logger.js";
 import type { SubagentRecord, TerminalOutcome } from "./metadata.js";
-import { extractOutput, extractTerminalOutput } from "./output-extraction.js";
+import { extractOutput } from "./output-extraction.js";
 import {
 	getSelectedRootAgentFromSessionEntries,
 	SELECTED_ROOT_AGENT_ENTRY_KEY,
@@ -39,7 +43,11 @@ export const ABORT_FINAL_SUMMARY_MESSAGE = `[System] The parent agent is abortin
 
 export type AbortSummaryResult =
 	| { status: "summarized"; output: string; toolOverrideApplied: boolean }
-	| { status: "unavailable" | "failed" | "timed_out" | "no_output"; error?: string; toolOverrideApplied: boolean };
+	| {
+			status: "unavailable" | "failed" | "timed_out" | "no_output" | "cancelled";
+			error?: string;
+			toolOverrideApplied: boolean;
+	  };
 
 export interface AsyncRunResult {
 	output: string;
@@ -53,8 +61,9 @@ export interface AsyncRunResult {
 }
 
 export interface ManagedAgentSession {
-	dispose(): void;
+	dispose(): unknown;
 	getActiveToolNames(): string[];
+	getAllTools(): Array<{ name: string }>;
 	subscribe(listener: (event: unknown) => void): () => void;
 	prompt(message: string, options?: { streamingBehavior?: "steer" }): unknown;
 	steer?: (message: string) => unknown;
@@ -85,6 +94,8 @@ export interface AgentSessionFactory {
 		sessionManager: SessionManager;
 		thinkingLevel: ThinkingLevel | undefined;
 		modelRegistry?: any;
+		settingsManager?: SettingsManager;
+		warnings: string[];
 	}): Promise<ManagedAgentSession>;
 }
 
@@ -121,8 +132,10 @@ export class PiAgentSessionFactory implements AgentSessionFactory {
 		sessionManager: SessionManager;
 		thinkingLevel: ThinkingLevel | undefined;
 		modelRegistry?: any;
-	}): Promise<AgentSession> {
-		const { session } = await createAgentSession({
+		settingsManager?: SettingsManager;
+		warnings: string[];
+	}): Promise<ManagedAgentSession> {
+		const { session, extensionsResult } = await createAgentSession({
 			cwd: config.cwd,
 			model: config.model as Model<any> | undefined,
 			tools: config.tools,
@@ -132,13 +145,39 @@ export class PiAgentSessionFactory implements AgentSessionFactory {
 			// Share parent's modelRegistry so the child inherits the same
 			// auth state, runtime overrides, and dynamically-registered providers.
 			modelRegistry: config.modelRegistry,
+			settingsManager: config.settingsManager,
 		});
+		for (const failure of extensionsResult.errors) {
+			config.warnings.push(`Extension "${failure.path}" failed to load: ${failure.error}`);
+		}
+
+		const originalDispose = session.dispose.bind(session);
+		let disposePromise: Promise<void> | undefined;
+		session.dispose = () => {
+			disposePromise ??= (async () => {
+				try {
+					await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+				} finally {
+					await Promise.resolve(originalDispose());
+				}
+			})();
+			return disposePromise;
+		};
 		// Task sub-agents are not managed by InteractiveMode/PrintMode, so the
 		// usual host-level bind step would otherwise never happen. Bind here so
 		// session_start/resources_discover handlers run and extensions that register
 		// tools lazily (for example package-provided web tools) become available.
-		await session.bindExtensions({});
-		return session;
+		try {
+			await session.bindExtensions({
+				onError: (error) => {
+					config.warnings.push(`Extension runtime error (${error.event}, ${error.extensionPath}): ${error.error}`);
+				},
+			});
+		} catch (error) {
+			await Promise.resolve(session.dispose());
+			throw error;
+		}
+		return session as unknown as ManagedAgentSession;
 	}
 }
 
@@ -224,6 +263,8 @@ export interface SessionSetupContext {
 	modelResolver: ModelResolver;
 	/** The parent's ModelRegistry, so the child shares auth state and providers. */
 	modelRegistry?: any;
+	/** The same settings instance used by the trust-aware child resource loader. */
+	settingsManager?: SettingsManager;
 	/**
 	 * Create and reload a ResourceLoader configured for the given agent.
 	 * The implementation captures any parent-runtime state needed.
@@ -237,6 +278,7 @@ export interface SessionSetupContext {
 
 export class SubagentSessionManager {
 	private openSessions = new Map<string, ManagedAgentSession>();
+	private pendingDisposals = new Map<string, Promise<void>>();
 	private runLocks = new Map<string, Promise<void>>();
 	private completedSessions = new Set<string>();
 	private asyncResults = new Map<string, AsyncRunResult>();
@@ -312,13 +354,18 @@ export class SubagentSessionManager {
 			recordId: record.id,
 			agentType: agent?.name,
 		});
+		const pendingDisposal = this.pendingDisposals.get(record.id);
+		if (pendingDisposal) {
+			sessionLogger.debug("session_create_waiting_for_disposal");
+			await pendingDisposal;
+		}
 		const existing = this.openSessions.get(record.id);
 		if (existing) {
 			sessionLogger.debug("session_reused", { hasOpenSession: true });
 			return existing;
 		}
 
-		const { metadataStore, cwd, fallbackModel, modelResolver, modelRegistry } = context;
+		const { metadataStore, cwd, fallbackModel, modelResolver, modelRegistry, settingsManager } = context;
 		sessionLogger.info("session_create_start", {
 			cwdLength: cwd.length,
 			recordDepth: record.depth,
@@ -376,6 +423,8 @@ export class SubagentSessionManager {
 				sessionManager: piSessionManager,
 				thinkingLevel: agent.reasoningEffort as ThinkingLevel | undefined,
 				modelRegistry,
+				settingsManager,
+				warnings,
 			});
 		} catch (error) {
 			sessionLogger.error("session_create_failed", {
@@ -383,6 +432,15 @@ export class SubagentSessionManager {
 			});
 			throw error;
 		}
+		// A completed async run keeps transcript/result state available until the
+		// parent consumes it, but once a replacement session has been created its
+		// old agent_end marker must not make the new run appear already finished.
+		this.completedSessions.delete(record.id);
+		if (this.asyncRunLifecycle.get(record.id) === "completed") {
+			this.asyncRunLifecycle.delete(record.id);
+		}
+		this.killInProgress.delete(record.id);
+		this.abortContextUsageSnapshots.delete(record.id);
 		sessionLogger.info("session_created", { sessionFile: record.sessionFile, hasTools: !!agent.tools });
 
 		// 6. Check tool availability
@@ -416,7 +474,7 @@ export class SubagentSessionManager {
 		const originalDispose = session.dispose.bind(session);
 		session.dispose = () => {
 			unsubscribe();
-			originalDispose();
+			return originalDispose();
 		};
 
 		this.openSessions.set(record.id, session);
@@ -431,19 +489,20 @@ export class SubagentSessionManager {
 	 * No-op if the ID is not tracked. The wrapped dispose handles
 	 * unsubscribe before the real disposal.
 	 */
-	disposeSession(id: string): void {
+	async disposeSession(id: string): Promise<void> {
 		const session = this.openSessions.get(id);
 		const logger = this.logger.child({ component: "subagent_session_manager", recordId: id });
 		if (session) {
 			logger.debug("session_dispose_start", { hasOpenSession: true });
-			try {
-				session.dispose();
-			} catch (error) {
-				logger.warn("session_dispose_error", { error: error instanceof Error ? error.message : String(error) });
-			}
-			this.openSessions.delete(id);
+			await this.beginSessionDisposal(id, session, logger, "session_dispose_error");
 		} else {
-			logger.debug("session_dispose_noop", { hasOpenSession: false });
+			const pendingDisposal = this.pendingDisposals.get(id);
+			if (pendingDisposal) {
+				logger.debug("session_dispose_waiting", { hasOpenSession: false });
+				await pendingDisposal;
+			} else {
+				logger.debug("session_dispose_noop", { hasOpenSession: false });
+			}
 		}
 		this.completedSessions.delete(id);
 		this.asyncInFlight.delete(id);
@@ -457,25 +516,74 @@ export class SubagentSessionManager {
 	 * Safe to call multiple times; does not throw if a session is
 	 * already disposed.
 	 */
-	disposeAll(): void {
+	async disposeAll(): Promise<void> {
 		const logger = this.logger.child({ component: "subagent_session_manager" });
-		logger.info("session_dispose_all_start", { count: this.openSessions.size });
-		for (const [, session] of this.openSessions) {
-			try {
-				session.dispose();
-			} catch (error) {
-				logger.warn("session_dispose_error", { error: error instanceof Error ? error.message : String(error) });
-				// Ignore errors from already-disposed sessions.
-			}
+		logger.info("session_dispose_all_start", {
+			count: this.openSessions.size,
+			pendingCount: this.pendingDisposals.size,
+		});
+		const disposals = new Set<Promise<void>>(this.pendingDisposals.values());
+		for (const [id, session] of [...this.openSessions]) {
+			disposals.add(this.beginSessionDisposal(id, session, logger, "session_dispose_error"));
 		}
-		this.openSessions.clear();
 		this.completedSessions.clear();
 		this.asyncResults.clear();
 		this.asyncResultWaiters.clear();
 		this.asyncInFlight.clear();
 		this.asyncRunLifecycle.clear();
 		this.abortContextUsageSnapshots.clear();
+		await Promise.all(disposals);
 		logger.info("session_dispose_all_done", { count: this.openSessions.size });
+	}
+
+	/**
+	 * Start disposing a tracked session and remember the promise until every
+	 * extension shutdown handler and the underlying session disposal complete.
+	 * Disposal failures remain best-effort: they are logged and converted to a
+	 * fulfilled promise so cleanup callers can safely await the lifecycle.
+	 */
+	private beginSessionDisposal(
+		id: string,
+		session: ManagedAgentSession,
+		logger: DebugLogger,
+		errorEvent: string,
+	): Promise<void> {
+		const existing = this.pendingDisposals.get(id);
+		if (existing) return existing;
+
+		if (this.openSessions.get(id) === session) {
+			this.openSessions.delete(id);
+		}
+
+		let complete!: () => void;
+		const completion = new Promise<void>((resolve) => {
+			complete = resolve;
+		});
+		let tracked!: Promise<void>;
+		tracked = completion.finally(() => {
+			if (this.pendingDisposals.get(id) === tracked) {
+				this.pendingDisposals.delete(id);
+			}
+		});
+		this.pendingDisposals.set(id, tracked);
+
+		try {
+			void Promise.resolve(session.dispose()).then(complete, (error) => {
+				logger.warn(errorEvent, {
+					recordId: id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				complete();
+			});
+		} catch (error) {
+			logger.warn(errorEvent, {
+				recordId: id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			complete();
+		}
+
+		return tracked;
 	}
 
 	// ---- Async completion ----
@@ -484,7 +592,7 @@ export class SubagentSessionManager {
 	 * Wait for a tracked session to reach `agent_end`.
 	 * Resolves immediately if the session already ended or is no longer tracked.
 	 */
-	async waitForSessionEnd(id: string): Promise<void> {
+	async waitForSessionEnd(id: string, signal?: AbortSignal): Promise<void> {
 		if (this.completedSessions.has(id)) {
 			this.logger.debug("session_wait_complete_immediate", { id });
 			return;
@@ -498,19 +606,44 @@ export class SubagentSessionManager {
 
 		const waitLogger = this.logger.child({ component: "subagent_session_manager", recordId: id });
 		waitLogger.debug("session_wait_start");
-		return new Promise<void>((resolve) => {
-			const unsubscribe = session.subscribe((event: any) => {
+		return new Promise<void>((resolve, reject) => {
+			let settled = false;
+			let unsubscribe: () => void = () => {};
+			const cleanup = () => {
+				signal?.removeEventListener("abort", onAbort);
+				unsubscribe();
+			};
+			const onAbort = () => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				reject(new Error("wait_for_session_end_cancelled"));
+			};
+			if (signal?.aborted) {
+				onAbort();
+				return;
+			}
+			const subscribedUnsubscribe = session.subscribe((event: any) => {
 				if (event.type === "agent_end") {
-					unsubscribe();
+					if (settled) return;
+					settled = true;
+					cleanup();
 					waitLogger.debug("session_wait_complete", { id });
 					resolve();
 				}
 			});
+			unsubscribe = subscribedUnsubscribe;
+			if (settled) {
+				unsubscribe();
+				return;
+			}
+			signal?.addEventListener("abort", onAbort, { once: true });
+			if (signal?.aborted) onAbort();
 		});
 	}
 
-	/** Store the output/error of a completed async sub-agent session. */
-	storeAsyncResult(id: string, result: AsyncRunResult): void {
+	/** Store async output/error, optionally without announcing terminal completion. */
+	storeAsyncResult(id: string, result: AsyncRunResult, options?: { notify?: boolean }): void {
 		this.logger.debug("session_async_result_stored", {
 			recordId: id,
 			outputLength: result.output.length,
@@ -522,7 +655,9 @@ export class SubagentSessionManager {
 			this.asyncResultWaiters.delete(id);
 			for (const resolve of waiters) resolve();
 		}
-		this._onAsyncResultReady?.(id);
+		if (options?.notify !== false) {
+			this._onAsyncResultReady?.(id);
+		}
 	}
 
 	/** Retrieve the stored output/error from a completed async sub-agent. */
@@ -574,6 +709,7 @@ export class SubagentSessionManager {
 			}
 			waiters.add(resolveWaiter);
 			signal?.addEventListener("abort", onAbort, { once: true });
+			if (signal?.aborted) onAbort();
 		});
 	}
 
@@ -669,6 +805,14 @@ export class SubagentSessionManager {
 		return true;
 	}
 
+	private _restoreRunningAfterSoftKill(id: string): boolean {
+		if (this._runLifecycleState(id) !== "soft-killing") return false;
+		this.asyncRunLifecycle.set(id, "running");
+		this.asyncInFlight.add(id);
+		this.killInProgress.delete(id);
+		return true;
+	}
+
 	private _finalizeAsyncRun(
 		id: string,
 		result: AsyncRunResult,
@@ -710,16 +854,7 @@ export class SubagentSessionManager {
 		this.killInProgress.delete(id);
 		this.abortContextUsageSnapshots.delete(id);
 		if (session) {
-			try {
-				session.dispose();
-			} catch (error) {
-				this.logger.warn("session_finalize_dispose_error", {
-					recordId: id,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			} finally {
-				this.openSessions.delete(id);
-			}
+			void this.beginSessionDisposal(id, session, this.logger, "session_finalize_dispose_error");
 		}
 	}
 
@@ -766,30 +901,16 @@ export class SubagentSessionManager {
 
 		sendFinishRequest().then(
 			() => {
-				const extracted = extractTerminalOutput(session.messages as any[]);
-				logger.debug("session_send_kill_prompt_completed", {
-					outputLength: extracted.text.length,
-					source: extracted.source,
-				});
-				if (extracted.source !== "assistant") {
-					logger.warn("session_send_kill_prompt_returned_without_final_output", {
-						outputLength: extracted.text.length,
-						source: extracted.source,
+				if (!this._restoreRunningAfterSoftKill(id)) {
+					logger.debug("session_send_kill_queue_success_ignored", {
+						state: this._runLifecycleState(id),
 					});
-					this.asyncRunLifecycle.set(id, "running");
-					this.asyncInFlight.add(id);
-					this.killInProgress.delete(id);
 					return;
 				}
-				this._finalizeAsyncRun(
-					id,
-					{
-						output: extracted.text,
-						warnings: [],
-						terminalOutcome: "completed",
-					},
-					{ allowOverwrite: true, source: "soft-kill" },
-				);
+				// AgentSession.steer() resolves when the message is queued, not when
+				// the steered turn completes. The original background prompt remains
+				// responsible for extracting output, storing the result, and disposal.
+				logger.debug("session_send_kill_queued");
 			},
 			(error: any) => {
 				if (this.asyncRunLifecycle.get(id) === "completed" || this.asyncRunLifecycle.get(id) === "hard-aborting") {
@@ -803,17 +924,19 @@ export class SubagentSessionManager {
 				const diagnostic = message || "failed to queue finish request";
 				const extracted = extractOutput(session.messages as any[]);
 				logger.warn("session_send_kill_prompt_failed", { error: diagnostic });
-				this.asyncRunLifecycle.set(id, "running");
-				this.asyncInFlight.add(id);
-				this.killInProgress.delete(id);
-				this.storeAsyncResult(id, {
-					output: extracted.text,
-					error: diagnostic,
-					warnings: [],
-					terminalOutcome: "abort_request_failed",
-					terminalError: diagnostic,
-					contextUsage,
-				});
+				if (!this._restoreRunningAfterSoftKill(id)) return;
+				this.storeAsyncResult(
+					id,
+					{
+						output: extracted.text,
+						error: diagnostic,
+						warnings: [],
+						terminalOutcome: "abort_request_failed",
+						terminalError: diagnostic,
+						contextUsage,
+					},
+					{ notify: false },
+				);
 			},
 		);
 	}
@@ -823,17 +946,32 @@ export class SubagentSessionManager {
 	 * for runtimes that expose setActiveToolsByName(); otherwise the prompt text
 	 * still explicitly forbids tools and the caller keeps the force-abort fallback.
 	 */
-	async requestAbortSummary(id: string, timeoutMs = ABORT_FINAL_SUMMARY_TIMEOUT_MS): Promise<AbortSummaryResult> {
+	async requestAbortSummary(
+		id: string,
+		timeoutOrSignal: number | AbortSignal = ABORT_FINAL_SUMMARY_TIMEOUT_MS,
+		explicitSignal?: AbortSignal,
+	): Promise<AbortSummaryResult> {
+		const timeoutMs = typeof timeoutOrSignal === "number" ? timeoutOrSignal : ABORT_FINAL_SUMMARY_TIMEOUT_MS;
+		const signal = typeof timeoutOrSignal === "number" ? explicitSignal : timeoutOrSignal;
 		const session = this.openSessions.get(id) as any;
 		const existingResult = this.asyncResults.get(id);
 		if (!session || (existingResult && existingResult.terminalOutcome !== "abort_request_failed")) {
 			return { status: "unavailable", toolOverrideApplied: false };
 		}
+		if (signal?.aborted) {
+			return { status: "cancelled", toolOverrideApplied: false };
+		}
 
 		const logger = this.logger.child({ component: "subagent_session_manager", recordId: id });
 		const preAbortContextUsage = readSubagentContextUsage(session);
+		if (!this._startHardAbort(id)) {
+			return { status: "unavailable", toolOverrideApplied: false };
+		}
 		this.abortContextUsageSnapshots.set(id, preAbortContextUsage);
-		this._startHardAbort(id);
+		const summaryAttemptController = new AbortController();
+		const operationSignal = signal
+			? AbortSignal.any([signal, summaryAttemptController.signal])
+			: summaryAttemptController.signal;
 		const setActiveToolsByName = session.setActiveToolsByName;
 		const getActiveToolNames = session.getActiveToolNames;
 		const toolOverrideApplied = typeof setActiveToolsByName === "function";
@@ -844,16 +982,74 @@ export class SubagentSessionManager {
 			cancelGraceMs: ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS,
 		});
 
-		const sleep = (ms: number) =>
-			new Promise<void>((resolve) => {
-				setTimeout(resolve, ms);
+		const cancellationError = new Error("abort_summary_cancelled");
+		const throwIfCancelled = () => {
+			if (operationSignal.aborted) throw cancellationError;
+		};
+		const raceWithCancellation = <T>(promise: Promise<T>): Promise<T> => {
+			if (operationSignal.aborted) return Promise.reject(cancellationError);
+			return new Promise<T>((resolve, reject) => {
+				let settled = false;
+				const cleanup = () => operationSignal.removeEventListener("abort", onAbort);
+				const onAbort = () => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					reject(cancellationError);
+				};
+				operationSignal.addEventListener("abort", onAbort, { once: true });
+				if (operationSignal.aborted) {
+					onAbort();
+					return;
+				}
+				promise.then(
+					(value) => {
+						if (settled) return;
+						settled = true;
+						cleanup();
+						resolve(value);
+					},
+					(error) => {
+						if (settled) return;
+						settled = true;
+						cleanup();
+						reject(error);
+					},
+				);
 			});
+		};
+		const sleep = (ms: number) => {
+			return new Promise<void>((resolve, reject) => {
+				let settled = false;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const cleanup = () => {
+					if (timer !== undefined) clearTimeout(timer);
+					operationSignal.removeEventListener("abort", onAbort);
+				};
+				const onAbort = () => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					reject(cancellationError);
+				};
+				timer = setTimeout(() => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					resolve();
+				}, ms);
+				operationSignal.addEventListener("abort", onAbort, { once: true });
+				if (operationSignal.aborted) onAbort();
+			});
+		};
 		const isAlreadyProcessing = (error: unknown) =>
 			/already processing|still processing|currently processing/i.test(
 				error instanceof Error ? error.message : String(error),
 			);
 
+		let activeSummaryAttempt: Promise<number> | undefined;
 		try {
+			throwIfCancelled();
 			// AgentSession.abort() requests model/agent cancellation and waits for idle;
 			// bash/tool cancellation is separate in current Pi, so call abortBash().
 			// Start the agent_end wait before aborting so a quickly finishing tool result
@@ -867,8 +1063,11 @@ export class SubagentSessionManager {
 				if (typeof session.subscribe !== "function") {
 					return;
 				}
-				const unsubscribe = session.subscribe((event: any) => {
+				let ended = false;
+				let unsubscribe: () => void = () => {};
+				const subscribedUnsubscribe = session.subscribe((event: any) => {
 					if (event.type === "agent_end") {
+						ended = true;
 						try {
 							unsubscribe();
 						} catch {
@@ -877,6 +1076,8 @@ export class SubagentSessionManager {
 						resolve();
 					}
 				});
+				unsubscribe = subscribedUnsubscribe;
+				if (ended) unsubscribe();
 				stopObservingCancelEnd = () => {
 					try {
 						unsubscribe();
@@ -885,6 +1086,7 @@ export class SubagentSessionManager {
 					}
 				};
 			});
+			throwIfCancelled();
 			if (typeof session.abortBash === "function") {
 				try {
 					session.abortBash();
@@ -905,9 +1107,13 @@ export class SubagentSessionManager {
 					});
 				}
 			}
-			await Promise.race([sessionEndPromise, sleep(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS)]);
-			stopObservingCancelEnd?.();
+			try {
+				await Promise.race([sessionEndPromise, sleep(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS)]);
+			} finally {
+				stopObservingCancelEnd?.();
+			}
 			await Promise.resolve();
+			throwIfCancelled();
 
 			if (!toolOverrideApplied && typeof getActiveToolNames === "function") {
 				logger.warn("session_abort_summary_no_tool_override", {
@@ -920,19 +1126,23 @@ export class SubagentSessionManager {
 				timeoutHandle = setTimeout(() => resolve("timed_out"), timeoutMs);
 			});
 			const sendAndWait = (async (): Promise<number> => {
+				throwIfCancelled();
 				if (typeof session.prompt !== "function") {
 					throw new Error("Session cannot accept a final summary prompt.");
 				}
 				const deadline = Date.now() + ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS;
 				let lastError: unknown;
 				do {
+					throwIfCancelled();
 					if (toolOverrideApplied) {
 						setActiveToolsByName.call(session, []);
 					}
 					const summaryStartIndex = Array.isArray(session.messages) ? session.messages.length : 0;
 					try {
-						await session.prompt(ABORT_FINAL_SUMMARY_MESSAGE, { streamingBehavior: "steer" });
-						await this.waitForSessionEnd(id);
+						await raceWithCancellation(
+							Promise.resolve(session.prompt(ABORT_FINAL_SUMMARY_MESSAGE, { streamingBehavior: "steer" })),
+						);
+						await this.waitForSessionEnd(id, operationSignal);
 						return summaryStartIndex;
 					} catch (error) {
 						lastError = error;
@@ -944,10 +1154,13 @@ export class SubagentSessionManager {
 				} while (Date.now() < deadline);
 				throw lastError;
 			})();
+			activeSummaryAttempt = sendAndWait;
 
 			try {
-				const result = await Promise.race([sendAndWait, timeout]);
+				const result = await raceWithCancellation(Promise.race([sendAndWait, timeout]));
 				if (result === "timed_out") {
+					summaryAttemptController.abort();
+					await sendAndWait.catch(() => undefined);
 					logger.warn("session_abort_summary_timed_out", { timeoutMs, toolOverrideApplied });
 					return { status: "timed_out", toolOverrideApplied };
 				}
@@ -981,6 +1194,31 @@ export class SubagentSessionManager {
 				}
 			}
 		} catch (error) {
+			if (signal?.aborted || error === cancellationError) {
+				summaryAttemptController.abort();
+				await activeSummaryAttempt?.catch(() => undefined);
+				try {
+					void Promise.resolve(session.abort()).catch(() => undefined);
+				} catch {
+					/* best-effort cancellation of the summary turn */
+				}
+				const extracted = extractOutput(session.messages as any[]);
+				this._finalizeAsyncRun(
+					id,
+					{
+						output: extracted.text,
+						error: "aborted",
+						warnings: [],
+						abortReason: "wait_cancelled_during_abort_summary",
+						terminalOutcome: "aborted",
+						terminalError: extracted.source === "diagnostic" ? extracted.text : undefined,
+						contextUsage: preAbortContextUsage,
+					},
+					{ allowOverwrite: true, source: "hard-abort" },
+				);
+				logger.warn("session_abort_summary_cancelled", { toolOverrideApplied });
+				return { status: "cancelled", toolOverrideApplied };
+			}
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn("session_abort_summary_failed", { error: message, toolOverrideApplied });
 			return { status: "failed", error: message, toolOverrideApplied };

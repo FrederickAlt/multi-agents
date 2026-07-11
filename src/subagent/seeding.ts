@@ -2,17 +2,16 @@
  * Configuration Seeding
  *
  * Copies bundled Agent definition and Prompt part files into
- * ~/.pi/agent/ when the target directories don't exist yet.
+ * ~/.pi/agent/ when bundled files are missing from the target directories.
  *
- * Seeding runs once (idempotent): if the directory already exists,
- * no files are added or overwritten. Hidden files (starting with ".")
- * are skipped.
+ * Seeding is idempotent: existing files are never overwritten. Hidden files
+ * (starting with ".") are skipped.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,12 +24,13 @@ const thisDir = path.dirname(fileURLToPath(import.meta.url));
  * - Logs a warning on individual copy failure but does not throw
  */
 function seedDirectory(bundledDir: string, targetDir: string): void {
-	// Idempotent: if the target already exists, do nothing.
-	if (fs.existsSync(targetDir)) return;
-
 	if (!fs.existsSync(bundledDir)) return;
 
-	fs.mkdirSync(targetDir, { recursive: true });
+	try {
+		fs.mkdirSync(targetDir, { recursive: true });
+	} catch {
+		return;
+	}
 
 	let entries: fs.Dirent[];
 	try {
@@ -45,9 +45,12 @@ function seedDirectory(bundledDir: string, targetDir: string): void {
 		if (entry.name.startsWith(".")) continue;
 
 		const src = path.join(bundledDir, entry.name);
+		const target = path.join(targetDir, entry.name);
+		if (fs.existsSync(target)) continue;
 		try {
-			fs.copyFileSync(src, path.join(targetDir, entry.name));
+			fs.copyFileSync(src, target, fs.constants.COPYFILE_EXCL);
 		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
 			console.warn(`[pi-subagent] Failed to seed "${entry.name}": ${(err as Error).message}`);
 		}
 	}
@@ -56,8 +59,8 @@ function seedDirectory(bundledDir: string, targetDir: string): void {
 /**
  * Seed bundled Agent definitions and Prompt parts into ~/.pi/agent/.
  *
- * Idempotent — safe to call multiple times. Seeding only happens when
- * the target subdirectory (agents/ or prompt-parts/) does not already exist.
+ * Idempotent — safe to call multiple times. Missing bundled files are added,
+ * while existing files in agents/ and prompt-parts/ are left untouched.
  */
 export function seedAgentConfig(): void {
 	const agentDir = getAgentDir();

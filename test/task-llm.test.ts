@@ -16,7 +16,7 @@ import {
 	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import taskExtension from "../src/subagent/index.js";
 

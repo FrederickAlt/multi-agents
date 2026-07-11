@@ -2,8 +2,8 @@
  * Unit tests for configuration seeding (seeding.ts).
  *
  * Seeds bundled Agent definitions and Prompt parts into ~/.pi/agent/
- * when the target directories don't exist. Uses PI_CODING_AGENT_DIR to
- * redirect the user config dir to a temp directory for isolation.
+ * when bundled files are missing. Uses PI_CODING_AGENT_DIR to redirect the
+ * user config dir to a temp directory for isolation.
  */
 import * as fs from "node:fs";
 
@@ -143,9 +143,13 @@ describe("seedAgentConfig", () => {
 		}
 	});
 
-	it("seeds only the missing directory when one already exists", () => {
+	it("backfills missing bundled files into an existing directory", () => {
 		// Pre-create the agents/ directory (simulating partial config).
-		mkdirSync(join(tempDir, "agents"), { recursive: true });
+		const agentsDir = join(tempDir, "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		const customPath = join(agentsDir, "custom.md");
+		const customContent = "---\ndescription: custom\n---\n\nCustom agent\n";
+		writeFileSync(customPath, customContent, "utf-8");
 
 		seedAgentConfig();
 
@@ -154,9 +158,11 @@ describe("seedAgentConfig", () => {
 		expect(existsSync(partsDir)).toBe(true);
 		expect(mdFiles(partsDir).length).toBeGreaterThan(0);
 
-		// agents/ should still be empty (pre-existing, no backfill).
-		const agentFiles = mdFiles(join(tempDir, "agents"));
-		expect(agentFiles).toHaveLength(0);
+		// agents/ should retain the custom file and receive bundled definitions.
+		const agentFiles = mdFiles(agentsDir);
+		expect(agentFiles).toContain("custom.md");
+		expect(agentFiles.length).toBeGreaterThan(1);
+		expect(readFileContent(customPath)).toBe(customContent);
 	});
 
 	it("creates parent ~/.pi/agent/ directory if it doesn't exist", () => {

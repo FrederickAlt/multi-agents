@@ -220,7 +220,7 @@ The extension includes an isolated debug logger for tracing Task and async wait/
 
 ## Dependencies
 
-- **Runtime**: `@mariozechner/pi-coding-agent`, `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`, `@mariozechner/pi-tui` — the Pi platform packages they are found at `~/p/AI/pi_extensions/pi-mono/packages/coding-agent` etc.
+- **Runtime**: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`, `@earendil-works/pi-tui` — the Pi platform packages found in the sibling `pi-mono/packages/` checkout.
 - **Schema validation**: `typebox` for the Task tool parameter schema
 - **Testing**: `vitest` with path aliases resolving to local `pi-mono` source
 - **Node builtins**: `fs`, `path`, `crypto` (for random hex IDs), `url`

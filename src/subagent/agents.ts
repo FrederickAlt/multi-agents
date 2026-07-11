@@ -18,6 +18,7 @@ import {
 	type MarkdownDiagnostic,
 	type RawMarkdownDefinition,
 } from "./markdown-definitions.js";
+import { normalizeReasoningEffort } from "./reasoning-effort.js";
 
 /** Source origin of an agent definition.
  * `"user"` is the only source returned at runtime; `"builtin"` and
@@ -162,6 +163,23 @@ function parseAgentDepth(rawDepth: unknown, filePath: string, warnings: AgentDia
 	return 0;
 }
 
+function parseReasoningEffort(
+	rawEffort: unknown,
+	fieldName: "reasoning_effort" | "smart_reasoning_effort",
+	filePath: string,
+	warnings: AgentDiagnostic[],
+): string | undefined {
+	if (rawEffort === undefined || rawEffort === null || String(rawEffort).trim() === "") return undefined;
+	const normalized = normalizeReasoningEffort(rawEffort);
+	if (normalized) return normalized;
+	warnings.push({
+		filePath,
+		level: "warn",
+		reason: `Invalid ${fieldName} value in ${filePath}: ${String(rawEffort)} is not a Pi thinking level. Ignoring it.`,
+	});
+	return undefined;
+}
+
 /**
  * Map a generic RawMarkdownDefinition to an agent-specific AgentConfig.
  *
@@ -191,7 +209,13 @@ function mapToAgentConfig(raw: RawMarkdownDefinition, warnings: AgentDiagnostic[
 	const skills = parseCheckboxField(fm.skills);
 	const prompt_parts = parseCheckboxField(fm.prompt_parts);
 
-	const reasoningEffort = fm.reasoning_effort ? String(fm.reasoning_effort) : undefined;
+	const reasoningEffort = parseReasoningEffort(fm.reasoning_effort, "reasoning_effort", raw.filePath, warnings);
+	const smartReasoningEffort = parseReasoningEffort(
+		fm.smart_reasoning_effort,
+		"smart_reasoning_effort",
+		raw.filePath,
+		warnings,
+	);
 	const depth = parseAgentDepth(fm.depth, raw.filePath, warnings);
 
 	return {
@@ -202,7 +226,7 @@ function mapToAgentConfig(raw: RawMarkdownDefinition, warnings: AgentDiagnostic[
 		extensions,
 		model: fm.model ? String(fm.model) : undefined,
 		smartModel: fm.smart_model ? String(fm.smart_model) : undefined,
-		smartReasoningEffort: fm.smart_reasoning_effort ? String(fm.smart_reasoning_effort) : undefined,
+		smartReasoningEffort,
 		depth,
 		can_spawn,
 		skills,

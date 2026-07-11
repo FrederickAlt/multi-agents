@@ -9,7 +9,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
+import { DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { AgentConfig } from "../src/subagent/agents.js";
@@ -409,7 +409,7 @@ describe("SubagentSessionManager", () => {
 			await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
 			expect(mockSession.subscribe).toHaveBeenCalledOnce();
 
-			sm.disposeSession(record.id);
+			await sm.disposeSession(record.id);
 			// Unsubscribe was called before the original dispose
 			expect(mockSession.unsubscribe).toHaveBeenCalledOnce();
 			expect(disposeSpy).toHaveBeenCalledOnce();
@@ -439,19 +439,54 @@ describe("SubagentSessionManager", () => {
 	// ---- Session disposal ----
 
 	describe("disposeSession", () => {
-		it("disposes the session and removes it from tracking", () => {
+		it("disposes the session and removes it from tracking", async () => {
 			const sm = createManager();
 			const session = makeMockSession();
 			sm.trackSession("to-dispose", session);
 
-			sm.disposeSession("to-dispose");
+			await sm.disposeSession("to-dispose");
 			expect(session.dispose).toHaveBeenCalledOnce();
 			expect(sm.hasOpenSession("to-dispose")).toBe(false);
 		});
 
-		it("is a no-op when the ID is not tracked", () => {
+		it("is a no-op when the ID is not tracked", async () => {
 			const sm = createManager();
-			expect(() => sm.disposeSession("nope")).not.toThrow();
+			await expect(sm.disposeSession("nope")).resolves.toBeUndefined();
+		});
+
+		it("waits for disposal before reopening the same record", async () => {
+			const sm = createManager();
+			const record = makeRecord("delayed-reopen");
+			const firstSession = makeMockSession();
+			let finishDisposal!: () => void;
+			let shutdownComplete = false;
+			firstSession.dispose = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishDisposal = () => {
+							shutdownComplete = true;
+							resolve();
+						};
+					}),
+			) as any;
+			sm.trackSession(record.id, firstSession);
+			mockAgentSessionFactory.create = vi.fn(async () => {
+				expect(shutdownComplete).toBe(true);
+				return makeMockSession();
+			});
+
+			const disposal = sm.disposeSession(record.id);
+			const reopened = sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+			await Promise.resolve();
+
+			expect(firstSession.dispose).toHaveBeenCalledOnce();
+			expect(mockAgentSessionFactory.create).not.toHaveBeenCalled();
+
+			finishDisposal();
+			await disposal;
+			await reopened;
+
+			expect(mockAgentSessionFactory.create).toHaveBeenCalledOnce();
 		});
 	});
 
@@ -493,6 +528,20 @@ describe("SubagentSessionManager", () => {
 
 			// The unsubscribe returned by subscribe should have been called
 			expect(session.unsubscribe).toHaveBeenCalled();
+		});
+
+		it("cleans up when subscribe reports agent_end synchronously", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			const unsubscribe = vi.fn();
+			session.subscribe = vi.fn((listener) => {
+				listener({ type: "agent_end" });
+				return unsubscribe;
+			}) as any;
+			sm.trackSession("sync-end", session);
+
+			await expect(sm.waitForSessionEnd("sync-end")).resolves.toBeUndefined();
+			expect(unsubscribe).toHaveBeenCalledOnce();
 		});
 
 		it("only resolves on agent_end, not other events", async () => {
@@ -538,6 +587,19 @@ describe("SubagentSessionManager", () => {
 			// Should resolve immediately — completedSessions tracks it
 			await expect(sm.waitForSessionEnd(record.id)).resolves.toBeUndefined();
 		});
+
+		it("unsubscribes and rejects when the wait signal is cancelled", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			sm.trackSession("cancel-wait", session);
+			const ac = new AbortController();
+
+			const wait = sm.waitForSessionEnd("cancel-wait", ac.signal);
+			ac.abort();
+
+			await expect(wait).rejects.toThrow("wait_for_session_end_cancelled");
+			expect(session.unsubscribe).toHaveBeenCalled();
+		});
 	});
 
 	describe("waitForAsyncResult", () => {
@@ -579,7 +641,7 @@ describe("SubagentSessionManager", () => {
 	});
 
 	describe("disposeAll", () => {
-		it("disposes all tracked sessions and clears the map", () => {
+		it("disposes all tracked sessions and clears the map", async () => {
 			const sm = createManager();
 			const s1 = makeMockSession();
 			const s2 = makeMockSession();
@@ -588,7 +650,7 @@ describe("SubagentSessionManager", () => {
 			sm.trackSession("b", s2);
 			sm.trackSession("c", s3);
 
-			sm.disposeAll();
+			await sm.disposeAll();
 			expect(s1.dispose).toHaveBeenCalledOnce();
 			expect(s2.dispose).toHaveBeenCalledOnce();
 			expect(s3.dispose).toHaveBeenCalledOnce();
@@ -597,13 +659,13 @@ describe("SubagentSessionManager", () => {
 			expect(sm.hasOpenSession("c")).toBe(false);
 		});
 
-		it("does not throw when the map is already empty", () => {
+		it("does not throw when the map is already empty", async () => {
 			const sm = createManager();
-			expect(() => sm.disposeAll()).not.toThrow();
-			expect(() => sm.disposeAll()).not.toThrow();
+			await expect(sm.disposeAll()).resolves.toBeUndefined();
+			await expect(sm.disposeAll()).resolves.toBeUndefined();
 		});
 
-		it("survives a session whose dispose throws", () => {
+		it("survives a session whose dispose throws", async () => {
 			const sm = createManager();
 			const bad = makeMockSession();
 			bad.dispose = vi.fn(() => {
@@ -613,10 +675,48 @@ describe("SubagentSessionManager", () => {
 			sm.trackSession("bad", bad);
 			sm.trackSession("good", good);
 
-			expect(() => sm.disposeAll()).not.toThrow();
+			await expect(sm.disposeAll()).resolves.toBeUndefined();
 			expect(good.dispose).toHaveBeenCalledOnce();
 			expect(sm.hasOpenSession("bad")).toBe(false);
 			expect(sm.hasOpenSession("good")).toBe(false);
+		});
+
+		it("waits for every in-progress session disposal", async () => {
+			const sm = createManager();
+			const first = makeMockSession();
+			const second = makeMockSession();
+			let finishFirst!: () => void;
+			let finishSecond!: () => void;
+			first.dispose = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishFirst = resolve;
+					}),
+			) as any;
+			second.dispose = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishSecond = resolve;
+					}),
+			) as any;
+			sm.trackSession("first", first);
+			sm.trackSession("second", second);
+			let settled = false;
+
+			const disposal = sm.disposeAll().then(() => {
+				settled = true;
+			});
+			expect(first.dispose).toHaveBeenCalledOnce();
+			expect(second.dispose).toHaveBeenCalledOnce();
+			expect(settled).toBe(false);
+
+			finishFirst();
+			await Promise.resolve();
+			expect(settled).toBe(false);
+
+			finishSecond();
+			await disposal;
+			expect(settled).toBe(true);
 		});
 	});
 
@@ -734,14 +834,14 @@ describe("SubagentSessionManager", () => {
 	// ---- Async result ready callback ----
 
 	describe("onAsyncResultReady callback", () => {
-		it("emits debug breadcrumbs through session manager logger", async () => {
+		it("logs queue acceptance without treating it as terminal completion", async () => {
 			const events: Array<{ event: string }> = [];
 			const logger = makeSpyDebugLogger(events);
 			const sm = createManager({ logger });
 			const id = "log-kill";
 			const session = makeMockSession();
-			session.messages = [{ role: "assistant", content: [{ type: "text", text: "final output" }] }];
-			session.prompt = vi.fn().mockResolvedValue(undefined) as any;
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "prior output" }] }];
+			session.steer = vi.fn().mockResolvedValue(undefined) as any;
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
 
@@ -749,9 +849,9 @@ describe("SubagentSessionManager", () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 
 			expect(events.some((entry) => entry.event === "session_send_kill_started")).toBe(true);
-			expect(events.some((entry) => entry.event === "session_send_kill_prompt_completed")).toBe(true);
-			expect(events.some((entry) => entry.event === "session_finalize")).toBe(true);
-			expect(sm.getAsyncResult(id)?.output).toBe("final output");
+			expect(events.some((entry) => entry.event === "session_send_kill_queued")).toBe(true);
+			expect(events.some((entry) => entry.event === "session_finalize")).toBe(false);
+			expect(sm.getAsyncResult(id)).toBeUndefined();
 		});
 
 		it("captures context usage before finalizeAsyncRun disposes the session", () => {
@@ -766,6 +866,42 @@ describe("SubagentSessionManager", () => {
 
 			expect(sm.getAsyncResult(id)?.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
 			expect(session.dispose).toHaveBeenCalledOnce();
+		});
+
+		it("does not reopen a record while async finalization is still disposing it", async () => {
+			const sm = createManager();
+			const record = makeRecord("finalize-delayed-reopen");
+			const firstSession = makeMockSession();
+			let finishDisposal!: () => void;
+			let shutdownComplete = false;
+			firstSession.dispose = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishDisposal = () => {
+							shutdownComplete = true;
+							resolve();
+						};
+					}),
+			) as any;
+			sm.trackSession(record.id, firstSession);
+			sm.markAsyncRunning(record.id);
+			mockAgentSessionFactory.create = vi.fn(async () => {
+				expect(shutdownComplete).toBe(true);
+				return makeMockSession();
+			});
+
+			sm.finalizeAsyncRun(record.id, { output: "done", warnings: [] });
+			const reopened = sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+			await Promise.resolve();
+
+			expect(firstSession.dispose).toHaveBeenCalledOnce();
+			expect(mockAgentSessionFactory.create).not.toHaveBeenCalled();
+
+			finishDisposal();
+			await reopened;
+
+			expect(mockAgentSessionFactory.create).toHaveBeenCalledOnce();
+			expect(sm.isCompleted(record.id)).toBe(false);
 		});
 
 		it("forced abort stores context usage captured before abort makes it unavailable", () => {
@@ -936,31 +1072,42 @@ describe("SubagentSessionManager", () => {
 			expect((session as any).steer).toHaveBeenCalledTimes(1);
 		});
 
-		it("uses steer when available for finish request", async () => {
+		it("does not finalize an immediately queued steer from prior assistant text", async () => {
 			const sm = createManager();
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
 			const id = "kill-steer";
 			const session = makeMockSession();
-			let steerResolve: (() => void) | undefined;
-			session.steer = vi.fn(
-				() =>
-					new Promise<void>((resolve) => {
-						steerResolve = resolve;
-					}),
-			) as any;
-			session.messages = [{ role: "assistant", content: [{ type: "text", text: "finish-request steer result" }] }];
+			session.steer = vi.fn().mockResolvedValue(undefined) as any;
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "assistant text before steer" }] }];
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
 
 			sm.sendKillMessage(id, 1);
-			steerResolve?.();
 			await Promise.resolve();
 
 			expect(session.steer).toHaveBeenCalledTimes(1);
 			expect(session.prompt as any).not.toHaveBeenCalled();
-			expect(sm.isCompleted(id)).toBe(true);
-			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
-			expect(sm.getAsyncResult(id)?.terminalError).toBeUndefined();
+			expect(sm.getAsyncResult(id)).toBeUndefined();
+			expect(sm.isCompleted(id)).toBe(false);
+			expect(sm.isAsyncRunning(id)).toBe(true);
 			expect(sm.isKillInProgress(id)).toBe(false);
+			expect(sm.hasOpenSession(id)).toBe(true);
+			expect(session.dispose).not.toHaveBeenCalled();
+			expect(onReady).not.toHaveBeenCalled();
+
+			sm.finalizeAsyncRun(id, {
+				output: "final output after queued steer",
+				warnings: [],
+				terminalOutcome: "completed",
+			});
+
+			expect(sm.getAsyncResult(id)?.output).toBe("final output after queued steer");
+			expect(sm.isCompleted(id)).toBe(true);
+			expect(sm.hasOpenSession(id)).toBe(false);
+			expect(session.dispose).toHaveBeenCalledOnce();
+			expect(onReady).toHaveBeenCalledOnce();
+			expect(onReady).toHaveBeenCalledWith(id);
 		});
 
 		it("does not complete a finish request when steer returns with only a pending tool call", async () => {
@@ -992,8 +1139,10 @@ describe("SubagentSessionManager", () => {
 			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
 		});
 
-		it("finish request failure stores context usage and does not prevent original output", async () => {
+		it("finish request failure stores a non-terminal diagnostic without notifying completion", async () => {
 			const sm = createManager();
+			const onReady = vi.fn();
+			sm.setOnAsyncResultReady(onReady);
 			const id = "finish-failed-original";
 			const session = makeMockSession();
 			(session as any).steer = vi.fn().mockRejectedValue(new Error("still processing"));
@@ -1001,22 +1150,29 @@ describe("SubagentSessionManager", () => {
 			session.messages = [{ role: "assistant", content: [{ type: "text", text: "original final" }] }];
 			sm.trackSession(id, session);
 			sm.markAsyncRunning(id);
+			const queueFailureStored = sm.waitForAsyncResult(id);
 
 			sm.sendKillMessage(id, 1);
-			await Promise.resolve();
+			await queueFailureStored;
 
 			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("abort_request_failed");
 			expect(sm.getAsyncResult(id)?.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
 			expect(sm.isCompleted(id)).toBe(false);
+			expect(sm.isAsyncRunning(id)).toBe(true);
+			expect(sm.hasOpenSession(id)).toBe(true);
+			expect(session.dispose).not.toHaveBeenCalled();
+			expect(onReady).not.toHaveBeenCalled();
 
 			sm.finalizeAsyncRun(id, { output: "original final", warnings: [], terminalOutcome: "completed" });
 
 			expect(sm.getAsyncResult(id)?.output).toBe("original final");
 			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
 			expect(sm.isCompleted(id)).toBe(true);
+			expect(onReady).toHaveBeenCalledOnce();
+			expect(onReady).toHaveBeenCalledWith(id);
 		});
 
-		it("falls back to streamingBehavior steer when steer helper is unavailable", async () => {
+		it("treats the streamingBehavior fallback as queue acceptance", async () => {
 			const sm = createManager();
 			const id = "kill-fallback";
 			const session = makeMockSession();
@@ -1043,11 +1199,13 @@ describe("SubagentSessionManager", () => {
 			expect(session.steer).toBeUndefined();
 			expect(session.prompt).toHaveBeenCalledTimes(1);
 			expect(promptArgs?.[1]).toMatchObject({ streamingBehavior: "steer" });
-			expect(sm.isCompleted(id)).toBe(true);
-			expect(sm.getAsyncResult(id)?.terminalOutcome).toBe("completed");
+			expect(sm.isCompleted(id)).toBe(false);
+			expect(sm.isAsyncRunning(id)).toBe(true);
+			expect(sm.hasOpenSession(id)).toBe(true);
+			expect(sm.getAsyncResult(id)).toBeUndefined();
 		});
 
-		it("transitions running finish request to completed", async () => {
+		it("restores running ownership until the original prompt finalizes", async () => {
 			const sm = createManager();
 			const onReady = vi.fn();
 			sm.setOnAsyncResultReady(onReady);
@@ -1073,6 +1231,19 @@ describe("SubagentSessionManager", () => {
 			await Promise.resolve();
 
 			expect(sm.isKillInProgress(id)).toBe(false);
+			expect(sm.isAsyncRunning(id)).toBe(true);
+			expect(sm.isCompleted(id)).toBe(false);
+			expect(sm.hasOpenSession(id)).toBe(true);
+			expect(sm.getAsyncResult(id)).toBeUndefined();
+			expect(session.dispose).not.toHaveBeenCalled();
+			expect(onReady).not.toHaveBeenCalled();
+
+			sm.finalizeAsyncRun(id, {
+				output: "finish-request final output",
+				warnings: [],
+				terminalOutcome: "completed",
+			});
+
 			expect(sm.isCompleted(id)).toBe(true);
 			expect(sm.hasOpenSession(id)).toBe(false);
 			expect(sm.getAsyncResult(id)?.output).toBe("finish-request final output");
@@ -1196,6 +1367,33 @@ describe("SubagentSessionManager", () => {
 			expect(result).toMatchObject({ status: "summarized", output: "final summary with context" });
 			expect(calls.slice(0, 2)).toEqual(["usage", "abort"]);
 			expect(sm.getAsyncResult(id)?.contextUsage).toEqual({ tokens: 68234, contextWindow: 100000, percent: 68.234 });
+		});
+
+		it("cancels an in-progress abort summary without leaving background lifecycle work", async () => {
+			const sm = createManager();
+			const id = "abort-summary-cancelled";
+			const session = makeMockSession(["bash"]);
+			session.messages = [{ role: "assistant", content: [{ type: "text", text: "partial before cancellation" }] }];
+			session.abort = vi.fn(() => Promise.resolve()) as any;
+			(session as any).abortBash = vi.fn();
+			(session as any).setActiveToolsByName = vi.fn();
+			sm.trackSession(id, session);
+			sm.markAsyncRunning(id);
+			const abortController = new AbortController();
+
+			const pending = sm.requestAbortSummary(id, 1000, abortController.signal);
+			abortController.abort();
+			const result = await pending;
+
+			expect(result.status).toBe("cancelled");
+			expect(sm.getAsyncResult(id)).toMatchObject({
+				output: "partial before cancellation",
+				terminalOutcome: "aborted",
+				abortReason: "wait_cancelled_during_abort_summary",
+			});
+			expect(sm.isCompleted(id)).toBe(true);
+			expect(sm.hasOpenSession(id)).toBe(false);
+			expect(session.dispose).toHaveBeenCalledOnce();
 		});
 
 		it("forced abort after failed final summary uses pre-abort context usage", async () => {
@@ -1404,6 +1602,32 @@ describe("SubagentSessionManager", () => {
 			}
 		});
 
+		it("stops the summary retry loop when its timeout wins", async () => {
+			vi.useFakeTimers();
+			try {
+				const sm = createManager();
+				const id = "abort-summary-timeout-retry";
+				const session = makeMockSession(["bash"]);
+				(session as any).setActiveToolsByName = vi.fn();
+				session.abort = vi.fn(() => {
+					for (const cb of [...session.callbacks]) cb({ type: "agent_end" });
+				}) as any;
+				session.prompt = vi.fn(() => Promise.reject(new Error("Agent is already processing."))) as any;
+				sm.trackSession(id, session);
+				sm.markAsyncRunning(id);
+
+				const promise = sm.requestAbortSummary(id, 500);
+				await vi.advanceTimersByTimeAsync(500);
+				await expect(promise).resolves.toMatchObject({ status: "timed_out", toolOverrideApplied: true });
+				const callsAtTimeout = session.prompt.mock.calls.length;
+
+				await vi.advanceTimersByTimeAsync(ABORT_FINAL_SUMMARY_CANCEL_GRACE_MS);
+				expect(session.prompt).toHaveBeenCalledTimes(callsAtTimeout);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("transitions running to forced abort", () => {
 			const sm = createManager();
 			const id = "hard-abort";
@@ -1445,9 +1669,17 @@ describe("PiAgentSessionFactory", () => {
 		const tempDir = join(tmpdir(), `pi-agent-factory-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		const params = Type.Object({});
+		const settingsManager = SettingsManager.create(tempDir, tempDir, { projectTrusted: false });
+		let observedProjectTrust: boolean | undefined;
+		let shutdownCount = 0;
+		let finishShutdown!: () => void;
+		const shutdownGate = new Promise<void>((resolve) => {
+			finishShutdown = resolve;
+		});
 		const loader = new DefaultResourceLoader({
 			cwd: tempDir,
 			agentDir: tempDir,
+			settingsManager,
 			extensionFactories: [
 				(pi) => {
 					pi.registerTool({
@@ -1459,7 +1691,8 @@ describe("PiAgentSessionFactory", () => {
 							return { content: [{ type: "text", text: "load" }], details: {} };
 						},
 					});
-					pi.on("session_start", () => {
+					pi.on("session_start", (_event, ctx) => {
+						observedProjectTrust = ctx.isProjectTrusted();
 						pi.registerTool({
 							name: "session_start_tool",
 							label: "Session Start Tool",
@@ -1469,6 +1702,10 @@ describe("PiAgentSessionFactory", () => {
 								return { content: [{ type: "text", text: "session" }], details: {} };
 							},
 						});
+					});
+					pi.on("session_shutdown", async () => {
+						shutdownCount += 1;
+						await shutdownGate;
 					});
 				},
 			],
@@ -1482,6 +1719,8 @@ describe("PiAgentSessionFactory", () => {
 			resourceLoader: loader,
 			sessionManager: SessionManager.inMemory(tempDir),
 			thinkingLevel: undefined,
+			settingsManager,
+			warnings: [],
 		});
 
 		try {
@@ -1490,8 +1729,60 @@ describe("PiAgentSessionFactory", () => {
 			expect(allToolNames).toContain("load_time_tool");
 			expect(allToolNames).toContain("session_start_tool");
 			expect(activeToolNames).toContain("session_start_tool");
+			expect(observedProjectTrust).toBe(false);
 		} finally {
-			session.dispose();
+			let disposeSettled = false;
+			const disposal = Promise.resolve(session.dispose()).then(() => {
+				disposeSettled = true;
+			});
+			await Promise.resolve();
+			expect(shutdownCount).toBe(1);
+			expect(disposeSettled).toBe(false);
+			finishShutdown();
+			await disposal;
+			await Promise.resolve(session.dispose());
+			expect(shutdownCount).toBe(1);
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces extension load and session_start failures as Task warnings", async () => {
+		const tempDir = join(tmpdir(), `pi-agent-factory-errors-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+		const loader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir: tempDir,
+			extensionFactories: [
+				() => {
+					throw new Error("factory exploded");
+				},
+				(pi) => {
+					pi.on("session_start", () => {
+						throw new Error("startup exploded");
+					});
+				},
+			],
+		});
+		await loader.reload();
+		const warnings: string[] = [];
+
+		const session = await new PiAgentSessionFactory().create({
+			cwd: tempDir,
+			model: undefined,
+			tools: undefined,
+			resourceLoader: loader,
+			sessionManager: SessionManager.inMemory(tempDir),
+			thinkingLevel: undefined,
+			warnings,
+		});
+
+		try {
+			expect(warnings).toEqual([
+				expect.stringContaining("factory exploded"),
+				expect.stringContaining("startup exploded"),
+			]);
+		} finally {
+			await Promise.resolve(session.dispose());
 			rmSync(tempDir, { recursive: true, force: true });
 		}
 	});

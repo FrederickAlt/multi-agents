@@ -499,7 +499,7 @@ describe("TaskController.execute", () => {
 			),
 			withRecordRunLock: <T>(id: string, fn: () => Promise<T>) => sessionManager.withRecordRunLock(id, fn),
 			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
-			waitForSessionEnd: vi.fn((id: string) => sessionManager.waitForSessionEnd(id)),
+			waitForSessionEnd: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForSessionEnd(id, signal)),
 			storeAsyncResult: vi.fn((id: string, result: any) => sessionManager.storeAsyncResult(id, result)),
 			finalizeAsyncRun: vi.fn((id: string, result: any, options?: { allowOverwrite?: boolean }) =>
 				sessionManager.finalizeAsyncRun(id, result, options),
@@ -1823,6 +1823,18 @@ describe("TaskController.execute", () => {
 		expect(mockSession.abort).toHaveBeenCalled();
 	});
 
+	it("does not start a background prompt when the parent signal is already aborted", async () => {
+		const ac = new AbortController();
+		ac.abort();
+
+		const result = await controller.execute(makeParams({ blocking: false }), makeContext({ signal: ac.signal }));
+
+		expect(mockSession.prompt).not.toHaveBeenCalled();
+		expect(result.details.error).toBe("Task execution was aborted.");
+		expect(result.details.terminalOutcome).toBe("aborted");
+		expect(disposeSpy).toHaveBeenCalledOnce();
+	});
+
 	// ---- Expanded waitForAgent (#23) ----
 
 	it("returns error when agent_ids is empty", async () => {
@@ -1831,6 +1843,33 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("missing_agent_ids");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("requires at least one agent_id");
+	});
+
+	it("cancels a pending wait without killing the running agent or leaking its timeout", async () => {
+		vi.useFakeTimers();
+		try {
+			mockSession.prompt = vi.fn(() => new Promise(() => {}));
+			const spawn = await controller.execute(makeParams({ blocking: false }), makeContext());
+			const id = (spawn.details as TaskDetails).id!;
+			await Promise.resolve();
+			const ac = new AbortController();
+
+			const wait = controller.waitForAgent(
+				[id],
+				{ timeout: 5, kill_on_timeout: true },
+				makeContext({ signal: ac.signal }),
+			);
+			await Promise.resolve();
+			ac.abort();
+			const result = await wait;
+
+			expect(result.details.error).toBe("wait_cancelled");
+			expect(fakeSessionManager.sendKillMessage).not.toHaveBeenCalled();
+			expect(mockSession.abort).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("returns per-agent statuses for multiple IDs (completed + running + unknown)", async () => {
@@ -2669,6 +2708,47 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("aborted while still running");
 		expect(text).not.toContain("could not queue the finish request");
 		expect(text).not.toContain("completed.");
+	});
+
+	it("returns promptly when cancelled while the final abort summary is pending", async () => {
+		mockSession = {
+			dispose: vi.fn(),
+			subscribe: vi.fn(() => () => {}),
+			prompt: vi.fn(() => new Promise(() => {})),
+			abort: vi.fn(),
+			messages: [],
+			getActiveToolNames: () => [],
+		};
+		mockAgentSessionFactory.create = vi.fn().mockResolvedValue(mockSession);
+		fakeSessionManager.sendKillMessage = vi.fn();
+		fakeSessionManager.requestAbortSummary = vi.fn((_id: string) => new Promise<never>(() => {}));
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		const abortController = new AbortController();
+		const resultPromise = controller.waitForAgent(
+			[agentId],
+			{ timeout: 0, kill_on_timeout: true },
+			makeContext({ signal: abortController.signal }),
+		);
+
+		await vi.waitFor(() => {
+			expect(fakeSessionManager.requestAbortSummary).toHaveBeenCalledWith(agentId, abortController.signal);
+		});
+		abortController.abort();
+
+		let guardTimeout: ReturnType<typeof setTimeout> | undefined;
+		const result = await Promise.race([
+			resultPromise,
+			new Promise<never>((_, reject) => {
+				guardTimeout = setTimeout(() => reject(new Error("wait_for_agent did not return after cancellation")), 250);
+			}),
+		]).finally(() => {
+			if (guardTimeout !== undefined) clearTimeout(guardTimeout);
+		});
+
+		expect(result.details.error).toBe("wait_cancelled");
+		expect(fakeSessionManager.abortSession).not.toHaveBeenCalledWith(agentId);
 	});
 
 	it("abort fallback: agent does not finish within abort window and uses compatibility killed status", async () => {
@@ -3556,13 +3636,13 @@ describe("TaskController.execute", () => {
 		expect(sessionManager.hasOpenSession(agentId)).toBe(false);
 	});
 
-	it("finish-request success: real sendKillMessage stores output and cleans up", async () => {
+	it("finish-request queue success leaves finalization to the original async prompt", async () => {
 		// Simulate a real finish request where:
-		// 1. sendKillMessage steers the original prompt
-		// 2. finish() skips disposal (kill in progress)
-		// 3. finish-request prompt succeeds and stores final result
+		// 1. sendKillMessage queues steering on the original prompt
+		// 2. queue acceptance resolves immediately without completing the run
+		// 3. the original prompt later settles and stores the final result
 		const subs: Array<(e: any) => void> = [];
-		let promptReject: ((err: any) => void) | null = null;
+		let promptResolve: ((val: any) => void) | null = null;
 		let finishPromptResolve: ((val: any) => void) | null = null;
 		let callCount = 0;
 
@@ -3575,9 +3655,9 @@ describe("TaskController.execute", () => {
 			prompt: vi.fn(() => {
 				callCount++;
 				if (callCount === 1) {
-					// Original prompt: hangs until aborted
-					return new Promise((_, reject) => {
-						promptReject = reject;
+					// Original prompt: hangs until the queued steer has been handled.
+					return new Promise((resolve) => {
+						promptResolve = resolve;
 					});
 				}
 				// Finish-request prompt: succeeds
@@ -3585,12 +3665,7 @@ describe("TaskController.execute", () => {
 					finishPromptResolve = resolve;
 				});
 			}),
-			abort: vi.fn(() => {
-				if (promptReject) {
-					promptReject(new Error("aborted"));
-					promptReject = null;
-				}
-			}),
+			abort: vi.fn(),
 			messages: [{ role: "assistant", content: [{ type: "text", text: "final answer after finish request" }] }],
 			getActiveToolNames: () => [],
 		};
@@ -3605,14 +3680,17 @@ describe("TaskController.execute", () => {
 		// Verify kill-in-progress is set during the finish-request flow
 		expect(sessionManager.isKillInProgress(agentId)).toBe(true);
 
-		// Resolve the finish-request prompt (agent finishes after receiving the finish request)
+		// Queue acceptance alone must not complete or dispose the active run.
 		finishPromptResolve!(undefined);
+		await new Promise((r) => setTimeout(r, 10));
+		expect(sessionManager.isKillInProgress(agentId)).toBe(false);
+		expect(sessionManager.isCompleted(agentId)).toBe(false);
+		expect(sessionManager.getAsyncResult(agentId)).toBeUndefined();
 
-		// Yield to let .then() handlers run
+		// The original background prompt owns completion after handling the steer.
+		promptResolve!(undefined);
 		await new Promise((r) => setTimeout(r, 10));
 
-		// After finish-request prompt resolves, cleanup should have happened
-		expect(sessionManager.isKillInProgress(agentId)).toBe(false);
 		expect(sessionManager.isCompleted(agentId)).toBe(true);
 
 		// The stored result should be the finish-request success output

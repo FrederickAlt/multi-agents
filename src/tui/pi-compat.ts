@@ -5,7 +5,7 @@ import * as path from "node:path";
  * Minimal standalone replacements for the Pi helpers used by the TUI.
  *
  * The config TUI is runnable outside Pi's extension host, where
- * @mariozechner/pi-coding-agent is not necessarily installed in this package's
+ * @earendil-works/pi-coding-agent is not necessarily installed in this package's
  * node_modules. Keep this module dependency-free so `npx tsx src/tui/cli.ts`
  * can start from a fresh checkout.
  */

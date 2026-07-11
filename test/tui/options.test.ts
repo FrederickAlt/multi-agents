@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	createTrustAwareDiscoverySettings,
 	discoverAllAgentNames,
 	discoverCachedPiRuntimeResources,
 	discoverCanSpawn,
@@ -48,7 +49,50 @@ function writeFile(...segments: string[]): string {
 // Tests
 // ---------------------------------------------------------------------------
 
+describe("createTrustAwareDiscoverySettings", () => {
+	it("starts untrusted and applies only a saved project decision", () => {
+		const setProjectTrusted = vi.fn();
+		const create = vi.fn(() => ({
+			getDefaultProjectTrust: () => "ask" as const,
+			setProjectTrusted,
+		}));
+		class TrustStore {
+			get() {
+				return true;
+			}
+		}
+
+		createTrustAwareDiscoverySettings(
+			{ SettingsManager: { create }, ProjectTrustStore: TrustStore } as any,
+			"/project",
+			"/agent",
+		);
+
+		expect(create).toHaveBeenCalledWith("/project", "/agent", { projectTrusted: false });
+		expect(setProjectTrusted).toHaveBeenCalledWith(true);
+	});
+
+	it("fails closed when trust is undecided", () => {
+		const setProjectTrusted = vi.fn();
+		createTrustAwareDiscoverySettings(
+			{
+				SettingsManager: {
+					create: () => ({ getDefaultProjectTrust: () => "ask", setProjectTrusted }),
+				},
+			} as any,
+			"/project",
+			"/agent",
+		);
+
+		expect(setProjectTrusted).toHaveBeenCalledWith(false);
+	});
+});
+
 describe("discoverTools", () => {
+	it("exposes both multi-agent coordination tools in fallback discovery", () => {
+		expect(discoverTools(tempDir, [])).toEqual(expect.arrayContaining(["Task", "wait_for_agent"]));
+	});
+
 	it("returns built-in tools without treating agent-declared tools as available", () => {
 		const agentToolLists = [["custom-tool", "bash"], ["another-tool"]];
 		const tools = discoverTools(tempDir, agentToolLists);

@@ -1,3 +1,4 @@
+import { PI_REASONING_EFFORTS } from "../../subagent/reasoning-effort.js";
 import { resolveModelDisplayName } from "../discovery/options.js";
 import { clampHorizontalScrollOffset, clampVerticalScrollOffset } from "../layout.js";
 import { getOptionColumnWidth } from "../option-column-layout.js";
@@ -106,7 +107,7 @@ export function createInitialState(): ConfigState {
 				status: "ready",
 				error: null,
 			},
-			reasoningEfforts: ["low", "medium", "high", "maximum"],
+			reasoningEfforts: [...PI_REASONING_EFFORTS],
 			depths: [0, 1, 2, 3, 4, 5],
 			canSpawn: [],
 			skills: [],
@@ -128,6 +129,26 @@ export function createInitialState(): ConfigState {
 function clamp(index: number, len: number): number {
 	if (len === 0) return 0;
 	return ((index % len) + len) % len;
+}
+
+function filterStaleItemsForCurrentFrontmatter(
+	frontmatter: Record<string, unknown> | null,
+	discoveredStaleItems: Record<string, string[]>,
+): Record<string, string[]> {
+	if (!frontmatter) return {};
+
+	const staleItems: Record<string, string[]> = {};
+	for (const [fieldName, discoveredValues] of Object.entries(discoveredStaleItems)) {
+		const currentValue = frontmatter[fieldName];
+		const currentValues = new Set(
+			(Array.isArray(currentValue) ? currentValue : currentValue == null ? [] : [currentValue]).map(String),
+		);
+		const retainedValues = discoveredValues.filter((value) => currentValues.has(value));
+		if (retainedValues.length > 0) {
+			staleItems[fieldName] = retainedValues;
+		}
+	}
+	return staleItems;
 }
 
 function getInlineFocusFieldIndex(fieldIndex: number): number | null {
@@ -775,14 +796,24 @@ export function configReducer(state: ConfigState, action: ConfigAction): ConfigS
 			};
 		}
 
-		case "UPDATE_AGENTS": {
-			const len = action.agents.length;
+		case "UPDATE_AGENT_STALE_ITEMS": {
+			const discoveredByFilePath = new Map(action.agents.map((agent) => [agent.filePath, agent]));
+			const agents = state.agents.map((agent) => {
+				const discovered = discoveredByFilePath.get(agent.filePath);
+				return discovered
+					? {
+							...agent,
+							staleItems: filterStaleItemsForCurrentFrontmatter(agent.frontmatter, discovered.staleItems),
+						}
+					: agent;
+			});
+			const len = agents.length;
 			const agentIndex = clamp(state.focus.agentIndex, len);
 			const fieldIndex = clamp(state.focus.fieldIndex, FIELDS_ORDER.length);
-			const focusedAgent = action.agents[agentIndex];
+			const focusedAgent = agents[agentIndex];
 			return {
 				...state,
-				agents: action.agents,
+				agents,
 				expandedAgentIndex:
 					state.expandedAgentIndex !== null && state.expandedAgentIndex < len ? state.expandedAgentIndex : null,
 				focus: {

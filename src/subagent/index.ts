@@ -5,7 +5,7 @@
  * creates or resumes a real Pi AgentSession stored in normal session storage.
  */
 
-import { unlinkSync, writeFileSync } from "node:fs";
+import { realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -14,17 +14,21 @@ import {
 	type ExtensionFactory,
 	getAgentDir,
 	loadProjectContextFiles,
-} from "@mariozechner/pi-coding-agent";
+	ProjectTrustStore,
+} from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, AgentRegistry, discoverAgents, formatAgentList } from "./agents.js";
 import { AsyncAgentNotifier } from "./async-agent-notifier.js";
 import type { DebugLogger } from "./debug-logger.js";
 import { makeNoopDebugLogger, makeSessionDebugLogger } from "./debug-logger.js";
 import { defaultRootPolicy, selectedRootPolicy } from "./depth-policy.js";
-import { filterExtensionsForAgent } from "./extension-filter.js";
+import { resolveExtensionsForAgent } from "./extension-filter.js";
+import { createTrustAwareSettings, resolveConfiguredExtensionCandidates } from "./extension-resolution.js";
 import {
 	ensureMultiAgentsLauncherContext,
 	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
 	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
+	MULTI_AGENTS_PROJECT_TRUST_CWD_ENV,
+	MULTI_AGENTS_PROJECT_TRUST_ENV,
 	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
 } from "./launcher-contract.js";
 import { MetadataStore } from "./metadata.js";
@@ -86,6 +90,13 @@ interface ResumeRestartRequestPayload {
 	type: "resume-session";
 	sessionPath: string;
 }
+interface TrustRestartRequestPayload {
+	version: 1;
+	type: "trust";
+	sessionPath?: string;
+	sessionId: string;
+	projectTrusted: boolean;
+}
 
 function writeRestartRequest(path: string, requestedRootAgent: string): void {
 	const payload: RestartRequestPayload = {
@@ -104,6 +115,50 @@ function writeResumeSessionRestartRequest(path: string, sessionPath: string): vo
 	writeFileSync(path, `${JSON.stringify(payload)}\n`, "utf-8");
 }
 
+function writeTrustRestartRequest(
+	path: string,
+	sessionPath: string | undefined,
+	sessionId: string,
+	projectTrusted: boolean,
+): void {
+	const payload: TrustRestartRequestPayload = {
+		version: 1,
+		type: "trust",
+		...(sessionPath ? { sessionPath } : {}),
+		sessionId,
+		projectTrusted,
+	};
+	writeFileSync(path, `${JSON.stringify(payload)}\n`, "utf-8");
+}
+
+function canonicalCwd(cwd: string): string {
+	try {
+		return realpathSync(cwd);
+	} catch {
+		return path.resolve(cwd);
+	}
+}
+
+function isSameOrDescendantCwd(rootCwd: string, candidateCwd: string): boolean {
+	const relative = path.relative(canonicalCwd(rootCwd), canonicalCwd(candidateCwd));
+	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function hasCloserSavedTrustDecision(rootCwd: string, candidateCwd: string, agentDir: string): boolean {
+	if (canonicalCwd(rootCwd) === canonicalCwd(candidateCwd)) return false;
+	const entry = new ProjectTrustStore(agentDir).getEntry(candidateCwd);
+	return (
+		entry !== null && canonicalCwd(entry.path) !== canonicalCwd(rootCwd) && isSameOrDescendantCwd(rootCwd, entry.path)
+	);
+}
+
+function readLauncherProjectTrust(): { cwd: string; projectTrusted: boolean } | undefined {
+	const rawTrust = process.env[MULTI_AGENTS_PROJECT_TRUST_ENV];
+	const rawCwd = process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV];
+	if ((rawTrust !== "1" && rawTrust !== "0") || !rawCwd?.trim()) return undefined;
+	return { cwd: canonicalCwd(rawCwd), projectTrusted: rawTrust === "1" };
+}
+
 function clearRestartRequest(path: string): void {
 	try {
 		unlinkSync(path);
@@ -116,18 +171,20 @@ function requestPiShutdown(
 	ctx: { shutdown?: () => void },
 	restartRequestFile?: string,
 	options: { onFailure?: () => void } = {},
-): void {
+): boolean {
 	try {
 		if (typeof ctx.shutdown === "function") {
 			ctx.shutdown();
-			return;
+			return true;
 		}
 		process.exit(0);
+		return true;
 	} catch {
 		if (restartRequestFile) {
 			clearRestartRequest(restartRequestFile);
 		}
 		options.onFailure?.();
+		return false;
 	}
 }
 
@@ -363,25 +420,47 @@ export default function (pi: ExtensionAPI) {
 			createResourceLoaderFactory: async (agent, childRuntime, effectiveCwd, onWarnings) => {
 				const agentDir = getAgentDir();
 				const contextFiles = loadProjectContextFiles({ cwd: effectiveCwd, agentDir });
+				const inheritsRootTrust = isSameOrDescendantCwd(ctx.cwd, effectiveCwd);
+				const hasCloserTrustDecision =
+					inheritsRootTrust && hasCloserSavedTrustDecision(ctx.cwd, effectiveCwd, agentDir);
+				const liveRootProjectTrust =
+					inheritsRootTrust && typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : undefined;
+				const rootProjectTrust =
+					liveRootProjectTrust !== undefined && (!liveRootProjectTrust || !hasCloserTrustDecision)
+						? liveRootProjectTrust
+						: undefined;
+				const { settingsManager } = createTrustAwareSettings({
+					cwd: effectiveCwd,
+					agentDir,
+					...(rootProjectTrust === undefined ? {} : { projectTrustOverride: rootProjectTrust }),
+				});
+				const extensionCandidates = await resolveConfiguredExtensionCandidates({
+					cwd: effectiveCwd,
+					agentDir,
+					settingsManager,
+				});
+				const extensionSelection = resolveExtensionsForAgent(agent, extensionCandidates);
+				if (extensionSelection.warnings.length > 0) {
+					runtime.logger?.warn("task_extension_filter", {
+						agent: agent.name,
+						warnings: extensionSelection.warnings,
+					});
+					onWarnings?.(extensionSelection.warnings);
+				}
+				const additionalExtensionPaths = [...new Set([...extensionSelection.paths, selfPath])];
 				const loader = new DefaultResourceLoader({
 					cwd: effectiveCwd,
 					agentDir,
+					settingsManager,
 					noContextFiles: true,
+					noExtensions: true,
+					additionalExtensionPaths,
 					appendSystemPromptOverride: () => [],
-					extensionsOverride: filterExtensionsForAgent(agent, selfPath, {
-						onWarnings: (warnings) => {
-							runtime.logger?.warn("task_extension_filter", {
-								agent: agent.name,
-								warnings,
-							});
-							onWarnings?.(warnings);
-						},
-					}),
 					extensionFactories: [makeAgentRuntimeFactory(agent, childRuntime, effectiveCwd, contextFiles)],
 					systemPromptOverride: () => agent.systemPrompt,
 				});
 				await loader.reload();
-				return loader;
+				return { resourceLoader: loader, settingsManager };
 			},
 			onUpdate,
 		};
@@ -446,6 +525,51 @@ export default function (pi: ExtensionAPI) {
 		store = activeStore;
 		rootLogger.info("root_session_start", { sessionDir: ctx.sessionManager.getSessionDir() });
 		activeStore.load();
+
+		const launcherTrust = readLauncherProjectTrust();
+		if (launcherTrust && typeof ctx.isProjectTrusted === "function") {
+			const actualProjectTrusted = ctx.isProjectTrusted();
+			const actualCwd = canonicalCwd(ctx.cwd);
+			if (launcherTrust.projectTrusted !== actualProjectTrusted || launcherTrust.cwd !== actualCwd) {
+				const requestFile = process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV];
+				const selectedSessionPath = ctx.sessionManager.getSessionFile();
+				const selectedSessionId = ctx.sessionManager.getSessionId();
+				if (!requestFile?.trim() || !selectedSessionId) {
+					showMessage(
+						ctx,
+						"Project trust changed after launcher resource resolution, but the current session cannot be restarted automatically.",
+						"warning",
+					);
+				} else {
+					let restartPrepared = true;
+					try {
+						writeTrustRestartRequest(requestFile, selectedSessionPath, selectedSessionId, actualProjectTrusted);
+					} catch {
+						restartPrepared = false;
+						clearRestartRequest(requestFile);
+						showMessage(ctx, "Failed to save the project-trust restart request.", "error");
+					}
+
+					if (restartPrepared) {
+						showMessage(ctx, "Restarting Pi so agent extensions match the selected project trust.", "info");
+					}
+					if (
+						restartPrepared &&
+						requestPiShutdown(ctx, requestFile, {
+							onFailure: () => {
+								showMessage(
+									ctx,
+									"Failed to restart after the project-trust change. Staying in the current session.",
+									"error",
+								);
+							},
+						})
+					) {
+						return;
+					}
+				}
+			}
+		}
 
 		if (process.env[MULTI_AGENTS_BOOTSTRAP_RESUME_ENV] === "1") {
 			const requestFile = process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV];
@@ -574,7 +698,8 @@ export default function (pi: ExtensionAPI) {
 			reason: event.reason,
 			hasStore: Boolean(store),
 		});
-		_sessionManager?.disposeAll();
+		_sessionManager?.setOnAsyncResultReady(undefined);
+		await _sessionManager?.disposeAll();
 		_sessionManager = undefined;
 		_asyncAgentNotifier.clear();
 		if (event.reason === "new") {

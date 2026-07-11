@@ -1,3 +1,4 @@
+import { PI_REASONING_EFFORTS } from "../../subagent/reasoning-effort.js";
 import { Board } from "../components/Board.js";
 import { MODEL_OPTION_DEGRADED_STATUS } from "../state/option-columns.js";
 import type { AgentConfigState, ConfigState, DiscoveredOptions } from "../state/types.js";
@@ -26,7 +27,7 @@ const options: DiscoveredOptions = {
 		status: "ready" as const,
 		error: null,
 	},
-	reasoningEfforts: ["low", "medium", "high", "maximum"],
+	reasoningEfforts: [...PI_REASONING_EFFORTS],
 	depths: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
 	canSpawn: ["coder", "explorer", "reviewer", "planner", "math-agent", "orchstrator"],
 	skills: ["typescript", "react", "testing", "docs"],

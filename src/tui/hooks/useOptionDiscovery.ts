@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PI_REASONING_EFFORTS } from "../../subagent/reasoning-effort.js";
 import {
 	discoverAllAgentNames,
 	discoverCachedPiRuntimeResources,
@@ -71,7 +72,7 @@ export function useOptionDiscovery(): {
 			status: "loading",
 			error: null,
 		},
-		reasoningEfforts: ["low", "medium", "high", "maximum"],
+		reasoningEfforts: [...PI_REASONING_EFFORTS],
 		depths: [0, 1, 2, 3, 4, 5],
 		canSpawn: [],
 		skills: [],
@@ -121,7 +122,7 @@ export function useOptionDiscovery(): {
 					status: "loading",
 					error: null,
 				},
-				reasoningEfforts: ["low", "medium", "high", "maximum"],
+				reasoningEfforts: [...PI_REASONING_EFFORTS],
 				depths: [0, 1, 2, 3, 4, 5],
 				canSpawn: allNames,
 				skills: discoverSkills(agentDir),

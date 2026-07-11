@@ -7,14 +7,14 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, registerFauxProvider } from "@mariozechner/pi-ai";
+import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import {
 	AuthStorage,
 	createAgentSession,
 	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig } from "../src/subagent/agents.js";
 import { childPolicy, selectedRootPolicy } from "../src/subagent/depth-policy.js";
@@ -23,6 +23,9 @@ import taskExtension from "../src/subagent/index.js";
 import {
 	MULTI_AGENTS_BOOTSTRAP_RESUME_ENV,
 	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
+	MULTI_AGENTS_PROJECT_TRUST_CWD_ENV,
+	MULTI_AGENTS_PROJECT_TRUST_ENV,
+	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
 } from "../src/subagent/launcher-contract.js";
 import {
 	FINAL_RESPONSE_REQUIRED_MAX_ATTEMPTS,
@@ -526,6 +529,93 @@ describe("extension loading", () => {
 		);
 		expect(selectedEntries).toHaveLength(1);
 		expect(selectedEntries[0]?.data).toMatchObject({ [SELECTED_ROOT_AGENT_ENTRY_KEY]: "default" });
+	});
+
+	it.each([true, false])(
+		"requests a launcher restart when interactive project trust becomes %s",
+		async (projectTrusted) => {
+			const { pi, handlers } = createFakeExtensionApi();
+			taskExtension(pi);
+			const sessionManager = SessionManager.create(tempDir, tempDir);
+			const restartRequestFile = join(tempDir, `trust-${projectTrusted}.json`);
+			const previousTrust = process.env[MULTI_AGENTS_PROJECT_TRUST_ENV];
+			const previousTrustCwd = process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV];
+			const previousRestart = process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV];
+			process.env[MULTI_AGENTS_PROJECT_TRUST_ENV] = projectTrusted ? "0" : "1";
+			process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV] = tempDir;
+			process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV] = restartRequestFile;
+			let shutdownCalls = 0;
+
+			try {
+				await handlers.get("session_start")(
+					{ type: "session_start", reason: "startup" },
+					{
+						ui: { notify: () => {} },
+						cwd: tempDir,
+						isProjectTrusted: () => projectTrusted,
+						sessionManager,
+						shutdown: () => {
+							shutdownCalls += 1;
+						},
+					},
+				);
+			} finally {
+				if (previousTrust === undefined) delete process.env[MULTI_AGENTS_PROJECT_TRUST_ENV];
+				else process.env[MULTI_AGENTS_PROJECT_TRUST_ENV] = previousTrust;
+				if (previousTrustCwd === undefined) delete process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV];
+				else process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV] = previousTrustCwd;
+				restoreRestartRequestEnv(previousRestart);
+			}
+
+			expect(shutdownCalls).toBe(1);
+			expect(JSON.parse(readFileSync(restartRequestFile, "utf-8"))).toEqual({
+				version: 1,
+				type: "trust",
+				sessionPath: sessionManager.getSessionFile(),
+				sessionId: sessionManager.getSessionId(),
+				projectTrusted,
+			});
+			expect((pi as any)._appendedEntries).toHaveLength(0);
+		},
+	);
+
+	it("requests a trust restart for an in-memory --no-session runtime", async () => {
+		const { pi, handlers } = createFakeExtensionApi();
+		taskExtension(pi);
+		const sessionManager = SessionManager.inMemory(tempDir, { id: "ephemeral-trust" });
+		const restartRequestFile = join(tempDir, "trust-ephemeral.json");
+		const previousTrust = process.env[MULTI_AGENTS_PROJECT_TRUST_ENV];
+		const previousTrustCwd = process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV];
+		const previousRestart = process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV];
+		process.env[MULTI_AGENTS_PROJECT_TRUST_ENV] = "0";
+		process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV] = tempDir;
+		process.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV] = restartRequestFile;
+
+		try {
+			await handlers.get("session_start")(
+				{ type: "session_start", reason: "startup" },
+				{
+					ui: { notify: () => {} },
+					cwd: tempDir,
+					isProjectTrusted: () => true,
+					sessionManager,
+					shutdown: () => {},
+				},
+			);
+		} finally {
+			if (previousTrust === undefined) delete process.env[MULTI_AGENTS_PROJECT_TRUST_ENV];
+			else process.env[MULTI_AGENTS_PROJECT_TRUST_ENV] = previousTrust;
+			if (previousTrustCwd === undefined) delete process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV];
+			else process.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV] = previousTrustCwd;
+			restoreRestartRequestEnv(previousRestart);
+		}
+
+		expect(JSON.parse(readFileSync(restartRequestFile, "utf-8"))).toEqual({
+			version: 1,
+			type: "trust",
+			sessionId: sessionManager.getSessionId(),
+			projectTrusted: true,
+		});
 	});
 
 	it("appends selected-root-agent custom entry on reload when no valid existing selection exists", async () => {

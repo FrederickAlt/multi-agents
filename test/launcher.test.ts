@@ -9,6 +9,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 import * as mockedChildProcess from "node:child_process";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	buildLauncherArgs,
 	launchPi,
@@ -20,6 +21,8 @@ import {
 	MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV,
 	MULTI_AGENTS_LAUNCHER_ENV_VALUE,
+	MULTI_AGENTS_PROJECT_TRUST_CWD_ENV,
+	MULTI_AGENTS_PROJECT_TRUST_ENV,
 	MULTI_AGENTS_RESTART_REQUEST_FILE_ENV,
 } from "../src/subagent/launcher-contract.js";
 
@@ -58,6 +61,16 @@ function writeAgentDefinition(agentDir: string, name: string, extensions: string
 	}
 	const body = `---\n${frontmatter.join("\n")}\n---\n\n## Root agent\n`;
 	writeFileSync(join(agentsDir, `${name}.md`), body, "utf-8");
+}
+
+function writeRuntimeAgentDefinition(agentDir: string, name: string, fields: string[]): void {
+	const agentsDir = join(agentDir, "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	writeFileSync(
+		join(agentsDir, `${name}.md`),
+		`---\ndescription: runtime test agent\n${fields.join("\n")}\n---\n\nRuntime test agent.\n`,
+		"utf-8",
+	);
 }
 
 function writeAgentDir(names: string[]): string {
@@ -131,6 +144,19 @@ describe("pi-agents launcher command generation", () => {
 		expect(result.args).toContain(MULTI_AGENTS_EXTENSION_ENTRY);
 	});
 
+	it("seeds bundled agents before discovering a fresh agent directory", async () => {
+		rmSync(launcherAgentDir, { recursive: true, force: true });
+		launcherAgentDir = mkdtempSync(join(tmpdir(), "pi-agents-agentdir-"));
+		process.env.PI_CODING_AGENT_DIR = launcherAgentDir;
+
+		const result = await buildLauncherArgs(["--provider", "openai"], {
+			resolveExtensionCandidates: async () => [],
+		});
+
+		expect(result.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBe("default");
+		expect(existsSync(join(launcherAgentDir, "agents", "default.md"))).toBe(true);
+	});
+
 	it("uses PI_AGENTS_PI_BIN to override the resolved Pi binary", async () => {
 		const previous = process.env[PI_AGENTS_PI_BIN_ENV];
 		process.env[PI_AGENTS_PI_BIN_ENV] = "/usr/bin/pi-custom";
@@ -186,6 +212,25 @@ describe("pi-agents launcher command generation", () => {
 		expect(result.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]).toBe("/tmp/pi-agents-restart.json");
 	});
 
+	it("forwards Pi project-trust overrides to extension resolution", async () => {
+		const resolveExtensionCandidates = vi.fn(async () => []);
+
+		await buildLauncherArgs(["--approve"], { resolveExtensionCandidates });
+
+		expect(resolveExtensionCandidates).toHaveBeenCalledWith({
+			cwd: process.cwd(),
+			agentDir: launcherAgentDir,
+			projectTrustOverride: true,
+		});
+	});
+
+	it("passes the launcher-resolved project trust and cwd to the extension", async () => {
+		const result = await buildLauncherArgs(["--approve"], { cwd: process.cwd() });
+
+		expect(result.env[MULTI_AGENTS_PROJECT_TRUST_ENV]).toBe("1");
+		expect(result.env[MULTI_AGENTS_PROJECT_TRUST_CWD_ENV]).toBe(process.cwd());
+	});
+
 	it("passes launcher-resolved root agent via env when no session path is used", async () => {
 		const noSessionResult = await buildLauncherArgs(["--provider", "openai"]);
 		expect(noSessionResult.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBe("default");
@@ -206,6 +251,48 @@ describe("pi-agents launcher command generation", () => {
 			expect(sessionResult.env[MULTI_AGENTS_INITIAL_ROOT_AGENT_ENV]).toBeUndefined();
 			expect(sessionResult.args[sessionResult.args.indexOf("--session") + 1]).toBe(sessionPath);
 		});
+	});
+
+	it("applies Root agent tools, model, and thinking config to Pi arguments", async () => {
+		writeRuntimeAgentDefinition(launcherAgentDir, "default", [
+			"tools:",
+			"  - read",
+			"  - Task",
+			"model: openai-codex/gpt-5.5",
+			"reasoning_effort: maximum",
+		]);
+
+		const result = await buildLauncherArgs(
+			["--provider", "stale-provider", "--model", "stale-model", "--thinking", "low", "--no-tools"],
+			{ resolveExtensionCandidates: async () => [] },
+		);
+
+		expect(result.args).not.toContain("stale-provider");
+		expect(result.args).not.toContain("stale-model");
+		expect(result.args).not.toContain("--no-tools");
+		expect(result.args[result.args.indexOf("--tools") + 1]).toBe("read,Task");
+		expect(result.args[result.args.indexOf("--model") + 1]).toBe("openai-codex/gpt-5.5");
+		expect(result.args[result.args.indexOf("--thinking") + 1]).toBe("max");
+	});
+
+	it("maps an explicit empty Root tool list to --no-tools", async () => {
+		writeRuntimeAgentDefinition(launcherAgentDir, "default", ["tools: []"]);
+
+		const result = await buildLauncherArgs(["--tools", "read,bash"], {
+			resolveExtensionCandidates: async () => [],
+		});
+
+		expect(result.args).not.toContain("--tools");
+		expect(result.args).not.toContain("read,bash");
+		expect(result.args).toContain("--no-tools");
+	});
+
+	it("preserves user tool arguments when the Root agent inherits Pi defaults", async () => {
+		const result = await buildLauncherArgs(["--tools", "read,bash"], {
+			resolveExtensionCandidates: async () => [],
+		});
+
+		expect(result.args[result.args.indexOf("--tools") + 1]).toBe("read,bash");
 	});
 
 	it("does not leak stale launcher root env when launching with --session", async () => {
@@ -361,6 +448,29 @@ describe("pi-agents launcher command generation", () => {
 		}
 	});
 
+	it("does not relaunch a Pi resource that settings marked disabled", async () => {
+		const disabledExtension = join(launcherAgentDir, "extensions", "disabled.ts");
+		writeExtensionFile(disabledExtension);
+		writeAgentDefinition(launcherAgentDir, "default", ["disabled"]);
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const result = await buildLauncherArgs([], {
+				resolveExtensionCandidates: async () => [
+					{
+						path: disabledExtension,
+						enabled: false,
+						metadata: { source: "local", scope: "user", origin: "top-level" },
+					},
+				],
+			});
+
+			expect(collectExtensionValues(result.args)).not.toContain(disabledExtension);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("No extension candidates matched selector"));
+		} finally {
+			warnSpy.mockRestore();
+		}
+	});
+
 	it("injects protected root extension when root has no allowed extensions", async () => {
 		const workDir = mkdtempSync(join(tmpdir(), "pi-agents-workdir-"));
 		const candidate = join(workDir, "extensions", "disabled", "candidate.ts");
@@ -485,6 +595,95 @@ describe("pi-agents launcher command generation", () => {
 			expect(result.args).toContain("--agent");
 			expect(result.args[result.args.indexOf("--agent") + 1]).toBe("planner");
 			expect(result.sessionPathUsed).toBe(sessionPath);
+		});
+	});
+
+	it("prefers an exact session id over a longer prefix match", async () => {
+		await withTempSessionsDir(async (root, sessionDir) => {
+			const exactSession = createSessionFile(sessionDir, "abc", [], root, new Date("2024-01-01T00:00:00.000Z"));
+			createSessionFile(sessionDir, "abc123", [], root, new Date("2024-01-02T00:00:00.000Z"));
+
+			const result = await buildLauncherArgs(["--session", "abc", "--session-dir", sessionDir], {
+				cwd: root,
+			});
+
+			expect(result.sessionPathUsed).toBe(exactSession);
+			expect(result.args[result.args.indexOf("--session") + 1]).toBe(exactSession);
+		});
+	});
+
+	it("uses an existing exact native --session-id for Root context without adding --session", async () => {
+		await withTempSessionsDir(async (root, sessionDir) => {
+			const selectedRootEntry = {
+				type: "custom",
+				customType: "selected-root-agent",
+				id: "entry-native-id",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				data: { selectedRootAgent: "planner" },
+			};
+			const sessionPath = createSessionFile(sessionDir, "native-id", [selectedRootEntry], root);
+
+			const result = await buildLauncherArgs(["--session-id=native-id", "--session-dir", sessionDir], {
+				cwd: root,
+			});
+
+			expect(result.sessionPathUsed).toBe(sessionPath);
+			expect(result.args).not.toContain("--session");
+			expect(result.args[result.args.indexOf("--session-id") + 1]).toBe("native-id");
+			expect(result.args[result.args.indexOf("--agent") + 1]).toBe("planner");
+		});
+	});
+
+	it("leaves a missing native --session-id for Pi to create and allows ephemeral IDs", async () => {
+		await withTempSessionsDir(async (root, sessionDir) => {
+			const persistent = await buildLauncherArgs(["--session-id=new-id", "--session-dir", sessionDir], {
+				cwd: root,
+			});
+			const ephemeral = await buildLauncherArgs(
+				["--no-session", "--session-id", "ephemeral-id", "--session-dir", sessionDir],
+				{ cwd: root },
+			);
+
+			expect(persistent.sessionPathUsed).toBeUndefined();
+			expect(persistent.args[persistent.args.indexOf("--session-id") + 1]).toBe("new-id");
+			expect(ephemeral.args).toContain("--no-session");
+			expect(ephemeral.args[ephemeral.args.indexOf("--session-id") + 1]).toBe("ephemeral-id");
+		});
+	});
+
+	it.each(["--session", "--continue", "--resume"])(
+		"rejects native --session-id combined with %s",
+		async (conflict) => {
+			const args =
+				conflict === "--session"
+					? ["--session-id", "target", conflict, "source"]
+					: ["--session-id", "target", conflict];
+			await expect(buildLauncherArgs(args)).rejects.toThrow(
+				`Error: --session-id cannot be combined with ${conflict}`,
+			);
+		},
+	);
+
+	it("resolves extensions against the selected session cwd", async () => {
+		await withTempSessionsDir(async (root, sessionDir) => {
+			const sessionCwd = mkdtempSync(join(tmpdir(), "pi-agents-session-cwd-"));
+			const sessionPath = createSessionFile(sessionDir, "other-project", [], sessionCwd);
+			const resolveExtensionCandidates = vi.fn(async () => []);
+
+			try {
+				await buildLauncherArgs(["--session", sessionPath, "--session-dir", sessionDir], {
+					cwd: root,
+					resolveExtensionCandidates,
+				});
+
+				expect(resolveExtensionCandidates).toHaveBeenCalledWith({
+					cwd: sessionCwd,
+					agentDir: launcherAgentDir,
+				});
+			} finally {
+				rmSync(sessionCwd, { recursive: true, force: true });
+			}
 		});
 	});
 
@@ -969,6 +1168,12 @@ describe("pi-agents launcher command generation", () => {
 		}
 	});
 
+	it("rejects --no-session combined with --fork", async () => {
+		await expect(buildLauncherArgs(["--no-session", "--fork", "source"])).rejects.toThrow(
+			"Error: --fork cannot be combined with --no-session",
+		);
+	});
+
 	it("forks source session before launch and launches from the forked path", async () => {
 		await withTempSessionsDir(async (root, sessionDir) => {
 			const sourcePath = createSessionFile(sessionDir, "source", [
@@ -994,6 +1199,138 @@ describe("pi-agents launcher command generation", () => {
 			expect(forkContents[0].type).toBe("session");
 			expect(forkContents[0].parentSession).toBe(sourcePath);
 			expect(result.args[result.args.indexOf("--agent") + 1]).toBe("planner");
+		});
+	});
+
+	it("uses native --session-id as the target ID when forking", async () => {
+		await withTempSessionsDir(async (root, sessionDir) => {
+			createSessionFile(sessionDir, "source", [], root);
+
+			const result = await buildLauncherArgs(
+				["--fork", "source", "--session-id=target-id", "--session-dir", sessionDir],
+				{ cwd: root },
+			);
+			const forkPath = result.args[result.args.indexOf("--session") + 1];
+			const header = JSON.parse(readFileSync(forkPath, "utf-8").split("\n")[0]);
+
+			expect(header.id).toBe("target-id");
+			expect(result.args).not.toContain("--session-id");
+		});
+	});
+
+	it("derives extension resolution cwd from the forked session", async () => {
+		const getCwdSpy = vi.spyOn(SessionManager.prototype, "getCwd");
+		try {
+			await withTempSessionsDir(async (root, sessionDir) => {
+				createSessionFile(sessionDir, "source", [], root);
+				const resolveExtensionCandidates = vi.fn(async () => []);
+
+				const result = await buildLauncherArgs(["--fork", "source", "--session-dir", sessionDir], {
+					cwd: root,
+					resolveExtensionCandidates,
+				});
+				const forkPath = result.sessionPathUsed;
+
+				expect(forkPath).toBeDefined();
+				expect(
+					getCwdSpy.mock.contexts.some((manager) => (manager as SessionManager).getSessionFile() === forkPath),
+				).toBe(true);
+				expect(resolveExtensionCandidates).toHaveBeenCalledWith({
+					cwd: root,
+					agentDir: launcherAgentDir,
+				});
+			});
+		} finally {
+			getCwdSpy.mockRestore();
+		}
+	});
+
+	it.each([true, false])("restarts a session with the selected project trust (%s)", async (projectTrusted) => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+		await withTempSessionsDir(async (root, sessionDir) => {
+			const restartFile = join(root, "trust-restart.json");
+			const sessionPath = createSessionFile(sessionDir, "trust-target", [], root);
+			const spawnResult = {
+				status: 0,
+				signal: null,
+				stdout: null,
+				stderr: null,
+				output: [],
+				pid: 123,
+			} as any;
+
+			spawnSyncMock.mockImplementationOnce((_: any, __: any, spawnOptions: any) => {
+				writeFileSync(
+					spawnOptions.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV],
+					`${JSON.stringify({ version: 1, type: "trust", sessionPath, sessionId: "trust-target", projectTrusted })}\n`,
+				);
+				return spawnResult;
+			});
+			spawnSyncMock.mockImplementationOnce(() => spawnResult);
+
+			await launchPi(
+				[
+					projectTrusted ? "--no-approve" : "--approve",
+					"--agent",
+					"planner",
+					"--session-id",
+					"stale",
+					"--session-dir",
+					sessionDir,
+				],
+				{ cwd: root, restartRequestFile: restartFile },
+			);
+
+			const secondArgs = spawnSyncMock.mock.calls[1][1] as string[];
+			expect(secondArgs[secondArgs.indexOf("--session") + 1]).toBe(sessionPath);
+			expect(secondArgs).toContain(projectTrusted ? "--approve" : "--no-approve");
+			expect(secondArgs).not.toContain(projectTrusted ? "--no-approve" : "--approve");
+			expect(secondArgs).not.toContain("--session-id");
+			expect(secondArgs[secondArgs.indexOf("--agent") + 1]).toBe("planner");
+		});
+	});
+
+	it.each([false, true])("preserves a fresh trust-restart session ID (no-session=%s)", async (noSession) => {
+		const spawnSyncMock = vi.mocked(mockedChildProcess.spawnSync);
+		spawnSyncMock.mockReset();
+		await withTempSessionsDir(async (root, sessionDir) => {
+			const restartFile = join(root, "fresh-trust-restart.json");
+			const spawnResult = {
+				status: 0,
+				signal: null,
+				stdout: null,
+				stderr: null,
+				output: [],
+				pid: 123,
+			} as any;
+
+			spawnSyncMock.mockImplementationOnce((_: any, __: any, spawnOptions: any) => {
+				writeFileSync(
+					spawnOptions.env[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV],
+					`${JSON.stringify({
+						version: 1,
+						type: "trust",
+						...(noSession ? {} : { sessionPath: join(sessionDir, "prospective-session.jsonl") }),
+						sessionId: "fresh-trust-id",
+						projectTrusted: true,
+					})}\n`,
+				);
+				return spawnResult;
+			});
+			spawnSyncMock.mockImplementationOnce(() => spawnResult);
+
+			await launchPi(
+				[...(noSession ? ["--no-session"] : []), "--session-id", "fresh-trust-id", "--session-dir", sessionDir],
+				{ cwd: root, restartRequestFile: restartFile },
+			);
+
+			const secondArgs = spawnSyncMock.mock.calls[1][1] as string[];
+			expect(secondArgs).not.toContain("--session");
+			expect(secondArgs[secondArgs.indexOf("--session-id") + 1]).toBe("fresh-trust-id");
+			expect(secondArgs[secondArgs.indexOf("--session-dir") + 1]).toBe(sessionDir);
+			expect(secondArgs.includes("--no-session")).toBe(noSession);
+			expect(secondArgs).toContain("--approve");
 		});
 	});
 
@@ -1034,10 +1371,13 @@ describe("pi-agents launcher command generation", () => {
 		spawnSyncMock.mockImplementationOnce(() => spawnResult);
 
 		try {
-			const result = await launchPi(["--provider", "openai", "--session-dir", workDir], {
-				cwd: root,
-				restartRequestFile: restartFile,
-			});
+			const result = await launchPi(
+				["--provider", "openai", "--session-id", "stale-agent-session", "--session-dir", workDir],
+				{
+					cwd: root,
+					restartRequestFile: restartFile,
+				},
+			);
 
 			expect(result).toBe(0);
 			expect(spawnSyncMock).toHaveBeenCalledTimes(2);
@@ -1054,6 +1394,8 @@ describe("pi-agents launcher command generation", () => {
 			expect(secondArgs).toContain("--agent");
 			expect(secondArgs[secondArgs.indexOf("--agent") + 1]).toBe("planner");
 			expect(secondArgs).not.toContain("--session");
+			expect(secondArgs).not.toContain("--session-id");
+			expect(secondArgs).not.toContain("stale-agent-session");
 			if (firstCall[2] && typeof firstCall[2] === "object") {
 				const env = (firstCall[2] as { env?: Record<string, string | undefined> }).env;
 				expect(env?.[MULTI_AGENTS_RESTART_REQUEST_FILE_ENV]).toBe(restartFile);
@@ -1127,15 +1469,20 @@ describe("pi-agents launcher command generation", () => {
 		spawnSyncMock.mockImplementationOnce(() => spawnResult);
 
 		try {
-			const result = await launchPi(["--resume", "--extension", userForcedExtension, "--session-dir", workDir], {
-				cwd: root,
-				restartRequestFile: restartFile,
-			});
+			const result = await launchPi(
+				["--session-id=stale-resume-session", "--extension", userForcedExtension, "--session-dir", workDir],
+				{
+					cwd: root,
+					restartRequestFile: restartFile,
+				},
+			);
 
 			expect(result).toBe(0);
 			expect(spawnSyncMock).toHaveBeenCalledTimes(2);
 			const firstCallArgs = spawnSyncMock.mock.calls[0][1] as string[];
-			expect(collectExtensionValues(firstCallArgs)).toEqual([MULTI_AGENTS_EXTENSION_ENTRY]);
+			expect(collectExtensionValues(firstCallArgs)).toEqual(
+				expect.arrayContaining([defaultExtension, userForcedExtension, MULTI_AGENTS_EXTENSION_ENTRY]),
+			);
 			const secondArgs = spawnSyncMock.mock.calls[1][1] as string[];
 			const secondExtensions = collectExtensionValues(secondArgs);
 			expect(secondExtensions).toContain(plannerExtension);
@@ -1145,6 +1492,7 @@ describe("pi-agents launcher command generation", () => {
 			expect(secondArgs[secondArgs.indexOf("--session") + 1]).toBe(selectedSessionPath);
 			expect(secondArgs).toContain("--agent");
 			expect(secondArgs[secondArgs.indexOf("--agent") + 1]).toBe("planner");
+			expect(secondArgs).not.toContain("--session-id=stale-resume-session");
 		} finally {
 			rmSync(workDir, { recursive: true, force: true });
 			rmSync(root, { recursive: true, force: true });

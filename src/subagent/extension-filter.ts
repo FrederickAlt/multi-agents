@@ -3,9 +3,11 @@ import * as path from "node:path";
 import type { AgentConfig } from "./agents.js";
 import { matchesProtectedMultiAgentExtension } from "./protected-extension.js";
 
-interface ExtensionCandidate {
+export interface ExtensionCandidate {
 	path?: string;
 	resolvedPath?: string;
+	/** Pi keeps disabled resources in resolution results for config UIs. */
+	enabled?: boolean;
 	sourceInfo?: {
 		source?: string;
 		baseDir?: string;
@@ -241,9 +243,12 @@ function isProtectedMultiAgentExtension(candidate: ExtensionCandidate): boolean 
 }
 
 export function resolveExtensionsForAgent(agent: AgentConfig, candidates: ExtensionCandidate[]): ExtensionSelection {
+	const enabledCandidates = candidates.filter((candidate) => candidate.enabled !== false);
 	if (agent.extensions === undefined) {
 		return {
-			paths: candidates.map((candidate) => String(candidate.path || candidate.resolvedPath || "")).filter(Boolean),
+			paths: enabledCandidates
+				.map((candidate) => String(candidate.path || candidate.resolvedPath || ""))
+				.filter(Boolean),
 			warnings: [],
 		};
 	}
@@ -259,7 +264,7 @@ export function resolveExtensionsForAgent(agent: AgentConfig, candidates: Extens
 	for (const selector of agent.extensions) {
 		const normalizedSelector = selector?.trim();
 		if (!normalizedSelector) continue;
-		const matches = candidates.filter((candidate) => candidateMatchesSelector(candidate, normalizedSelector));
+		const matches = enabledCandidates.filter((candidate) => candidateMatchesSelector(candidate, normalizedSelector));
 		if (matches.length === 0) {
 			warnings.push(`No extension candidates matched selector "${normalizedSelector}".`);
 			continue;

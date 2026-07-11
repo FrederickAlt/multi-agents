@@ -1,5 +1,10 @@
-import { DefaultResourceLoader, type ExtensionAPI, getAgentDir, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+import {
+	DefaultResourceLoader,
+	type ExtensionAPI,
+	getAgentDir,
+	getMarkdownTheme,
+} from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { AgentRegistry, discoverAgents } from "./agents.js";
 import { formatContextUsageLine } from "./context-usage.js";
@@ -233,7 +238,7 @@ export function configureTaskToolForRuntime(
 			"Set kill_on_timeout:true only when you want timeout escalation: request a final answer, then cancel in-flight work and attempt a no-tools final summary before forced abort fallback.",
 		],
 		parameters: waitForAgentParams,
-		async execute(_toolCallId, wParams, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, wParams, signal, _onUpdate, ctx) {
 			const controller = new TaskController();
 
 			const activeStore = runtime.store ?? MetadataStore.fromSessionManager(ctx.sessionManager, runtime.logger);
@@ -252,6 +257,7 @@ export function configureTaskToolForRuntime(
 
 			const executeContext: TaskExecuteContext = {
 				cwd: ctx.cwd,
+				signal,
 				runtime,
 				agentDiscovery: agentDiscoveryAdapter,
 				metadataStore: activeStore,

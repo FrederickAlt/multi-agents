@@ -208,7 +208,7 @@ export type ConfigAction =
 			options: DiscoveredOptions;
 	  }
 	| {
-			type: "UPDATE_AGENTS";
+			type: "UPDATE_AGENT_STALE_ITEMS";
 			agents: AgentConfigState[];
 	  }
 	| { type: "SCROLL"; direction: "up" | "down" }

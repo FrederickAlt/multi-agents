@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { PI_REASONING_EFFORTS } from "../../src/subagent/reasoning-effort.js";
 import {
 	applyOptionColumnItemOrder,
 	getFieldName,
@@ -78,6 +79,10 @@ function makeOptions(overrides: Partial<DiscoveredOptions> = {}): DiscoveredOpti
 }
 
 describe("configReducer", () => {
+	it("uses Pi's current reasoning efforts in initial options", () => {
+		expect(createInitialState().options.reasoningEfforts).toEqual(PI_REASONING_EFFORTS);
+	});
+
 	it("INIT_COMPLETE populates agents and options", () => {
 		const state = createInitialState();
 		const agents = [makeAgent()];
@@ -92,6 +97,47 @@ describe("configReducer", () => {
 		const state = createInitialState();
 		const next = configReducer(state, { type: "INIT_ERROR", error: "oops" });
 		expect(next.globalError).toBe("oops");
+	});
+
+	it("UPDATE_AGENT_STALE_ITEMS only applies delayed markers still present in edited frontmatter", () => {
+		const editedFrontmatter = {
+			description: "edited locally",
+			tools: ["read", "still-stale"],
+			extensions: [],
+		};
+		const state: ConfigState = {
+			...createInitialState(),
+			agents: [
+				makeAgent({
+					frontmatter: editedFrontmatter,
+					staleItems: {},
+				}),
+			],
+		};
+		const delayedDiscovery = makeAgent({
+			frontmatter: {
+				description: "old disk value",
+				tools: ["removed-while-pending", "still-stale"],
+				extensions: ["removed-extension"],
+			},
+			staleItems: {
+				tools: ["removed-while-pending", "still-stale"],
+				extensions: ["removed-extension"],
+			},
+		});
+
+		const next = configReducer(state, {
+			type: "UPDATE_AGENT_STALE_ITEMS",
+			agents: [delayedDiscovery],
+		});
+
+		expect(next.agents[0].frontmatter).toBe(editedFrontmatter);
+		expect(next.agents[0].frontmatter).toEqual({
+			description: "edited locally",
+			tools: ["read", "still-stale"],
+			extensions: [],
+		});
+		expect(next.agents[0].staleItems).toEqual({ tools: ["still-stale"] });
 	});
 
 	it("FOCUS_AGENT moves agent index", () => {
