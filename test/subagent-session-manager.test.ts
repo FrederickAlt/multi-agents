@@ -316,6 +316,19 @@ describe("SubagentSessionManager", () => {
 			expect(mockModelResolver.resolve).toHaveBeenCalledWith("custom-model", fallback, expect.any(Array));
 		});
 
+		it("lets Pi restore the session model when resuming", async () => {
+			const sm = createManager();
+			const record = makeRecord("model-resume");
+			record.sessionFile = join(tempDir, "existing-session.jsonl");
+			const agent = makeAgent("scout");
+			agent.model = "newly-configured-model";
+
+			await sm.getOrCreateSession(record, agent, [], defaultSetupContext);
+
+			expect(mockModelResolver.resolve).not.toHaveBeenCalled();
+			expect(mockAgentSessionFactory.create).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+		});
+
 		it("collects model warnings when configured model not found", async () => {
 			const sm = createManager();
 			const warnings: string[] = [];

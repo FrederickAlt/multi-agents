@@ -390,6 +390,7 @@ export class SubagentSessionManager {
 		// use Pi's default cwd-derived session directory instead of inheriting the
 		// parent Root session directory, so native /resume groups them under their
 		// own working tree.
+		const isResume = Boolean(record.sessionFile);
 		const sessionDir = undefined;
 		sessionLogger.debug("session_manager_open", { sessionDir, existingFile: !!record.sessionFile });
 		const piSessionManager = this.sessionManagerProvider.openOrCreate(record.sessionFile, sessionDir, cwd);
@@ -408,9 +409,12 @@ export class SubagentSessionManager {
 		metadataStore.upsertRecord(record);
 		sessionLogger.debug("session_file_persisted", { sessionFile: record.sessionFile, cwdLength: cwd.length });
 
-		// 4. Resolve model
-		const model = modelResolver.resolve(agent.model, fallbackModel, warnings);
-		sessionLogger.debug("session_model_resolved", { modelHint: model?.id || model?.provider || "default" });
+		// 4. Resolve the configured model only for a new session. On resume, leaving
+		// it unset lets Pi restore the model recorded in the session transcript.
+		const model = isResume ? undefined : modelResolver.resolve(agent.model, fallbackModel, warnings);
+		sessionLogger.debug("session_model_resolved", {
+			modelHint: model?.id || model?.provider || (isResume ? "session" : "default"),
+		});
 
 		// 5. Create agent session (pass parent's modelRegistry for shared auth)
 		let session: ManagedAgentSession;
