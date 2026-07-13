@@ -2,6 +2,8 @@
 // State types for Agent Configuration TUI
 // ---------------------------------------------------------------------------
 
+import type { PiReasoningEffort } from "../../subagent/reasoning-effort.js";
+
 export interface AgentConfigState {
 	name: string; // filename stem
 	description: string; // from frontmatter, display-only
@@ -106,6 +108,8 @@ export interface ModelOption {
 	 * - "provider/modelId" when modelId is ambiguous across providers
 	 */
 	canonicalRef: string;
+	/** Model-specific levels reported by Pi; absent means capability is unknown. */
+	supportedThinkingLevels?: readonly PiReasoningEffort[];
 }
 
 export interface StatusInfo {

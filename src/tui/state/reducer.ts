@@ -6,6 +6,7 @@ import {
 	applyOptionColumnItemOrder,
 	getFieldName,
 	getInlineOptionColumnFieldIndex,
+	getModeSelection,
 	getOptionColumnItemIndex,
 	getOptionColumnItems,
 	getOptionColumnSelectedValues,
@@ -286,6 +287,11 @@ function getOptionColumnWidthsForAgent(
 			fieldName,
 			columnFilter,
 		);
+		const smartModeLinked = isSmartModeLinked(agent);
+		const modeSummary =
+			fieldName === "model" || (fieldName === "smart_model" && !smartModeLinked)
+				? getModeSelection(agent, options, fieldName === "smart_model" ? "smart" : "fast")
+				: undefined;
 		return getOptionColumnWidth({
 			fieldName,
 			items,
@@ -294,6 +300,7 @@ function getOptionColumnWidthsForAgent(
 			isCheckbox: isInlineCheckbox,
 			staleItems: agent.staleItems[fieldName] ?? [],
 			filterText: isFocusedField ? optionColumnFilter : undefined,
+			modeSummary,
 		});
 	});
 }

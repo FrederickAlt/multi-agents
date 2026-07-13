@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { extensionAliasSet } from "../../subagent/extension-filter.js";
+import { getSupportedReasoningEfforts, type ModelThinkingMetadata } from "../../subagent/reasoning-effort.js";
 import type { ModelOption } from "../state/types.js";
 
 type LoadedPiExtension = {
@@ -39,7 +40,7 @@ type PiSession = {
 	dispose?(): void;
 };
 
-type PiModelReference = {
+type PiModelReference = ModelThinkingMetadata & {
 	provider?: string;
 	id?: string;
 };
@@ -479,7 +480,7 @@ export async function discoverPiRuntimeResources(
 // Model reference helpers
 // ---------------------------------------------------------------------------
 
-export type ModelReferenceEntry = Pick<ModelOption, "provider" | "modelId">;
+export type ModelReferenceEntry = Pick<ModelOption, "provider" | "modelId" | "supportedThinkingLevels">;
 
 function modelReferenceKey(model: ModelReferenceEntry): string {
 	return `${model.provider}\0${model.modelId}`;
@@ -864,7 +865,14 @@ async function discoverRuntimeModelReferences(
 		const registry = pi.ModelRegistry.create(authStorage, path.join(agentDir, "models.json"));
 		return registry
 			.getAll()
-			.map((model) => ({ provider: String(model.provider ?? ""), modelId: String(model.id ?? "") }))
+			.map((model) => {
+				const supportedThinkingLevels = getSupportedReasoningEfforts(model);
+				return {
+					provider: String(model.provider ?? ""),
+					modelId: String(model.id ?? ""),
+					...(supportedThinkingLevels ? { supportedThinkingLevels } : {}),
+				};
+			})
 			.filter((model) => model.provider.length > 0 && model.modelId.length > 0);
 	} catch {
 		// Registry refinement is best-effort. `pi --list-models` remains the source of
@@ -894,6 +902,7 @@ export function discoverModelsFromPiCli(
 	if (models.length === 0) {
 		throw new Error("pi --list-models returned no parseable models");
 	}
+	applyRuntimeModelCapabilities(models, runtimeModelReferences);
 	computeCanonicalModelRefs(models, runtimeModelReferences ?? models);
 	disambiguateModelDisplayNames(models);
 	orderModelsByProvider(models);
@@ -903,6 +912,19 @@ export function discoverModelsFromPiCli(
 		status: "ready",
 		error: undefined,
 	};
+}
+
+function applyRuntimeModelCapabilities(models: ModelOption[], runtimeModelReferences?: ModelReferenceEntry[]): void {
+	if (!runtimeModelReferences) return;
+	const capabilities = new Map(
+		runtimeModelReferences
+			.filter((reference) => reference.supportedThinkingLevels !== undefined)
+			.map((reference) => [modelReferenceKey(reference), reference.supportedThinkingLevels!]),
+	);
+	for (const model of models) {
+		const supportedThinkingLevels = capabilities.get(modelReferenceKey(model));
+		if (supportedThinkingLevels) model.supportedThinkingLevels = [...supportedThinkingLevels];
+	}
 }
 
 export function parsePiListModelsOutput(output: string): ModelOption[] {

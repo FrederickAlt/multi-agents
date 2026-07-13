@@ -333,6 +333,29 @@ printf 'local-b             llama-3.1-8b          8.2K     4.1K     no        no
 		expect(result.models.map((m) => m.canonicalRef)).toEqual(["local-a/llama-3.1-8b", "local-b/llama-3.1-8b"]);
 	});
 
+	it("uses runtime model metadata to expose supported thinking levels", () => {
+		const fakePi = path.join(tempDir, "pi");
+		fs.writeFileSync(
+			fakePi,
+			`#!/usr/bin/env bash
+		if [[ "$1" != "--list-models" ]]; then exit 2; fi
+		printf 'provider            model                 context  max-out  thinking  images\\n'
+		printf 'openai              gpt-5.4-mini          400K     128K     yes       yes\\n'
+		`,
+		);
+		fs.chmodSync(fakePi, 0o755);
+
+		const result = discoverModelsFromPiCli(tempDir, fakePi, [
+			{
+				provider: "openai",
+				modelId: "gpt-5.4-mini",
+				supportedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
+			},
+		]);
+
+		expect(result.models[0]?.supportedThinkingLevels).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
+	});
+
 	it("canonicalizes visible models against hidden runtime registry duplicates", () => {
 		const fakePi = path.join(tempDir, "pi");
 		fs.writeFileSync(

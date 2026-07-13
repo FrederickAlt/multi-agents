@@ -357,7 +357,7 @@ describe("Board", () => {
 			modeSummary: { model: "model-a", reasoningEffort: "maximum" },
 		}) as React.ReactElement;
 
-		expect(collectText(result)).toContain("model-a ○○○○○○●");
+		expect(collectText(result)).toContain("model-a ○○○○○○● max");
 	});
 
 	it("shows filter bar only for focused option columns with active filter", () => {

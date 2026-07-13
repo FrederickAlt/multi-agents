@@ -132,6 +132,10 @@ export function AgentRow({
 				fieldName,
 				columnFilter,
 			);
+			const modeSummary =
+				fieldName === "model" || (fieldName === "smart_model" && !smartModeLinked)
+					? getModeSelection(agent, options, fieldName === "smart_model" ? "smart" : "fast")
+					: undefined;
 			const width = getOptionColumnWidth({
 				fieldName,
 				items: fieldName === "smart_model" && smartModeLinked ? availableItems : items,
@@ -140,6 +144,7 @@ export function AgentRow({
 				isCheckbox: isInlineCheckbox,
 				staleItems: agent.staleItems[fieldName] ?? [],
 				filterText: isFocusedField ? optionColumnFilter : undefined,
+				modeSummary,
 			});
 			const optionFocusedItemIndex = isFocusedField
 				? focusedOptionItem
@@ -154,6 +159,7 @@ export function AgentRow({
 				columnFilter,
 				items,
 				width,
+				modeSummary,
 				optionFocusedItemIndex,
 			};
 		});
@@ -207,11 +213,7 @@ export function AgentRow({
 								selectedValues={column.selectedValues}
 								focusedItemIndex={column.optionFocusedItemIndex}
 								isFocused={column.isFocusedField}
-								modeSummary={
-									column.fieldName === "model" || (column.fieldName === "smart_model" && !smartModeLinked)
-										? getModeSelection(agent, options, column.fieldName === "smart_model" ? "smart" : "fast")
-										: undefined
-								}
+								modeSummary={column.modeSummary}
 								linked={column.fieldName === "smart_model" && smartModeLinked}
 								centerLinked={column.fieldName === "smart_model" && smartModeLinked && !smartModelPickerOpen}
 								disabled={column.isDisabled}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getSupportedReasoningEfforts } from "../../src/subagent/reasoning-effort.js";
 import {
 	getModeSelection,
 	getOptionColumnDisabledItems,
@@ -9,6 +10,15 @@ import {
 import type { AgentConfigState } from "../../src/tui/state/types.js";
 
 describe("reasoning effort compatibility", () => {
+	it("derives model-specific levels from Pi metadata", () => {
+		expect(
+			getSupportedReasoningEfforts({
+				reasoning: true,
+				thinkingLevelMap: { off: "none", xhigh: "xhigh" },
+			}),
+		).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
+	});
+
 	it("normalizes legacy maximum effort for fast and smart mode selection", () => {
 		const agent: AgentConfigState = {
 			name: "legacy-agent",
@@ -40,6 +50,40 @@ describe("reasoning effort compatibility", () => {
 
 		expect(getModeSelection(agent, options, "fast").reasoningEffort).toBe("max");
 		expect(getModeSelection(agent, options, "smart").reasoningEffort).toBe("max");
+	});
+
+	it("shows Pi's effective fallback when max is unsupported by the selected model", () => {
+		const agent: AgentConfigState = {
+			name: "gpt-agent",
+			description: "gpt",
+			filePath: "/tmp/gpt-agent.md",
+			frontmatter: { model: "gpt-5.4-mini", reasoning_effort: "max" },
+			body: "",
+			error: null,
+			staleItems: {},
+		};
+		const options = {
+			tools: [],
+			extensions: [],
+			models: [
+				{
+					provider: "openai",
+					modelId: "gpt-5.4-mini",
+					displayName: "gpt-5.4-mini",
+					canonicalRef: "gpt-5.4-mini",
+					supportedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh"] as const,
+				},
+			],
+			defaultModel: "gpt-5.4-mini",
+			modelDiscovery: { status: "ready" as const, error: null },
+			reasoningEfforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+			depths: [],
+			canSpawn: [],
+			skills: [],
+			promptParts: [],
+		};
+
+		expect(getModeSelection(agent, options).reasoningEffort).toBe("xhigh");
 	});
 });
 

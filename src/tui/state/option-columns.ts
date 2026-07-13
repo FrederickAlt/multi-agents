@@ -1,6 +1,6 @@
 import { aliasesMatchSelector } from "../../subagent/extension-filter.js";
 import { isProtectedMultiAgentExtensionName } from "../../subagent/protected-extension.js";
-import { normalizeReasoningEffort } from "../../subagent/reasoning-effort.js";
+import { clampReasoningEffort, normalizeReasoningEffort } from "../../subagent/reasoning-effort.js";
 import { resolveModelDisplayName } from "../discovery/options.js";
 import type {
 	AgentConfigState,
@@ -32,11 +32,15 @@ export function getModeSelection(
 ): ModeSelection {
 	const fm = agent.frontmatter ?? {};
 	const fastModel = getStoredModelDisplayName(fm.model, options);
-	const fastEffort = getStoredReasoningEffort(fm.reasoning_effort, getDefaultReasoningEffort(options));
+	const fastStoredEffort = getStoredReasoningEffort(fm.reasoning_effort, getDefaultReasoningEffort(options));
+	const fastEffort = getEffectiveReasoningEffort(fm.model, fastStoredEffort, options);
 	if (mode === "smart") {
+		const smartModelValue = fm.smart_model ?? fm.model;
+		const smartModel = getStoredModelDisplayName(smartModelValue, options);
+		const smartStoredEffort = getStoredReasoningEffort(fm.smart_reasoning_effort, fastStoredEffort);
 		return {
-			model: getStoredModelDisplayName(fm.smart_model ?? fm.model, options),
-			reasoningEffort: getStoredReasoningEffort(fm.smart_reasoning_effort, fastEffort),
+			model: smartModel,
+			reasoningEffort: getEffectiveReasoningEffort(smartModelValue, smartStoredEffort, options),
 		};
 	}
 	return { model: fastModel, reasoningEffort: fastEffort };
@@ -45,6 +49,15 @@ export function getModeSelection(
 function getStoredReasoningEffort(raw: unknown, fallback: string): string {
 	if (raw === undefined || raw === null) return fallback;
 	return normalizeReasoningEffort(raw) ?? String(raw);
+}
+
+function getEffectiveReasoningEffort(rawModel: unknown, effort: string, options: DiscoveredOptions): string {
+	const normalized = normalizeReasoningEffort(effort);
+	if (!normalized) return effort;
+	const modelDisplayName = getStoredModelDisplayName(rawModel, options);
+	const model = options.models.find((candidate) => candidate.displayName === modelDisplayName);
+	const supported = model?.supportedThinkingLevels;
+	return clampReasoningEffort(normalized, supported);
 }
 
 function getDefaultReasoningEffort(options: DiscoveredOptions): string {

@@ -91,6 +91,7 @@ export function OptionColumn({
 			isCheckbox,
 			staleItems,
 			filterText,
+			modeSummary,
 		});
 	const pinnedStatus = fieldName === "model" || fieldName === "smart_model" ? getModelPinnedStatus(items) : undefined;
 	const reservedLines = (showFilterBar ? 1 : 0) + (pinnedStatus ? 1 : 0);
@@ -101,6 +102,9 @@ export function OptionColumn({
 	const { start, end } = getVisibleRange(scrollableItems.length, focusedInScrollable, visibleItemWindow);
 	const visibleItems = scrollableItems.slice(start, end);
 	const isLinkedInactive = linked && !isFocused;
+	const displayedEffort = modeSummary
+		? (normalizeReasoningEffort(modeSummary.reasoningEffort) ?? modeSummary.reasoningEffort)
+		: undefined;
 
 	return (
 		<Box
@@ -121,7 +125,7 @@ export function OptionColumn({
 			</Text>
 			{modeSummary && (
 				<Text dimColor wrap="truncate">
-					{modeSummary.model} {formatEffort(modeSummary.reasoningEffort)}
+					{modeSummary.model} {formatEffort(modeSummary.reasoningEffort)} {displayedEffort}
 				</Text>
 			)}
 			{linked && (
