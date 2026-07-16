@@ -51,6 +51,14 @@ describe("AsyncAgentNotifier", () => {
 			expect(n.getUnconsumed()).toEqual(["abc123"]);
 		});
 
+		it("does not track user-aborted agents for notifications or reminders", () => {
+			const n = new AsyncAgentNotifier();
+			n.markCompleted("aborted-agent", "aborted");
+
+			expect(n.getUnconsumed()).toEqual([]);
+			expect(n.takeDueNotification()).toBeNull();
+		});
+
 		it("notifies again when a consumed agent ID completes a later async run", () => {
 			const n = new AsyncAgentNotifier();
 			n.markCompleted("agent-x");

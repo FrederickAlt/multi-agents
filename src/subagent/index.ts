@@ -198,7 +198,8 @@ function getOrCreateSessionManager(logger?: DebugLogger): SubagentSessionManager
 	if (!_sessionManager) {
 		_sessionManager = new SubagentSessionManager(new PiSessionManagerProvider(), new PiAgentSessionFactory(), logger);
 		_sessionManager.setOnAsyncResultReady((id) => {
-			_asyncAgentNotifier.markCompleted(id);
+			const result = _sessionManager?.getAsyncResult(id);
+			_asyncAgentNotifier.markCompleted(id, result?.terminalOutcome);
 		});
 	}
 	return _sessionManager;

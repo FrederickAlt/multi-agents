@@ -1,3 +1,5 @@
+import type { TerminalOutcome } from "./metadata.js";
+
 /**
  * Notification contract that owns async sub-agent completion lifecycle state.
  *
@@ -14,7 +16,7 @@ export type AsyncAgentNotificationOpportunity = "input" | "turn_end";
  */
 export interface AsyncAgentNotificationPort {
 	/** Record an agent completion so it can be surfaced to the root agent. */
-	markCompleted(id: string): void;
+	markCompleted(id: string, terminalOutcome?: TerminalOutcome): void;
 
 	/** Mark consumed IDs so they stop appearing in any future notifications. */
 	consume(ids: string[]): void;
@@ -67,8 +69,8 @@ export class AsyncAgentNotifier implements AsyncAgentNotificationPort {
 	}
 
 	/** Record an agent as completed-but-unconsumed. Idempotent per outstanding result. */
-	markCompleted(id: string): void {
-		if (this.completed.has(id)) return;
+	markCompleted(id: string, terminalOutcome?: TerminalOutcome): void {
+		if (terminalOutcome === "aborted" || this.completed.has(id)) return;
 		this.completed.add(id);
 		this.pendingCompletions.add(id);
 		this.turnsSinceNotification = 0;
