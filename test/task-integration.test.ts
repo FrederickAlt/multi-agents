@@ -317,6 +317,38 @@ describe("extension loading", () => {
 		);
 	});
 
+	it("Task call renderer shows the execution mode and defaults to fast", () => {
+		const { pi } = createFakeExtensionApi();
+		const runtime = {
+			treeDepth: 0,
+			depthPolicy: selectedRootPolicy(makeAgent("root", { depth: 1 })),
+		};
+
+		configureTaskToolForRuntime(
+			pi,
+			runtime,
+			async () => ({
+				content: [{ type: "text", text: "unused" }],
+				details: { warnings: [] },
+			}),
+			createTaskToolRegistrationDeps(),
+		);
+
+		const taskTool = latestTaskTool(pi);
+		const smartText = renderComponentToText(
+			taskTool.renderCall(
+				{ subagent_type: "explorer", description: "Inspect code", mode: "smart" },
+				passthroughTheme,
+			),
+		);
+		const fastText = renderComponentToText(
+			taskTool.renderCall({ subagent_type: "explorer", description: "Inspect code" }, passthroughTheme),
+		);
+
+		expect(smartText).toContain("Task explorer (smart) new");
+		expect(fastText).toContain("Task explorer (fast) new");
+	});
+
 	it("expanded Task result renders context usage even when details.output is preferred", () => {
 		const { pi } = createFakeExtensionApi();
 		const runtime = {

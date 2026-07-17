@@ -155,9 +155,10 @@ export function configureTaskToolForRuntime(
 				return runTask(params, signal, onUpdate, ctx, runtime);
 			},
 			renderCall(args, theme) {
+				const mode = args.mode ?? "fast";
 				const resume = args.resume ? ` resume ${args.resume}` : " new";
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("Task "))}${theme.fg("accent", args.subagent_type)}${theme.fg("muted", resume)}\n  ${theme.fg("dim", args.description)}`,
+					`${theme.fg("toolTitle", theme.bold("Task "))}${theme.fg("accent", args.subagent_type)}${theme.fg("muted", ` (${mode})${resume}`)}\n  ${theme.fg("dim", args.description)}`,
 					0,
 					0,
 				);
