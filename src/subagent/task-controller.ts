@@ -1079,7 +1079,21 @@ export class TaskController {
 						asyncAbortRequested = true;
 						asyncAbortContextUsage = readSubagentContextUsage(session);
 						asyncAbortContextUsageCaptured = true;
-						if (asyncPromptStarted) void session?.abort();
+						if (asyncPromptStarted) {
+							try {
+								void Promise.resolve(session?.abort()).catch((error: unknown) => {
+									runLogger.warn("task_async_abort_failed", {
+										recordId: record!.id,
+										error: error instanceof Error ? error.message : String(error),
+									});
+								});
+							} catch (error) {
+								runLogger.warn("task_async_abort_failed", {
+									recordId: record!.id,
+									error: error instanceof Error ? error.message : String(error),
+								});
+							}
+						}
 					};
 					if (context.signal?.aborted) {
 						abort();
@@ -1129,7 +1143,14 @@ export class TaskController {
 					) => {
 						if (asyncFinished) return;
 						asyncFinished = true;
-						unsubscribeFromSession();
+						try {
+							unsubscribeFromSession();
+						} catch (error) {
+							runLogger.warn("task_async_unsubscribe_failed", {
+								recordId: record!.id,
+								error: error instanceof Error ? error.message : String(error),
+							});
+						}
 						context.signal?.removeEventListener("abort", abort);
 						try {
 							metadataStore.touchRecord(record!.id);
@@ -1205,16 +1226,94 @@ export class TaskController {
 						}
 					};
 
+					const finalizeAsyncFailure = (error: unknown) => {
+						const wasFinished = asyncFinished;
+						asyncFinished = true;
+						if (!wasFinished) {
+							try {
+								unsubscribeFromSession();
+							} catch {
+								/* Best-effort listener cleanup. */
+							}
+							context.signal?.removeEventListener("abort", abort);
+						}
+						const failureMessage = error instanceof Error ? error.message : String(error);
+						const message = failureMessage || "Sub-agent async finalization failed unexpectedly.";
+						runLogger.error("task_async_finalization_failed", {
+							recordId: record?.id,
+							error: message,
+						});
+
+						if (!record?.id) return;
+						try {
+							if (sessionManager.getAsyncResult(record.id)) return;
+						} catch {
+							/* Continue with the fallback if result inspection fails. */
+						}
+
+						let output = "";
+						try {
+							output = TaskController.extractOutput(session.messages as any[], message).text;
+						} catch {
+							/* Best-effort partial output extraction. */
+						}
+						let contextUsage: SubagentContextUsage | undefined;
+						try {
+							contextUsage = readSubagentContextUsage(session);
+						} catch {
+							/* Best-effort context usage extraction. */
+						}
+						try {
+							sessionManager.finalizeAsyncRun(record.id, {
+								output,
+								error: message,
+								terminalOutcome: TaskController.inferTerminalOutcomeFromResult(
+									message,
+									session.messages as any[],
+								),
+								terminalError: message,
+								contextUsage,
+								warnings,
+							});
+						} catch (fallbackError) {
+							runLogger.error("task_async_finalization_fallback_failed", {
+								recordId: record.id,
+								error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+							});
+						}
+					};
+					const safeFinish = (
+						resolved: boolean,
+						errorMessage: string | undefined,
+						terminal?: { text: string; source: "assistant" | "diagnostic" | "none" },
+					) => {
+						try {
+							finish(resolved, errorMessage, terminal);
+						} catch (error) {
+							finalizeAsyncFailure(error);
+						}
+					};
+
 					// A provider can terminate the agent with a diagnostic without settling
 					// prompt(). Finalize from the lifecycle event so wait_for_agent is woken.
 					unsubscribeFromSession = session.subscribe((event: any) => {
 						if (event?.type !== "agent_end" || asyncFinished) return;
-						const terminal = TaskController.extractTerminalOutput(session.messages as any[]);
-						if (terminal.source === "diagnostic") {
-							finish(false, terminal.text);
+						try {
+							const terminal = TaskController.extractTerminalOutput(session.messages as any[]);
+							if (terminal.source === "diagnostic") {
+								safeFinish(false, terminal.text);
+							}
+						} catch (error) {
+							finalizeAsyncFailure(error);
 						}
 					});
-					if (asyncFinished) unsubscribeFromSession();
+					if (asyncFinished) {
+						try {
+							unsubscribeFromSession();
+						} catch (error) {
+							finalizeAsyncFailure(error);
+						}
+					}
 
 					Promise.resolve()
 						.then(() => {
@@ -1224,12 +1323,13 @@ export class TaskController {
 						})
 						.then(() => TaskController._ensureFinalResponse(session))
 						.then(
-							(terminal) => finish(true, undefined, terminal),
+							(terminal) => safeFinish(true, undefined, terminal),
 							(err: unknown) => {
 								const message = err instanceof Error ? err.message : String(err);
-								finish(false, message);
+								safeFinish(false, message);
 							},
-						);
+						)
+						.catch((error: unknown) => finalizeAsyncFailure(error));
 
 					return {
 						content: [
@@ -1282,7 +1382,19 @@ export class TaskController {
 					clearRuntimeTimeout();
 					abortContextUsage = readSubagentContextUsage(session);
 					abortContextUsageCaptured = true;
-					void session?.abort();
+					try {
+						void Promise.resolve(session?.abort()).catch((error: unknown) => {
+							runLogger.warn("task_blocking_abort_failed", {
+								recordId: record!.id,
+								error: error instanceof Error ? error.message : String(error),
+							});
+						});
+					} catch (error) {
+						runLogger.warn("task_blocking_abort_failed", {
+							recordId: record!.id,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
 				};
 
 				let onAbort: (() => void) | undefined;

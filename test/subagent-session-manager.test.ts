@@ -408,6 +408,22 @@ describe("SubagentSessionManager", () => {
 			expect(newTs).toBeGreaterThan(new Date(beforeTs).getTime());
 		});
 
+		it("marks session completed even when agent_end metadata persistence fails", async () => {
+			const sm = createManager();
+			const record = makeRecord("agent-end-metadata-failure");
+			const session = makeMockSession();
+			mockAgentSessionFactory.create = vi.fn(() => Promise.resolve(session));
+
+			await sm.getOrCreateSession(record, makeAgent(), [], defaultSetupContext);
+			vi.spyOn(metadataStore, "upsertRecord").mockImplementation(() => {
+				throw new Error("metadata unavailable");
+			});
+
+			for (const callback of session.callbacks) callback({ type: "agent_end" });
+
+			expect(sm.isCompleted(record.id)).toBe(true);
+		});
+
 		it("disposeSession unsubscribes before calling real dispose", async () => {
 			const sm = createManager();
 			const record = makeRecord("unsub");
@@ -555,6 +571,48 @@ describe("SubagentSessionManager", () => {
 
 			await expect(sm.waitForSessionEnd("sync-end")).resolves.toBeUndefined();
 			expect(unsubscribe).toHaveBeenCalledOnce();
+		});
+
+		it("resolves when agent_end cleanup unsubscribe throws", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			let listener: ((event: any) => void) | undefined;
+			session.subscribe = vi.fn((callback) => {
+				listener = callback;
+				return () => {
+					throw new Error("unsubscribe failed");
+				};
+			}) as any;
+			sm.trackSession("unsubscribe-failure", session);
+
+			const wait = sm.waitForSessionEnd("unsubscribe-failure");
+			listener!({ type: "agent_end" });
+
+			await expect(wait).resolves.toBeUndefined();
+		});
+
+		it("stores async results when the ready notification throws", () => {
+			const sm = createManager();
+			sm.setOnAsyncResultReady(() => {
+				throw new Error("notification failed");
+			});
+
+			expect(() => sm.storeAsyncResult("notification-failure", { output: "done", warnings: [] })).not.toThrow();
+			expect(sm.getAsyncResult("notification-failure")?.output).toBe("done");
+		});
+
+		it("finalizes when session abort returns a rejected promise", async () => {
+			const sm = createManager();
+			const session = makeMockSession();
+			session.abort = vi.fn().mockRejectedValue(new Error("abort failed")) as any;
+			sm.trackSession("abort-failure", session);
+			sm.markAsyncRunning("abort-failure");
+
+			sm.abortSession("abort-failure");
+			await Promise.resolve();
+
+			expect(sm.getAsyncResult("abort-failure")).toMatchObject({ error: "aborted" });
+			expect(sm.isCompleted("abort-failure")).toBe(true);
 		});
 
 		it("only resolves on agent_end, not other events", async () => {

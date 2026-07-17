@@ -468,7 +468,14 @@ export class SubagentSessionManager {
 		const unsubscribe = session.subscribe((event: any) => {
 			if (event.type === "agent_end") {
 				record.updatedAt = new Date().toISOString();
-				metadataStore.upsertRecord(record);
+				try {
+					metadataStore.upsertRecord(record);
+				} catch (error) {
+					sessionLogger.warn("session_agent_end_metadata_failed", {
+						recordId: record.id,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
 				this.completedSessions.add(record.id);
 				sessionLogger.info("session_agent_end_observed", { recordId: record.id, updatedAt: record.updatedAt });
 			}
@@ -477,7 +484,14 @@ export class SubagentSessionManager {
 		// 8. Wrap dispose to unsubscribe first
 		const originalDispose = session.dispose.bind(session);
 		session.dispose = () => {
-			unsubscribe();
+			try {
+				unsubscribe();
+			} catch (error) {
+				sessionLogger.warn("session_unsubscribe_failed", {
+					recordId: record.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 			return originalDispose();
 		};
 
@@ -615,7 +629,13 @@ export class SubagentSessionManager {
 			let unsubscribe: () => void = () => {};
 			const cleanup = () => {
 				signal?.removeEventListener("abort", onAbort);
-				unsubscribe();
+				try {
+					unsubscribe();
+				} catch (error) {
+					waitLogger.warn("session_wait_unsubscribe_failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
 			};
 			const onAbort = () => {
 				if (settled) return;
@@ -638,7 +658,13 @@ export class SubagentSessionManager {
 			});
 			unsubscribe = subscribedUnsubscribe;
 			if (settled) {
-				unsubscribe();
+				try {
+					unsubscribe();
+				} catch (error) {
+					waitLogger.warn("session_wait_unsubscribe_failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
 				return;
 			}
 			signal?.addEventListener("abort", onAbort, { once: true });
@@ -660,7 +686,14 @@ export class SubagentSessionManager {
 			for (const resolve of waiters) resolve();
 		}
 		if (options?.notify !== false) {
-			this._onAsyncResultReady?.(id);
+			try {
+				this._onAsyncResultReady?.(id);
+			} catch (error) {
+				this.logger.warn("session_async_result_notification_failed", {
+					recordId: id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 		}
 	}
 
@@ -1259,9 +1292,17 @@ export class SubagentSessionManager {
 			: readSubagentContextUsage(session);
 
 		try {
-			session.abort();
-		} catch {
-			/* best-effort */
+			void Promise.resolve(session.abort()).catch((error: unknown) => {
+				this.logger.warn("session_hard_abort_failed", {
+					recordId: id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+		} catch (error) {
+			this.logger.warn("session_hard_abort_failed", {
+				recordId: id,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 
 		this._finalizeAsyncRun(

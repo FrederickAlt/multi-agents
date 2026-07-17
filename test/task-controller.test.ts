@@ -875,6 +875,23 @@ describe("TaskController.execute", () => {
 		}
 	});
 
+	it("contains a rejected abort during blocking timeout cleanup", async () => {
+		vi.useFakeTimers();
+
+		try {
+			mockSession.prompt = vi.fn(() => new Promise(() => {}));
+			mockSession.abort = vi.fn().mockRejectedValue(new Error("abort failed"));
+
+			const resultPromise = controller.execute(makeParams(), makeContext());
+			await vi.advanceTimersByTimeAsync(DEFAULT_TASK_RUNTIME_TIMEOUT_MS);
+			const result = await resultPromise;
+
+			expect(result.details.error).toBe(TASK_RUNTIME_TIMEOUT_ERROR_CODE);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("captures blocking timeout context usage before abort makes it unavailable", async () => {
 		vi.useFakeTimers();
 
@@ -1861,6 +1878,26 @@ describe("TaskController.execute", () => {
 		expect(result.details.error).toBe("Task execution was aborted.");
 		expect(result.details.terminalOutcome).toBe("aborted");
 		expect(disposeSpy).toHaveBeenCalledOnce();
+	});
+
+	it("returns a fallback result when async finalization throws", async () => {
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "async fallback output" }] }];
+		let finalizeCalls = 0;
+		fakeSessionManager.finalizeAsyncRun = vi.fn((id: string, result: any, options?: { allowOverwrite?: boolean }) => {
+			finalizeCalls += 1;
+			if (finalizeCalls === 1) throw new Error("finalization boom");
+			return sessionManager.finalizeAsyncRun(id, result, options);
+		});
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const result = await controller.waitForAgent([agentId], {}, makeContext());
+
+		expect(finalizeCalls).toBeGreaterThanOrEqual(2);
+		expect(result.details.error).toBe("finalization boom");
+		expect(result.details.output).toBe("async fallback output");
 	});
 
 	// ---- Expanded waitForAgent (#23) ----
