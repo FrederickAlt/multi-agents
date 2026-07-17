@@ -1120,11 +1120,16 @@ export class TaskController {
 					}
 					context.signal?.addEventListener("abort", abort, { once: true });
 
+					let asyncFinished = false;
+					let unsubscribeFromSession = () => {};
 					const finish = (
 						resolved: boolean,
 						errorMessage: string | undefined,
 						terminal?: { text: string; source: "assistant" | "diagnostic" | "none" },
 					) => {
+						if (asyncFinished) return;
+						asyncFinished = true;
+						unsubscribeFromSession();
 						context.signal?.removeEventListener("abort", abort);
 						try {
 							metadataStore.touchRecord(record!.id);
@@ -1199,6 +1204,17 @@ export class TaskController {
 							});
 						}
 					};
+
+					// A provider can terminate the agent with a diagnostic without settling
+					// prompt(). Finalize from the lifecycle event so wait_for_agent is woken.
+					unsubscribeFromSession = session.subscribe((event: any) => {
+						if (event?.type !== "agent_end" || asyncFinished) return;
+						const terminal = TaskController.extractTerminalOutput(session.messages as any[]);
+						if (terminal.source === "diagnostic") {
+							finish(false, terminal.text);
+						}
+					});
+					if (asyncFinished) unsubscribeFromSession();
 
 					Promise.resolve()
 						.then(() => {

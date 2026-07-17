@@ -1472,6 +1472,34 @@ describe("TaskController.execute", () => {
 		expect(text).toContain("async crash");
 	});
 
+	it("wakes waitForAgent when agent_end reports an error but prompt remains pending", async () => {
+		const subscribers = new Set<(event: any) => void>();
+		mockSession.subscribe = vi.fn((subscriber) => {
+			subscribers.add(subscriber);
+			return () => subscribers.delete(subscriber);
+		});
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		const waitResult = controller.waitForAgent([agentId], {}, makeContext());
+
+		mockSession.messages = [
+			{
+				role: "assistant",
+				content: [],
+				stopReason: "error",
+				errorMessage: "Codex request failed (request ID: test-request-id)",
+			},
+		];
+		for (const subscriber of [...subscribers]) subscriber({ type: "agent_end" });
+
+		const result = await waitResult;
+		expect(result.details.error).toBe("Codex request failed (request ID: test-request-id)");
+		expect(result.details.terminalOutcome).toBe("crashed");
+		expect(sessionManager.isAsyncRunning(agentId)).toBe(false);
+	});
+
 	it("stores resolved terminal assistant diagnostics as async errors", async () => {
 		mockSession.messages = [
 			{ role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" },
