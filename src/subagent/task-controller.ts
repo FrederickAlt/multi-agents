@@ -1370,6 +1370,7 @@ export class TaskController {
 				};
 
 				let runtimeTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+				let unsubscribeBlockingLifecycle = () => {};
 				const clearRuntimeTimeout = () => {
 					if (runtimeTimeoutHandle !== undefined) {
 						clearTimeout(runtimeTimeoutHandle);
@@ -1465,6 +1466,19 @@ export class TaskController {
 					}
 
 					clearTerminalOutcome();
+					unsubscribeBlockingLifecycle = session.subscribe((event: any) => {
+						if (
+							event?.type === "agent_start" ||
+							event?.type === "turn_start" ||
+							event?.type === "turn_end" ||
+							event?.type === "agent_end"
+						) {
+							runLogger.debug("task_blocking_agent_event", {
+								recordId: record!.id,
+								eventType: event.type,
+							});
+						}
+					});
 					const promptRace = [] as Array<
 						Promise<
 							| { type: "completed"; terminal: { text: string; source: "assistant" | "diagnostic" | "none" } }
@@ -1475,11 +1489,33 @@ export class TaskController {
 					>;
 					if (!context.signal?.aborted) {
 						const promptResult = Promise.resolve()
-							.then(() => session.prompt(params.prompt))
-							.then(() => TaskController._ensureFinalResponse(session))
+							.then(() => {
+								runLogger.info("task_blocking_prompt_start", {
+									recordId: record!.id,
+									promptLength: params.prompt.length,
+									timeoutMs: DEFAULT_TASK_RUNTIME_TIMEOUT_MS,
+								});
+								return session.prompt(params.prompt);
+							})
+							.then(() => {
+								runLogger.info("task_blocking_prompt_resolved", { recordId: record!.id });
+								return TaskController._ensureFinalResponse(session);
+							})
 							.then(
-								(terminal) => ({ type: "completed" as const, terminal }),
-								(error: unknown) => ({ type: "failed" as const, error }),
+								(terminal) => {
+									runLogger.info("task_blocking_final_response_resolved", {
+										recordId: record!.id,
+										source: terminal.source,
+									});
+									return { type: "completed" as const, terminal };
+								},
+								(error: unknown) => {
+									runLogger.warn("task_blocking_prompt_rejected", {
+										recordId: record!.id,
+										error: error instanceof Error ? error.message : String(error),
+									});
+									return { type: "failed" as const, error };
+								},
 							);
 						promptRace.push(promptResult);
 						const timeoutResult = new Promise<{ type: "timeout" }>((resolve) => {
@@ -1674,6 +1710,11 @@ export class TaskController {
 						},
 					};
 				} finally {
+					try {
+						unsubscribeBlockingLifecycle();
+					} catch {
+						/* best-effort listener cleanup */
+					}
 					runLogger.debug("task_blocking_completed_cleanup", { recordId: record!.id });
 					if (context.signal && onAbort) {
 						context.signal.removeEventListener("abort", onAbort);
