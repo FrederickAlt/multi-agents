@@ -280,6 +280,17 @@ describe("discoverSkills", () => {
 		expect(skills).toEqual(["valid-skill"]);
 	});
 
+	it("hides skills with model invocation disabled", () => {
+		fs.writeFileSync(
+			path.join(mkdir("skills", "user-only"), "SKILL.md"),
+			["---", "description: Explicit user skill", "disable-model-invocation: true", "---", "", "content"].join("\n"),
+		);
+		writeFile("skills", "visible-skill", "SKILL.md");
+
+		const skills = discoverSkills(tempDir);
+		expect(skills).toEqual(["visible-skill"]);
+	});
+
 	it("recursively returns skill names from nested skill.md files", () => {
 		writeFile("skills", "category", "nested-skill", "skill.md");
 		writeFile("skills", "other", "deep", "nested-again", "SKILL.md");

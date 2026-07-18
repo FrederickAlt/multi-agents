@@ -171,6 +171,23 @@ describe("detectStaleItems", () => {
 		expect(agents[0].staleItems).toEqual({});
 	});
 
+	it("marks configured non-model-invocable skills for stale cleanup", () => {
+		const agents: AgentConfigState[] = [
+			{
+				name: "test",
+				description: "desc",
+				filePath: "/tmp/test.md",
+				frontmatter: { description: "desc", skills: ["user-only"] },
+				body: "",
+				error: null,
+				staleItems: {},
+			},
+		];
+
+		detectStaleItems(agents, [], [], [], [], [], {});
+		expect(agents[0].staleItems.skills).toEqual(["user-only"]);
+	});
+
 	it("does not mark extension values stale when selector matches an alias", () => {
 		const agents: AgentConfigState[] = [
 			{

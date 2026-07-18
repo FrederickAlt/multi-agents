@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { extensionAliasSet } from "../../subagent/extension-filter.js";
 import { getSupportedReasoningEfforts, type ModelThinkingMetadata } from "../../subagent/reasoning-effort.js";
+import { parseFrontmatter } from "../pi-compat.js";
 import type { ModelOption } from "../state/types.js";
 
 type LoadedPiExtension = {
@@ -26,7 +27,7 @@ type LoadedPiExtension = {
 type PiResourceLoader = {
 	reload(): Promise<void>;
 	getExtensions(): { extensions?: LoadedPiExtension[] };
-	getSkills(): { skills?: Array<{ name?: string }> };
+	getSkills(): { skills?: Array<{ name?: string; disableModelInvocation?: boolean }> };
 };
 
 type PiSession = {
@@ -461,7 +462,7 @@ export async function discoverPiRuntimeResources(
 
 	const skillSet = new Set<string>();
 	for (const skill of loader.getSkills().skills ?? []) {
-		if (skill.name) skillSet.add(String(skill.name));
+		if (skill.name && skill.disableModelInvocation !== true) skillSet.add(String(skill.name));
 	}
 
 	const runtimeDiscovery: PiRuntimeDiscovery = {
@@ -987,9 +988,33 @@ export function discoverAllAgentNames(agentDir: string): string[] {
 // Skills Discovery
 // ---------------------------------------------------------------------------
 
+function isModelInvocableSkill(filePath: string): boolean {
+	let content: string;
+	try {
+		content = fs.readFileSync(filePath, "utf-8");
+	} catch {
+		return true;
+	}
+
+	try {
+		const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+		return frontmatter["disable-model-invocation"] !== true;
+	} catch {
+		// The standalone parser intentionally supports only the frontmatter needed
+		// by the TUI. Still recognize this flag in otherwise valid Pi frontmatter so
+		// multiline or otherwise richer descriptions do not leak hidden skills.
+		const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
+		return !frontmatter
+			?.split(/\r?\n/)
+			.some((line) => /^disable-model-invocation\s*:\s*true\s*(?:#.*)?$/i.test(line));
+	}
+}
+
 /**
- * Discover skills from any SKILL.md/skill.md file under ~/.pi/agent/skills/.
- * Skill name is the parent directory name.
+ * Discover model-invocable skills from any SKILL.md/skill.md file under
+ * ~/.pi/agent/skills/. Skill name is the parent directory name. Skills with
+ * disable-model-invocation are still loaded by Pi for explicit user commands,
+ * but are not selectable in the agent configuration TUI.
  */
 export function discoverSkills(agentDir: string): string[] {
 	const skillsDir = path.join(agentDir, "skills");
@@ -1001,7 +1026,7 @@ export function discoverSkills(agentDir: string): string[] {
 			const entryPath = path.join(dir, entry.name);
 			if (entry.isDirectory()) {
 				visit(entryPath);
-			} else if (entry.isFile() && entry.name.toLowerCase() === "skill.md") {
+			} else if (entry.isFile() && entry.name.toLowerCase() === "skill.md" && isModelInvocableSkill(entryPath)) {
 				result.add(path.basename(dir));
 			}
 		}

@@ -17,7 +17,12 @@ export interface PromptParts {
 	toolSnippets?: Record<string, string>;
 	promptGuidelines?: string[];
 	contextFiles?: Array<{ path: string; content: string }>;
-	skills?: Array<{ name: string; description?: string; filePath?: string }>;
+	skills?: Array<{
+		name: string;
+		description?: string;
+		filePath?: string;
+		disableModelInvocation?: boolean;
+	}>;
 	cwd?: string;
 }
 
@@ -64,8 +69,8 @@ function formatContextFiles(parts: PromptParts): string {
 }
 
 function formatSkills(parts: PromptParts, agentSkills?: string[]): string {
-	const allSkills = parts.skills ?? [];
-	// agentSkills: undefined → all skills; [] → none; ["a","b"] → filter
+	const allSkills = (parts.skills ?? []).filter((skill) => !skill.disableModelInvocation);
+	// agentSkills: undefined → all model-invocable skills; [] → none; ["a","b"] → filter
 	const filtered =
 		agentSkills === undefined
 			? allSkills

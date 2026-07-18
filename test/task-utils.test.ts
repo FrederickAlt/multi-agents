@@ -164,6 +164,23 @@ describe("renderPromptTemplate", () => {
 		expect(result).not.toContain("(none)");
 	});
 
+	it("never renders skills with model invocation disabled", () => {
+		const ctx = {
+			...baseContext,
+			agent: { ...baseAgent, skills: ["visible", "user-only"], systemPrompt: "Skills:\n{{skills}}" },
+			parts: {
+				...baseParts,
+				skills: [
+					{ name: "visible", description: "Visible skill" },
+					{ name: "user-only", description: "Explicit user skill", disableModelInvocation: true },
+				],
+			},
+		};
+		const result = renderPromptTemplate(ctx);
+		expect(result).toContain("- visible: Visible skill");
+		expect(result).not.toContain("user-only");
+	});
+
 	it("renders all skills when agent.skills is undefined (missing)", () => {
 		const ctx = {
 			...baseContext,
