@@ -497,6 +497,7 @@ describe("TaskController.execute", () => {
 			getOrCreateSession: vi.fn((record, agent, warnings, context) =>
 				sessionManager.getOrCreateSession(record, agent, warnings, context),
 			),
+			getContextUsage: (id: string) => sessionManager.getContextUsage(id),
 			withRecordRunLock: <T>(id: string, fn: () => Promise<T>) => sessionManager.withRecordRunLock(id, fn),
 			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
 			waitForSessionEnd: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForSessionEnd(id, signal)),
@@ -631,6 +632,20 @@ describe("TaskController.execute", () => {
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("Context used: Unknown.");
+	});
+
+	it("reports live context usage for a running async child", async () => {
+		mockSession.prompt = vi.fn(() => new Promise(() => {}));
+		mockSession.getContextUsage = vi.fn(() => ({ tokens: 61000, contextWindow: 100000, percent: 61 }));
+
+		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
+		const agentId = (spawnResult.details as TaskDetails).id!;
+		const result = await controller.waitForAgent([agentId], { timeout: 0 }, makeContext());
+		const agent = (result.details.agents as AgentWaitResult[])[0];
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(agent.contextUsage).toEqual({ tokens: 61000, contextWindow: 100000, percent: 61 });
+		expect(text).toContain("Context used: 61.0%.");
 	});
 
 	it("emits execute breadcrumbs via runtime logger", async () => {

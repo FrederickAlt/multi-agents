@@ -84,6 +84,8 @@ export interface SessionAdapter {
 		warnings: string[],
 		context: SessionSetupContext,
 	): Promise<any>;
+	/** Read the current live context usage for an open child session. */
+	getContextUsage?(id: string): SubagentContextUsage | undefined;
 	withRecordRunLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
 	disposeSession(id: string): Promise<void>;
 	/**
@@ -427,7 +429,7 @@ export class TaskController {
 			displayName: record.displayName,
 			agentType: record.agentType,
 			sessionFile: record.sessionFile,
-			contextUsage: record.contextUsage,
+			contextUsage: sessionManager.getContextUsage?.(record.id) ?? record.contextUsage,
 		};
 
 		const asyncResult = sessionManager.getAsyncResult(record.id);
@@ -2409,10 +2411,12 @@ export class TaskController {
 						`${displayName} (${a.id}) is still running. No final assistant output captured yet. Call wait_for_agent again to check.`,
 					);
 				}
+				lines.push(contextLine);
 			} else if (a.status === "timed_out_still_running") {
 				lines.push(
 					`${displayName} (${a.id}) timed out while still running and produced no final assistant output. Call wait_for_agent again to check.`,
 				);
+				lines.push(contextLine);
 			} else if (a.status === "killed") {
 				topLevel.error = a.error ?? "aborted";
 				topLevel.abortReason = a.abortReason;
@@ -2475,6 +2479,7 @@ export class TaskController {
 				for (const a of running) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
+					lines.push(`  ${formatContextUsageLine(a.contextUsage)}`);
 				}
 			}
 
@@ -2484,6 +2489,7 @@ export class TaskController {
 				for (const a of timedOut) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
+					lines.push(`  ${formatContextUsageLine(a.contextUsage)}`);
 				}
 			}
 
