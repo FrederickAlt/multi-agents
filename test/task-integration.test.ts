@@ -302,11 +302,7 @@ describe("extension loading", () => {
 		expect(taskTool).toBeDefined();
 		expect(taskTool?.promptSnippet).toContain("sub-agent");
 		expect(taskTool?.promptGuidelines).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining("delegate"),
-				expect.stringContaining("blocking:false"),
-				expect.stringContaining("remaining context"),
-			]),
+			expect.arrayContaining([expect.stringContaining("delegate"), expect.stringContaining("blocking:false")]),
 		);
 
 		const waitForAgentTool = (pi as any)._registeredTools.find((t: any) => t.name === "wait_for_agent");
@@ -317,7 +313,6 @@ describe("extension loading", () => {
 				expect.stringContaining("wait_for_agent"),
 				expect.stringContaining("wait_all"),
 				expect.stringContaining("timeout"),
-				expect.stringContaining("remaining context"),
 			]),
 		);
 	});

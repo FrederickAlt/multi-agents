@@ -497,7 +497,6 @@ describe("TaskController.execute", () => {
 			getOrCreateSession: vi.fn((record, agent, warnings, context) =>
 				sessionManager.getOrCreateSession(record, agent, warnings, context),
 			),
-			getContextUsage: (id: string) => sessionManager.getContextUsage(id),
 			withRecordRunLock: <T>(id: string, fn: () => Promise<T>) => sessionManager.withRecordRunLock(id, fn),
 			disposeSession: vi.fn((id: string) => sessionManager.disposeSession(id)),
 			waitForSessionEnd: vi.fn((id: string, signal?: AbortSignal) => sessionManager.waitForSessionEnd(id, signal)),
@@ -632,69 +631,6 @@ describe("TaskController.execute", () => {
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("Context used: Unknown.");
-	});
-
-	it("asks a child to wrap up once it reaches the context threshold", async () => {
-		const subscribers = new Set<(event: any) => void>();
-		let percent = 59.9;
-		mockSession.subscribe = vi.fn((subscriber) => {
-			subscribers.add(subscriber);
-			return () => subscribers.delete(subscriber);
-		});
-		mockSession.steer = vi.fn().mockResolvedValue(undefined);
-		mockSession.getContextUsage = vi.fn(() => ({ tokens: percent * 1000, contextWindow: 100000, percent }));
-		mockSession.prompt = vi.fn(async (message: string) => {
-			if (message !== "Do something") return;
-			percent = 60;
-			for (const subscriber of [...subscribers]) subscriber({ type: "message_update" });
-			percent = 61;
-			for (const subscriber of [...subscribers]) subscriber({ type: "turn_end" });
-		});
-		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "final report" }] }];
-
-		await controller.execute(makeParams(), makeContext());
-
-		expect(mockSession.steer).toHaveBeenCalledOnce();
-		expect(mockSession.steer).toHaveBeenCalledWith(expect.stringContaining("context usage has reached 60%"));
-		expect(mockSession.prompt).toHaveBeenCalledOnce();
-	});
-
-	it("asks an async child to wrap up at the context threshold", async () => {
-		const subscribers = new Set<(event: any) => void>();
-		mockSession.subscribe = vi.fn((subscriber) => {
-			subscribers.add(subscriber);
-			return () => subscribers.delete(subscriber);
-		});
-		mockSession.steer = vi.fn().mockResolvedValue(undefined);
-		mockSession.getContextUsage = vi.fn(() => ({ tokens: 60000, contextWindow: 100000, percent: 60 }));
-		mockSession.prompt = vi.fn(async (message: string) => {
-			if (message === "Do something") {
-				for (const subscriber of [...subscribers]) subscriber({ type: "message_update" });
-			}
-		});
-		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "async final report" }] }];
-
-		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
-		const agentId = (spawnResult.details as TaskDetails).id!;
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		await controller.waitForAgent([agentId], {}, makeContext());
-
-		expect(mockSession.steer).toHaveBeenCalledOnce();
-		expect(mockSession.steer).toHaveBeenCalledWith(expect.stringContaining("context usage has reached 60%"));
-	});
-
-	it("reports live context usage for a running async child", async () => {
-		mockSession.prompt = vi.fn(() => new Promise(() => {}));
-		mockSession.getContextUsage = vi.fn(() => ({ tokens: 61000, contextWindow: 100000, percent: 61 }));
-
-		const spawnResult = await controller.execute(makeParams({ blocking: false }), makeContext());
-		const agentId = (spawnResult.details as TaskDetails).id!;
-		const result = await controller.waitForAgent([agentId], { timeout: 0 }, makeContext());
-		const agent = (result.details.agents as AgentWaitResult[])[0];
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-		expect(agent.contextUsage).toEqual({ tokens: 61000, contextWindow: 100000, percent: 61 });
-		expect(text).toContain("Context used: 61.0%.");
 	});
 
 	it("emits execute breadcrumbs via runtime logger", async () => {

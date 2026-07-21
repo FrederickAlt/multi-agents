@@ -312,11 +312,6 @@ export class SubagentSessionManager {
 		return this.openSessions.get(id);
 	}
 
-	/** Read current context usage from an open child session, when available. */
-	getContextUsage(id: string): SubagentContextUsage | undefined {
-		return readSubagentContextUsage(this.openSessions.get(id));
-	}
-
 	/** Check if a session is currently open for the given record ID. */
 	hasOpenSession(id: string): boolean {
 		return this.openSessions.has(id);

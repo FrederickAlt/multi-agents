@@ -18,13 +18,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentDiagnostic, AgentMode } from "./agents.js";
 import { formatAgentList, resolveAgentMode } from "./agents.js";
-import {
-	formatContextUsageLine,
-	readSubagentContextUsage,
-	SUBAGENT_CONTEXT_FINISH_MESSAGE,
-	type SubagentContextUsage,
-	subscribeToSubagentContextThreshold,
-} from "./context-usage.js";
+import { formatContextUsageLine, readSubagentContextUsage, type SubagentContextUsage } from "./context-usage.js";
 import { createRunCorrelationId, makeNoopDebugLogger } from "./debug-logger.js";
 import { checkTaskAllowed, childPolicy, type DepthPolicyState } from "./depth-policy.js";
 import type { MetadataFile, MetadataStore, SubagentRecord, TerminalOutcome } from "./metadata.js";
@@ -90,8 +84,6 @@ export interface SessionAdapter {
 		warnings: string[],
 		context: SessionSetupContext,
 	): Promise<any>;
-	/** Read the current live context usage for an open child session. */
-	getContextUsage?(id: string): SubagentContextUsage | undefined;
 	withRecordRunLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
 	disposeSession(id: string): Promise<void>;
 	/**
@@ -299,37 +291,6 @@ function readSessionHeaderCwd(sessionFile: string | undefined): string | undefin
 	}
 }
 
-function installContextFinishReminder(
-	session: any,
-	logger: import("./debug-logger.js").DebugLogger,
-	recordId: string,
-): () => void {
-	return subscribeToSubagentContextThreshold(session, (contextUsage) => {
-		logger.warn("task_context_threshold_reached", {
-			recordId,
-			percent: contextUsage.percent,
-		});
-
-		try {
-			const request =
-				typeof session?.steer === "function"
-					? session.steer(SUBAGENT_CONTEXT_FINISH_MESSAGE)
-					: session.prompt(SUBAGENT_CONTEXT_FINISH_MESSAGE, { streamingBehavior: "steer" });
-			void Promise.resolve(request).catch((error: unknown) => {
-				logger.warn("task_context_finish_reminder_failed", {
-					recordId,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			});
-		} catch (error) {
-			logger.warn("task_context_finish_reminder_failed", {
-				recordId,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	});
-}
-
 // ---------------------------------------------------------------------------
 // TaskController
 // ---------------------------------------------------------------------------
@@ -466,7 +427,7 @@ export class TaskController {
 			displayName: record.displayName,
 			agentType: record.agentType,
 			sessionFile: record.sessionFile,
-			contextUsage: sessionManager.getContextUsage?.(record.id) ?? record.contextUsage,
+			contextUsage: record.contextUsage,
 		};
 
 		const asyncResult = sessionManager.getAsyncResult(record.id);
@@ -1113,7 +1074,6 @@ export class TaskController {
 					let asyncAbortContextUsageCaptured = false;
 					let asyncAbortRequested = false;
 					let asyncPromptStarted = false;
-					let unsubscribeContextFinishReminder = () => {};
 					const abort = () => {
 						runLogger.warn("task_async_signal_abort", { recordId: record!.id });
 						asyncAbortRequested = true;
@@ -1191,7 +1151,6 @@ export class TaskController {
 								error: error instanceof Error ? error.message : String(error),
 							});
 						}
-						unsubscribeContextFinishReminder();
 						context.signal?.removeEventListener("abort", abort);
 						try {
 							metadataStore.touchRecord(record!.id);
@@ -1276,7 +1235,6 @@ export class TaskController {
 							} catch {
 								/* Best-effort listener cleanup. */
 							}
-							unsubscribeContextFinishReminder();
 							context.signal?.removeEventListener("abort", abort);
 						}
 						const failureMessage = error instanceof Error ? error.message : String(error);
@@ -1335,8 +1293,6 @@ export class TaskController {
 							finalizeAsyncFailure(error);
 						}
 					};
-
-					unsubscribeContextFinishReminder = installContextFinishReminder(session, runLogger, record!.id);
 
 					// A provider can terminate the agent with a diagnostic without settling
 					// prompt(). Finalize from the lifecycle event so wait_for_agent is woken.
@@ -1415,7 +1371,6 @@ export class TaskController {
 
 				let runtimeTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
 				let unsubscribeBlockingLifecycle = () => {};
-				let unsubscribeContextFinishReminder = () => {};
 				const clearRuntimeTimeout = () => {
 					if (runtimeTimeoutHandle !== undefined) {
 						clearTimeout(runtimeTimeoutHandle);
@@ -1511,7 +1466,6 @@ export class TaskController {
 					}
 
 					clearTerminalOutcome();
-					unsubscribeContextFinishReminder = installContextFinishReminder(session, runLogger, record!.id);
 					unsubscribeBlockingLifecycle = session.subscribe((event: any) => {
 						if (
 							event?.type === "agent_start" ||
@@ -1761,7 +1715,6 @@ export class TaskController {
 					} catch {
 						/* best-effort listener cleanup */
 					}
-					unsubscribeContextFinishReminder();
 					runLogger.debug("task_blocking_completed_cleanup", { recordId: record!.id });
 					if (context.signal && onAbort) {
 						context.signal.removeEventListener("abort", onAbort);
@@ -2456,12 +2409,10 @@ export class TaskController {
 						`${displayName} (${a.id}) is still running. No final assistant output captured yet. Call wait_for_agent again to check.`,
 					);
 				}
-				lines.push(contextLine);
 			} else if (a.status === "timed_out_still_running") {
 				lines.push(
 					`${displayName} (${a.id}) timed out while still running and produced no final assistant output. Call wait_for_agent again to check.`,
 				);
-				lines.push(contextLine);
 			} else if (a.status === "killed") {
 				topLevel.error = a.error ?? "aborted";
 				topLevel.abortReason = a.abortReason;
@@ -2524,7 +2475,6 @@ export class TaskController {
 				for (const a of running) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
-					lines.push(`  ${formatContextUsageLine(a.contextUsage)}`);
 				}
 			}
 
@@ -2534,7 +2484,6 @@ export class TaskController {
 				for (const a of timedOut) {
 					const name = a.displayName || a.agentType || a.id;
 					lines.push(`- ${name} (${a.id})`);
-					lines.push(`  ${formatContextUsageLine(a.contextUsage)}`);
 				}
 			}
 
