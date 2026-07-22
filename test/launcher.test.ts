@@ -275,6 +275,20 @@ describe("pi-agents launcher command generation", () => {
 		expect(result.args[result.args.indexOf("--thinking") + 1]).toBe("max");
 	});
 
+	it("uses Root smart model and thinking config when present", async () => {
+		writeRuntimeAgentDefinition(launcherAgentDir, "default", [
+			"model: fast-model",
+			"reasoning_effort: low",
+			"smart_model: smart-model",
+			"smart_reasoning_effort: high",
+		]);
+
+		const result = await buildLauncherArgs([], { resolveExtensionCandidates: async () => [] });
+
+		expect(result.args[result.args.indexOf("--model") + 1]).toBe("smart-model");
+		expect(result.args[result.args.indexOf("--thinking") + 1]).toBe("high");
+	});
+
 	it("maps an explicit empty Root tool list to --no-tools", async () => {
 		writeRuntimeAgentDefinition(launcherAgentDir, "default", ["tools: []"]);
 

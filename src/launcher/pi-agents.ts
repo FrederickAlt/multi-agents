@@ -6,7 +6,7 @@ import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ResolvedResource, SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { type AgentConfig, discoverAgents } from "../subagent/agents.js";
+import { type AgentConfig, discoverAgents, resolveAgentMode } from "../subagent/agents.js";
 import { type ExtensionSelection, resolveExtensionsForAgent } from "../subagent/extension-filter.js";
 import { createTrustAwareSettings, resolveConfiguredExtensionCandidates } from "../subagent/extension-resolution.js";
 import {
@@ -420,19 +420,20 @@ function stripUserProvidedExtensions(args: string[]): string[] {
 
 /** Project a resolved Root Agent's runtime fields onto Pi's native CLI. */
 function applyRootAgentRuntimeArgs(args: string[], agent: AgentConfig): string[] {
+	const { model, reasoningEffort } = resolveAgentMode(agent, "smart");
 	const valueFlags = new Set<string>();
 	const booleanFlags = new Set<string>();
 	if (agent.tools !== undefined) {
 		for (const flag of ["--tools", "-t", "--exclude-tools", "-xt"]) valueFlags.add(flag);
 		for (const flag of ["--no-tools", "-nt", "--no-builtin-tools", "-nbt"]) booleanFlags.add(flag);
 	}
-	if (agent.model?.trim()) {
+	if (model?.trim()) {
 		valueFlags.add("--model");
 		// A provider constraint from the parent CLI can make an otherwise valid
 		// configured model resolve differently from the same Task sub-agent model.
 		valueFlags.add("--provider");
 	}
-	if (agent.reasoningEffort?.trim()) valueFlags.add("--thinking");
+	if (reasoningEffort?.trim()) valueFlags.add("--thinking");
 
 	const filtered: string[] = [];
 	for (let i = 0; i < args.length; i++) {
@@ -450,8 +451,8 @@ function applyRootAgentRuntimeArgs(args: string[], agent: AgentConfig): string[]
 		if (agent.tools.length === 0) filtered.push("--no-tools");
 		else filtered.push("--tools", agent.tools.join(","));
 	}
-	if (agent.model?.trim()) filtered.push("--model", agent.model.trim());
-	if (agent.reasoningEffort?.trim()) filtered.push("--thinking", agent.reasoningEffort.trim());
+	if (model?.trim()) filtered.push("--model", model.trim());
+	if (reasoningEffort?.trim()) filtered.push("--thinking", reasoningEffort.trim());
 	return filtered;
 }
 
