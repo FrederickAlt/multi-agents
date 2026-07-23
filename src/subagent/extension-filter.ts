@@ -11,10 +11,12 @@ export interface ExtensionCandidate {
 	sourceInfo?: {
 		source?: string;
 		baseDir?: string;
+		origin?: string;
 	};
 	metadata?: {
 		source?: string;
 		baseDir?: string;
+		origin?: string;
 	};
 }
 

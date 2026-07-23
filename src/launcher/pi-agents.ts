@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { type ResolvedResource, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { type AgentConfig, discoverAgents, resolveAgentMode } from "../subagent/agents.js";
+import { writeExtensionCatalog } from "../subagent/extension-catalog.js";
 import { type ExtensionSelection, resolveExtensionsForAgent } from "../subagent/extension-filter.js";
 import { createTrustAwareSettings, resolveConfiguredExtensionCandidates } from "../subagent/extension-resolution.js";
 import {
@@ -832,6 +833,7 @@ export async function buildLauncherArgs(userArgs: string[], options: LauncherOpt
 			...(parsed.projectTrustOverride === undefined ? {} : { projectTrustOverride: parsed.projectTrustOverride }),
 		};
 		const extensionCandidates = await resolver.resolveExtensionCandidates(extensionResolutionOptions);
+		writeExtensionCatalog(agentDir, extensionResolutionCwd, extensionCandidates);
 		const selection = resolveLauncherExtensions(rootAgent, extensionCandidates);
 		for (const warning of selection.warnings) {
 			console.warn(warning);

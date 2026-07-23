@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { readExtensionCatalog } from "../../subagent/extension-catalog.js";
 import { PI_REASONING_EFFORTS } from "../../subagent/reasoning-effort.js";
 import {
 	discoverAllAgentNames,
@@ -103,19 +104,25 @@ export function useOptionDiscovery(): {
 			const piRuntimeResourcesPromise = discoverPiRuntimeResources(agentDir, toolLists);
 			const cachedRuntimeResources = discoverCachedPiRuntimeResources(agentDir);
 			const configuredExtensions = discoverConfiguredExtensions(agentDir);
-			const discoveredExtensions = [
-				...new Set([...configuredExtensions.extensions, ...cachedRuntimeResources.extensions]),
-			].sort();
+			const authoritativeExtensions = readExtensionCatalog(agentDir, process.cwd());
+			const authoritativeAliasMap = authoritativeExtensions
+				? Object.fromEntries(authoritativeExtensions.map((entry) => [entry.selector, entry.aliases]))
+				: undefined;
+			const discoveredExtensions = authoritativeExtensions
+				? authoritativeExtensions.map((entry) => entry.selector)
+				: [...new Set([...configuredExtensions.extensions, ...cachedRuntimeResources.extensions])].sort();
 			const discovered: DiscoveredOptions = {
 				tools: [...new Set([...discoverTools(agentDir, toolLists), ...cachedRuntimeResources.tools])].sort(),
 				toolExtensionNames: cachedRuntimeResources.toolExtensionNames,
 				extensions: discoveredExtensions,
-				disabledExtensions: configuredExtensions.disabledExtensions,
-				extensionAliases: mergeAliasMaps(
-					buildExtensionAliasMap(discoveredExtensions),
-					cachedRuntimeResources.extensionAliases,
-					configuredExtensions.extensionAliases,
-				),
+				disabledExtensions: authoritativeExtensions ? [] : configuredExtensions.disabledExtensions,
+				extensionAliases:
+					authoritativeAliasMap ??
+					mergeAliasMaps(
+						buildExtensionAliasMap(discoveredExtensions),
+						cachedRuntimeResources.extensionAliases,
+						configuredExtensions.extensionAliases,
+					),
 				models: [],
 				defaultModel: "",
 				modelDiscovery: {
@@ -166,19 +173,21 @@ export function useOptionDiscovery(): {
 						setAgents([...scanned]);
 						return;
 					}
-					const runtimeExtensions = [
-						...new Set([...piRuntimeResources.extensions, ...configuredExtensions.extensions]),
-					].sort();
+					const runtimeExtensions = authoritativeExtensions
+						? discovered.extensions
+						: [...new Set([...piRuntimeResources.extensions, ...configuredExtensions.extensions])].sort();
 					const runtimeDiscovered = {
 						...discovered,
 						tools: piRuntimeResources.tools,
 						toolExtensionNames: piRuntimeResources.toolExtensionNames,
 						extensions: runtimeExtensions,
-						disabledExtensions: configuredExtensions.disabledExtensions,
-						extensionAliases: mergeAliasMaps(
-							piRuntimeResources.extensionAliases ?? discovered.extensionAliases,
-							configuredExtensions.extensionAliases,
-						),
+						disabledExtensions: authoritativeExtensions ? [] : configuredExtensions.disabledExtensions,
+						extensionAliases: authoritativeAliasMap
+							? authoritativeAliasMap
+							: mergeAliasMaps(
+									piRuntimeResources.extensionAliases ?? discovered.extensionAliases,
+									configuredExtensions.extensionAliases,
+								),
 						skills: piRuntimeResources.skills,
 					};
 					detectStaleItems(
