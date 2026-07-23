@@ -1163,6 +1163,40 @@ describe("TaskController.execute", () => {
 		expect(details.error).toBeUndefined();
 	});
 
+	it("persists the initial mode and rejects resuming in a different mode", async () => {
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "started" }] }];
+		const started = await controller.execute(makeParams({ mode: "smart" }), makeContext());
+		const id = (started.details as TaskDetails).id!;
+
+		expect(metadataStore.findRecord(id)?.mode).toBe("smart");
+
+		const resumed = await controller.execute(makeParams({ resume: id, mode: "fast" }), makeContext());
+		expect(resumed.details.error).toBe("resume_mode_mismatch");
+		const text = resumed.content[0]?.type === "text" ? resumed.content[0].text : "";
+		expect(text).toContain("was started in smart mode");
+	});
+
+	it("uses the persisted mode when resume omits mode", async () => {
+		const existingRecord = makeRecord("mode1234", "explorer");
+		existingRecord.mode = "smart";
+		existingRecord.sessionFile = join(tempDir, "smart-existing.jsonl");
+		metadataStore.upsertRecord(existingRecord);
+		fakeAgentDiscovery.discover = vi.fn(() => ({
+			agents: [{ ...makeAgent("explorer"), model: "fast-model", smartModel: "smart-model" }],
+			diagnostics: fakeDiagnostics(),
+		}));
+		mockSession.messages = [{ role: "assistant", content: [{ type: "text", text: "continued" }] }];
+
+		await controller.execute(makeParams({ resume: "mode1234" }), makeContext());
+
+		expect(fakeSessionManager.getOrCreateSession).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "mode1234" }),
+			expect.objectContaining({ model: "smart-model" }),
+			expect.any(Array),
+			expect.any(Object),
+		);
+	});
+
 	it("returns error when resume ID does not exist in metadata", async () => {
 		const result = await controller.execute(
 			makeParams({ resume: "deadbeef", subagent_type: "explorer" }),

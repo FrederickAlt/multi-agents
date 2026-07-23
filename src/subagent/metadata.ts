@@ -14,6 +14,7 @@
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { AgentMode } from "./agents.js";
 import type { SubagentContextUsage } from "./context-usage.js";
 import { type DebugLogger, makeNoopDebugLogger } from "./debug-logger.js";
 
@@ -67,6 +68,8 @@ export interface SubagentRecord {
 	humanName: string;
 	displayName: string;
 	agentType: string;
+	/** Execution mode selected when this sub-agent was first started. */
+	mode?: AgentMode;
 	/** Effective working directory used by this sub-agent session. */
 	cwd?: string;
 	sessionFile: string;

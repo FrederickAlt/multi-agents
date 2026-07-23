@@ -742,7 +742,27 @@ export class TaskController {
 			hasParent: Boolean(runtime.parentAgentId),
 		});
 		const { agent } = resolved;
-		const mode = params.mode ?? "fast";
+		const requestedMode = params.mode ?? "fast";
+		if (resolved.record?.mode && params.mode && params.mode !== resolved.record.mode) {
+			const errorText = `Cannot resume ${resolved.record.displayName} (${resolved.record.id}) in ${params.mode} mode; it was started in ${resolved.record.mode} mode.`;
+			runLogger.warn("task_resume_mode_mismatch", {
+				recordId: resolved.record.id,
+				requestedMode: params.mode,
+				originalMode: resolved.record.mode,
+			});
+			return {
+				content: [{ type: "text", text: errorText }],
+				details: {
+					id: resolved.record.id,
+					displayName: resolved.record.displayName,
+					agentType: resolved.record.agentType,
+					resumed: true,
+					warnings,
+					error: "resume_mode_mismatch",
+				},
+			};
+		}
+		const mode = resolved.record?.mode ?? requestedMode;
 		const modeConfig = resolveAgentMode(agent, mode);
 		// Keep the discovered definition immutable, but pass the selected mode to
 		// session creation as the effective model/effort pair.
@@ -781,6 +801,7 @@ export class TaskController {
 			try {
 				record = await metadataStore.allocateRecord(agent.name, runtime.parentAgentId, runtime.treeDepth + 1);
 				record.cwd = effectiveCwd;
+				record.mode = mode;
 				metadataStore.upsertRecord(record);
 				runLogger.info("task_record_allocated", {
 					recordId: record?.id,
@@ -807,6 +828,12 @@ export class TaskController {
 			return await sessionManager.withRecordRunLock(recordId, async () => {
 				// Re-read record in case another concurrent path updated it
 				record = metadataStore.findRecord(recordId) ?? record!;
+
+				// Records created before mode persistence adopt their first resumed mode.
+				if (!record!.mode) {
+					record!.mode = mode;
+					metadataStore.upsertRecord(record!);
+				}
 
 				// Build the child runtime for the sub-agent
 				const childTreeDepth = record!.depth;
