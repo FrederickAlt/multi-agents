@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { extensionAliasSet } from "../../subagent/extension-filter.js";
 import { getSupportedReasoningEfforts, type ModelThinkingMetadata } from "../../subagent/reasoning-effort.js";
+import { readRuntimeToolInventory } from "../../subagent/runtime-tool-inventory.js";
 import { parseFrontmatter } from "../pi-compat.js";
 import type { ModelOption } from "../state/types.js";
 
@@ -272,7 +273,7 @@ export function discoverCachedPiRuntimeResources(agentDir: string): PiRuntimeDis
 	]);
 
 	return {
-		tools: sortedUnique(toolNames),
+		tools: sortedUnique([...toolNames, ...readRuntimeToolInventory(agentDir)]),
 		toolExtensionNames,
 		extensions,
 		extensionAliases,

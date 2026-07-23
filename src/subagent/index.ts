@@ -50,6 +50,7 @@ import {
 	SELECTED_ROOT_AGENT_ENTRY_KEY,
 	SELECTED_ROOT_AGENT_ENTRY_TYPE,
 } from "./root-agent.js";
+import { recordRuntimeTools } from "./runtime-tool-inventory.js";
 import { seedAgentConfig } from "./seeding.js";
 import {
 	PiAgentSessionFactory,
@@ -647,6 +648,16 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", () => {
 		rootFinalResponseGuardActive = false;
+		// This runs in the real launcher environment (including runtime adapters),
+		// unlike the TUI's standalone discovery session. Persist the generic Pi
+		// registry so configuration can offer tools observed in an earlier run.
+		const getAllTools = (pi as ExtensionAPI & { getAllTools?: () => Array<{ name: string }> }).getAllTools;
+		if (typeof getAllTools === "function") {
+			recordRuntimeTools(
+				getAgentDir(),
+				getAllTools.call(pi).map((tool) => tool.name),
+			);
+		}
 	});
 
 	const sendAsyncAgentNotification = (options: { delayed?: boolean } = {}) => {
